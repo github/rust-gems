@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  merge_group:
+  push:
+
+permissions:
+  contents: read
+  packages: read
+
+# In the event that there is a new push to the ref, cancel any running jobs because there are now obsolete, and wasting
+# resources.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust environment
+        uses: hecrj/setup-rust-action@v1
+        with:
+          rust-version: stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/
+            target/
+          key: ${{ runner.OS }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run test (default features)
+        run: cargo test
+
+      - name: Run test (all features)
+        run: cargo test --all-features
