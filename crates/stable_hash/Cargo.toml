@@ -1,0 +1,11 @@
+[package]
+name = "github_stable_hash"
+version = "0.1.0"
+authors = ["Greg Orzell <gorzell@github.com>", "Vicent Marti <vmg@github.com>"]
+edition = "2021"
+
+[lib]
+crate-type = ["lib", "staticlib"]
+
+[dependencies]
+fnv = "1.0"

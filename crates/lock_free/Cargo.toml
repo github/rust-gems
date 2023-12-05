@@ -1,0 +1,13 @@
+[package]
+name = "github_lock_free"
+version = "0.1.0"
+authors = ["Greg Orzell <gorzell@github.com>", "Vicent Marti <vmg@github.com>"]
+edition = "2021"
+
+[lib]
+crate-type = ["lib", "staticlib"]
+
+[dependencies]
+github_pspack = { path = "../pspack" }
+
+bumpalo = "3.14"

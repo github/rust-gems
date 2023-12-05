@@ -1,0 +1,19 @@
+[package]
+name = "github_interval"
+version = "0.1.0"
+authors = ["Greg Orzell <gorzell@github.com>", "Vicent Marti <vmg@github.com>"]
+edition = "2021"
+
+[lib]
+crate-type = ["lib", "staticlib"]
+
+[dependencies]
+github_lock_free = { path = "../lock_free" }
+github_pspack = { path = "../pspack" }
+github_stable_hash = { path = "../stable_hash" }
+
+fnv = "1.0"
+hex = "0.4"
+itertools = "0.11"
+rand = "0.8"
+serde = { version = "1.0", features = [ "derive" ] }
