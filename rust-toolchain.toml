@@ -1,0 +1,4 @@
+[toolchain]
+channel = "stable"
+components = [ "rust-analyzer", "llvm-tools-preview" ]
+profile = "default"

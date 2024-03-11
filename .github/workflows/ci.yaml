@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+
+permissions:
+  contents: read
+  packages: read
+
+# In the event that there is a new push to the ref, cancel any running jobs because there are now obsolete, and wasting
+# resources.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: rui314/setup-mold@c9803d2102b7e020ad0ccd687c55b2ad8baf3496
+
+      - name: Build
+        run: make build
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: rui314/setup-mold@c9803d2102b7e020ad0ccd687c55b2ad8baf3496
+
+      - name: Check formatting and clippy
+        run: make lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: rui314/setup-mold@c9803d2102b7e020ad0ccd687c55b2ad8baf3496
+
+      - name: Run unit tests
+        run: make test

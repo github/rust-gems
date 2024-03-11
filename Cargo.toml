@@ -1,0 +1,12 @@
+[workspace]
+
+members = [
+    "crates/*",
+]
+resolver = "2"
+
+[profile.bench]
+debug = true
+
+[profile.release]
+debug = true

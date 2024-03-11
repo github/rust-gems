@@ -1,0 +1,49 @@
+{
+  "name": "rust-algos",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "runArgs": [
+    "--cap-add=SYS_PTRACE",
+    "--security-opt",
+    "seccomp=unconfined",
+    "--network=host",
+    "--privileged",
+    "--init"
+  ],
+  // Set *default* container specific settings.json values on container create.
+  "settings": {
+    "lldb.executable": "/usr/bin/lldb",
+    // VS Code don't watch files under ./target
+    "files.watcherExclude": {
+      "**/target/**": true
+    }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "moby": true,
+      "dockerDashComposeVersion": "v1",
+      "installDockerBuildx": true
+    },
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "latest",
+      "profile": "minimal"
+    },
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  // Add the IDs of extensions you want installed when the container is created.
+  "extensions": [
+    "tamasfe.even-better-toml",
+    "matklad.rust-analyzer",
+    "ms-azuretools.vscode-docker",
+    "mutantdino.resourcemonitor",
+    "vadimcn.vscode-lldb",
+    "visualstudioexptteam.vscodeintellicode",
+  ],
+  "userEnvProbe": "loginInteractiveShell",
+}
