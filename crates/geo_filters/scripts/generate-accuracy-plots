@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+## Run accuracy evaluation for predefined configurations and generate the plots for the documentation.
+
+set -eu
+
+plots_dir=evaluation/accuracy
+
+cargo run --release --features evaluation --bin accuracy -- \
+    -o accuracy.csv -n 10000 -m 5000000 geo_diff_{7,13} geo_distinct_{7,13} hll_{8,14} "$@"
+
+evaluation/plot-accuracy.r accuracy.csv
+
+rm -f "$plots_dir"/*
+
+idx=0
+for c in geo_diff_{7,13} geo_distinct_{7,13} hll_{8,14}; do
+    echo "plot $c"
+    convert -density 300 accuracy.pdf[$idx] -resize 1024x1024 -alpha remove -alpha off "$plots_dir/$c.png"
+    idx=$(($idx + 1))
+done

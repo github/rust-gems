@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+## Run accuracy evaluation with the given parameters and plot the results to PDF.
+
+set -eu
+
+cargo run --release --features evaluation --bin accuracy -- \
+    -o accuracy.csv "$@" && \
+    evaluation/plot-accuracy.r accuracy.csv

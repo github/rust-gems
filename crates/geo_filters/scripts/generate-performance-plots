@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+## Run accuracy evaluation for predefined configurations and generate the plots for the documentation.
+
+set -eu
+
+plots_dir=evaluation/performance
+criterion_dir="$(cargo metadata --format-version 1 --manifest-path Cargo.toml | jq -r .target_directory)/criterion"
+
+cargo bench
+
+rm -f "$plots_dir"/*
+
+for e in {insert,estimate,estimate_with}_{100,1000,10000}; do
+    echo "plot $e"
+    convert -density 300 "$criterion_dir/$e/report/violin.svg" -resize 1024x1024 -alpha remove -alpha off "$plots_dir/$e.png"
+done

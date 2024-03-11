@@ -1,0 +1,52 @@
+[package]
+name = "geo_filters"
+version = "0.1.0"
+edition = "2021"
+description = "Geometric filters for set cardinality estimation."
+license = "MIT"
+keywords = ["probabilistic", "algorithm", "cardinality", "estimation"]
+categories = ["algorithms", "data-structures", "mathematics", "science"]
+
+[lib]
+crate-type = ["lib", "staticlib"]
+bench = false
+
+[features]
+default = []
+evaluation = [
+    "dep:clap",
+    "dep:hyperloglogplus",
+    "dep:rand",
+    "dep:rayon",
+    "dep:regex",
+]
+
+[dependencies]
+clap = { version = "4", optional = true, features = ["derive"] }
+fnv = "1.0"
+hyperloglogplus = { version = "0.4", optional = true }
+itertools = "0.12"
+once_cell = "1.18"
+rand = { version = "0.8", optional = true }
+rayon = { version = "1.7", optional = true }
+regex = { version = "1", optional = true }
+
+[dev-dependencies]
+criterion = "0.5"
+geo_filters = { path = ".", features = ["evaluation"] }
+rand = "0.8"
+rand_chacha = "0.3"
+rayon = "1.7"
+
+[[bench]]
+name = "performance"
+path = "evaluation/performance.rs"
+harness = false
+required-features = ["evaluation"]
+
+[[bin]]
+name = "accuracy"
+path = "evaluation/accuracy.rs"
+test = false
+bench = false
+required-features = ["evaluation"]
