@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::iter::Peekable;
 use std::mem::{size_of, size_of_val};
 
 use crate::config::{
@@ -343,29 +342,6 @@ impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
     fn bytes_in_memory(&self) -> usize {
         let Self { config, msb, lsb } = self;
         size_of_val(config) + msb.len() * size_of::<C::BucketType>() + lsb.bytes_in_memory()
-    }
-}
-
-/// Helper iterator which drops two consecutive items if they are equal.
-/// Note: this is different from the unique operation! E.g. the sequence [1, 1, 1, 2, 2]
-/// is converted by the XorIterator into the sequence [1], whereas the unique operation
-/// would output [1, 2].
-struct XorIterator<I: Iterator<Item = usize>> {
-    iter: Peekable<I>,
-}
-
-impl<I: Iterator<Item = usize>> Iterator for XorIterator<I> {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.iter.next() {
-                Some(bit) if Some(&bit) == self.iter.peek() => {
-                    self.iter.next();
-                }
-                x => return x,
-            }
-        }
     }
 }
 
