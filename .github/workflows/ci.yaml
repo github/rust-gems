@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: rui314/setup-mold@65685f45207903d37d006cd402c397653c57660e
+      - uses: rui314/setup-mold@2e332a0b602c2fc65d2d3995941b1b29a5f554a0
 
       - name: Build
         run: make build
@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: rui314/setup-mold@65685f45207903d37d006cd402c397653c57660e
+      - uses: rui314/setup-mold@2e332a0b602c2fc65d2d3995941b1b29a5f554a0
 
       - name: Check formatting and clippy
         run: make lint
@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: rui314/setup-mold@65685f45207903d37d006cd402c397653c57660e
+      - uses: rui314/setup-mold@2e332a0b602c2fc65d2d3995941b1b29a5f554a0
 
       - name: Run unit tests
         run: make test
