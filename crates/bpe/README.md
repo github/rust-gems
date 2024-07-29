@@ -31,7 +31,7 @@ This library presents novel algorithms to compute BPE encodings which address th
 There are mostly three strategies for BPE encoding.
 1) Trivial solution. Search brute force for the most frequent pair in the encoded text according the dictionary and replace those occurrences. This has a `O(n^2)` complexity and is therefore not very appealing in production.
 2) Heap based. Set up a heap with the frequencies. This improves the linear search time to a logarithmic factor. If done properly, the overall complexity reduces now to `O(n log n)`.
-3) Split the input into sections of a maximum size first and then process each section individually. This shrinks in theory the complexity to `O(n)` if the section size is small enough. But it will in general produce now distinct results. In order to produce the "correct" encoding, one would need to choose split points at token boundaries. But without having the text encoded already, this is essentially impossible.
+3) Split the input into sections of a maximum size first and then process each section individually. This shrinks in theory the complexity to `O(n)` if the section size is small enough. But it will in general produce now different results. In order to produce the "correct" encoding, one would need to choose split points at token boundaries. But without having the text encoded already, this is in general impossible.
 
 We have implemented a fast heap based solution as baseline. It uses a bitfield to mark token boundaries. This is more memory efficient than using linked lists or other approaches and should also be faster.
 
@@ -95,7 +95,7 @@ Given a valid encoding sequence `e_0..e_i` and a valid encoding tuple `e_i e_j`,
 At a first glance, it seems impossible to achieve `O(n)` complexity while preserving the encoding output of the original BPE algorithm, since the original BPE algorithm needs to first scan the full input before it can make any encoding decision.
 For instance, the sequence `abab` would be encoded as `ab ab` when the dictionary contains the tokens `a b ab ba bc abc babc ababc` ordered by frequency. But appending a single character `ababc` would result in a pretty different tokenization: `ab a bc`. So without looking ahead it seems impossible to properly tokenize the text.
 
-The solution is to track ALL encodings for all text prefixes. For our example `ababc` we would get:
+The solution is to track the encodings of ALL text prefixes. For our example `ababc` we would get:
 - `a` ------> `a`
 - `ab` -----> `ab`
 - `aba` ----> `ab a`
@@ -161,8 +161,36 @@ This algorithm consistently outperforms already the tiktoken implementation, but
 
 ## Backtracking
 
-Now make it even faster (by ~4x).
+For the average case, the previous algorithm can be improved further.
+The main observation is that often the greedy heuristic picks already the correct next token.
+In the cases, where it doesn't the algorithm has to somehow backtrack to the next tokenization until it converged to the correct solution.
+
+Our backtracking implementation solves the enumeration problem as follows:
+1) If the current tokenization sequence is valid, then append the longest matching token to the right.
+2) Otherwise, replace the right most token with the next longest prefix token.
+3) If there is no such token, then remove that token and go back to step 2.
+
+Finding the longest matching token in step 1) can be once more done with the aho-corsaick algorithm (or just some trie implementation).
+The next longest prefix token can be precomputed into a simple lookup table (in principle, the information is encoded in the aho-corasick data structure).
+To avoid that the backtracking procedure runs with exponential complexity, a bit field keeps track of all the valid tokenization positions and making the runtime linear in the input length.
+
+In the worst-case, this algorithm will perform worse than the previous one, since it has to rescan the input for the longest matching token at potentially every byte position.
+On average it is about ~4 faster, since the short-cuts usually pay off.
 
 ## Benchmarks
 
-We compared our implementations with the tiktoken implementation.
+We compared our implementations with the tiktoken implementation on a MacBook Pro on a random input sequence:
+
+| Algorithm    | Runtime  | correct BPE output |
+| ------------ | -------- | ---------- |
+| Greedy       | 100 µs   | ✘          |
+| Minimal      | 300 µs   | ✘          |
+| Backtracking | 400 µs   | ✔          |
+| Dynamic Programming | 1300 µs | ✔    |
+| TikToken     | 1500 µs  | ✘          |
+| Heap         | 1900 µs  | ✔          |
+
+As can be seen, our Backtracking implementation beats the TikToken Rust implementation by ~4x.
+And even the fully deynamic programming solution is faster with a more consistent runtime.
+The tuned heap implementation is still quite competitive to TikToken (especially for smaller inputs).
+If the requirement of correct BPE output can be relaxed, then the Greedy approach or the minimal encoding approach are the clear winners.

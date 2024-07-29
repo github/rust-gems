@@ -3,7 +3,7 @@ use std::ops::Range;
 use crate::backtrack_encoder::BacktrackEncoder;
 use crate::byte_pair_encoding::BytePairEncoding;
 
-/// This data structure allows fast, i.e. O(1), counting of tokens for arbitrary substrings of the original input text.
+/// This data structure allows fast, i.e. typically O(1), counting of tokens for arbitrary substrings of the original input text.
 /// It achieves this by precomputing for every position the last token which ends at this position.
 /// These last tokens represent a token tree with its root being the empty input text where each path starting at the root represents
 /// the encoded tokens of the corresponding text prefix.
@@ -57,6 +57,9 @@ impl<'a> IntervalEncoding<'a> {
     /// Thereby it reencodes the prefix with the `BacktrackEncoder` until the encoding sequence becomes
     /// compatible with the precomputed tables. Once that's the case, the remainder of the range becomes
     /// a simple O(1) lookup.
+    /// 
+    /// Note: in the worst-case the complexity is O(n). This happens for instance for a whitespace input
+    /// where the encoding changes when the starting position changes.
     pub fn count(&self, range: Range<usize>) -> usize {
         let leaf = self.tree_id[range.end];
         let mut encoder = BacktrackEncoder::with_capacity(self.bpe, &self.text[range.clone()], 8);

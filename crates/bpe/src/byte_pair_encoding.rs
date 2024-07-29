@@ -210,8 +210,6 @@ impl BytePairEncoding {
         let mut split_table = vec![];
         let mut pair_lookup = FnvHashMap::default();
         // Reverse engineer the merge/split table.
-        // TODO: We should probably just serialize this information and read from a data file instead of
-        // recomputing it every time.
         for (id, token) in token_iter(&all_tokens, &token_starts).enumerate() {
             let mut token1 = next_prefix_match[id];
             while token1 != u32::MAX {
@@ -347,47 +345,11 @@ impl BytePairEncoding {
         encoded
     }
 
-    // TODO: Add a bitmask with recovery points. I.e. points where a decision does not depend
-    // on subsequent input (yet).
-    // Such a bitmask can be used to fix the suffix of an interval.
-    // The following arrows indicate how much of the text was consumed during the backtracking.
-    // As can be seen, the algorithm might go back and forth.
-    // Ideally, we track for each byte (or final output token) how much to one has to go back.
-    // Since those backtrack steps may overlap (see lines 1 and 3), this is more precise than
-    // just tracking the beginning of unions of such intervals.
-    // 0: ------------------>
-    // 1:           <--------
-    // 2:           -------------------->
-    // 3:                <---------------
-    // 4:                ---------->
-    // 5:                      <----
-    // 6:                      ---------------------->
     pub fn encode_via_backtracking(&self, text: &[u8]) -> Vec<u32> {
         let mut enc = BacktrackEncoder::new(self, text);
         while enc.step().is_some() {}
         enc.into_tokens()
     }
-
-    // Stopping tokenization after n tokens, might stop in the middle of a utf8 character.
-    //    s c c c s c c|c
-    // In this case, we have to backtrace until we reach a utf8 character boundary within the
-    // desired limit. For this, we create a new backtracking bitfield marking all end-positions
-    // we have tested.
-    // Note: we cannot simply continue with the back-tracking procedure, since certain combinations
-    // might have been already discarded during the construction of the input sequence.
-    // I.e. we somehow have to restart the construction!
-    // We also don't know at which utf8 boundary the input sequence will end, such that it fits into the limit!
-    // Therefore, we cannot reverse encode the sequence.
-
-    // Concatenate two sequences:
-    // Also here, the back-tracking procedure doesn't work, since we might have to undo some back-tracking steps
-    // which would require to know when aho-corasick reached the end of the input sequence and then us tracking
-    // how many tokens were affected by that suffix. With that information we could restart the search from before
-    // that point...
-
-    // Lookup for interval counting.
-    // Compute table for the full string.
-    // At starting point, start fast backtracking procedure until there is a hit with the precomputed table.
 
     fn encode_into_bitfield(&self, bytes: &[u8]) -> (BitField, usize) {
         // Reserve for every byte a bit in the bitfield.
@@ -466,7 +428,7 @@ impl BytePairEncoding {
                 if m.start() == 0 {
                     best = (m.value(), 1);
                     break;
-                } else if last_token[m.start() - 1].1 + 1 < best.1{
+                } else if last_token[m.start() - 1].1 + 1 < best.1 {
                     best = (m.value(), last_token[m.start() - 1].1 + 1)
                 }
             }
