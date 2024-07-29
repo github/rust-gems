@@ -56,7 +56,7 @@ impl<'a> AppendableEncoder<'a> {
     }
 
     /// Returns the number of tokens required to tokenize the input text.
-    /// This operation is O(1) and can be called at any point in time. 
+    /// This operation is O(1) and can be called at any point in time.
     pub fn len(&self) -> usize {
         self.counts.last().copied().unwrap_or(0) as usize
     }
