@@ -60,6 +60,11 @@ impl<'a> AppendableEncoder<'a> {
     pub fn len(&self) -> usize {
         self.counts.last().copied().unwrap_or(0) as usize
     }
+
+    /// Returns true if the structure represents the empty string.
+    pub fn is_empty(&self) -> bool {
+        self.counts.is_empty()
+    }
 }
 
 #[cfg(test)]
