@@ -191,6 +191,6 @@ We compared our implementations with the tiktoken implementation on a MacBook Pr
 | Heap         | 1900 µs  | ✔          |
 
 As can be seen, our Backtracking implementation beats the TikToken Rust implementation by ~4x.
-And even the fully deynamic programming solution is faster with a more consistent runtime.
+And even the fully dynamic programming solution is faster with a more consistent runtime.
 The tuned heap implementation is still quite competitive to TikToken (especially for smaller inputs).
 If the requirement of correct BPE output can be relaxed, then the Greedy approach or the minimal encoding approach are the clear winners.
