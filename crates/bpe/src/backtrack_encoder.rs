@@ -6,7 +6,7 @@ use crate::byte_pair_encoding::BytePairEncoding;
 /// for a given input text.
 /// It keeps track of visited states in a bitfield and only remembers the tokenization
 /// of the currently processed dynamic programming state.
-/// 
+///
 /// The biggest downside of this approach is that the search for the longest leftmost match
 /// has to be reset at every (backtracking) step which is still a net win in practice compared to other approaches.
 pub(crate) struct BacktrackEncoder<'a> {
