@@ -57,7 +57,7 @@ impl<'a> IntervalEncoding<'a> {
     /// Thereby it reencodes the prefix with the `BacktrackEncoder` until the encoding sequence becomes
     /// compatible with the precomputed tables. Once that's the case, the remainder of the range becomes
     /// a simple O(1) lookup.
-    /// 
+    ///
     /// Note: in the worst-case the complexity is O(n). This happens for instance for a whitespace input
     /// where the encoding changes when the starting position changes.
     pub fn count(&self, range: Range<usize>) -> usize {
