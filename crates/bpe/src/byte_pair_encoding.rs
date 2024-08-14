@@ -316,10 +316,11 @@ impl BytePairEncoding {
     /// Computes for every prefix of the input text a corresponding last token.
     pub(crate) fn encode_all_prefixes(&self, text: &[u8]) -> Vec<u32> {
         let mut last_token = Vec::with_capacity(text.len());
-        let mut stepper = self.overlapping_searcher.overlapping_stepper();
-        for c in text {
-            stepper.consume(*c);
-            while let Some(m) = stepper.next() {
+        let mut state = self.overlapping_searcher.start_state();
+        for (pos, c) in text.iter().enumerate() {
+            let (s, iter) = self.overlapping_searcher.consume(state, pos + 1, *c);
+            state = s;
+            for m in iter {
                 let new_token = m.value();
                 let new_range = m.start()..m.end();
                 assert_eq!(new_range.end, last_token.len() + 1);
@@ -432,11 +433,12 @@ impl BytePairEncoding {
     /// tokenization produced by the original BPE algorithm.
     pub fn encode_minimal(&self, text: &[u8]) -> Vec<u32> {
         let mut last_token: Vec<(u32, u32)> = Vec::with_capacity(text.len());
-        let mut stepper = self.overlapping_searcher.overlapping_stepper();
-        for c in text {
-            stepper.consume(*c);
+        let mut state = self.overlapping_searcher.start_state();
+        for (pos, c) in text.iter().enumerate() {
+            let (s, iter) = self.overlapping_searcher.consume(state, pos + 1, *c);
+            state = s;
             let mut best = (0, u32::MAX);
-            while let Some(m) = stepper.next() {
+            for m in iter {
                 if m.start() == 0 {
                     best = (m.value(), 1);
                     break;
