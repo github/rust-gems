@@ -2,7 +2,7 @@ use daachorse::bytewise::iter::OverlappingStepper;
 
 use crate::byte_pair_encoding::BytePairEncoding;
 
-/// Encoder which keeps track of the encoding length.
+/// Encoder which keeps track of the encoding length while appending characters.
 pub struct AppendableEncoder<'a> {
     bpe: &'a BytePairEncoding,
     stepper: OverlappingStepper<'a, u32>,

@@ -49,6 +49,12 @@ pub struct BytePairEncoding {
         deserialize_with = "deserialize_daac"
     )]
     pub(crate) overlapping_searcher: DoubleArrayAhoCorasick<u32>,
+    /// An aho corasick automaton to find ALL tokens in a byte sequence which is being processed in reverse order.
+    #[serde(
+        serialize_with = "serialize_daac",
+        deserialize_with = "deserialize_daac"
+    )]
+    pub(crate) overlapping_searcher_rev: DoubleArrayAhoCorasick<u32>,
     /// Mapping from a token to the next longest prefix token.
     /// This is in principle information represented by the AhoCorasick automaton.
     /// But we don't have efficient access to it and therefore store it here again.
@@ -179,11 +185,13 @@ impl BytePairEncoding {
         let start = Instant::now();
         println!("loaded tiktoken: {:?}", start.elapsed());
         let mut all_tokens = Vec::new();
+        let mut all_tokens_rev = Vec::new();
         let mut token_starts = vec![0];
         let mut bytes_hash_to_token = FnvHashMap::default();
         for i in 0..num_tokens {
             let token = tiktoken_bpe._decode_native(&[i]);
             bytes_hash_to_token.insert(hash_bytes(&token), i as u32);
+            all_tokens_rev.extend(token.iter().copied().rev());
             all_tokens.extend(token);
             token_starts.push(all_tokens.len() as u32);
         }
@@ -199,6 +207,9 @@ impl BytePairEncoding {
         let overlapping_searcher =
             DoubleArrayAhoCorasick::<u32>::new(token_iter(&all_tokens, &token_starts)).expect("");
         println!("constructed overlapping searcher: {:?}", start.elapsed());
+        let overlapping_searcher_rev =
+            DoubleArrayAhoCorasick::<u32>::new(token_iter(&all_tokens_rev, &token_starts))
+                .expect("");
 
         let next_prefix_match: Vec<_> = token_iter(&all_tokens, &token_starts)
             .map(|token| {
@@ -239,6 +250,7 @@ impl BytePairEncoding {
             token_starts,
             bytes_hash_to_token,
             overlapping_searcher,
+            overlapping_searcher_rev,
             longest_searcher,
             next_prefix_match,
             pair_lookup,
