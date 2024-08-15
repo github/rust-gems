@@ -2,17 +2,17 @@ use crate::byte_pair_encoding::BytePairEncoding;
 
 struct State {
     state: u32,
-    last_token: u32,
+    prev_token: u32,
     count: u32,
 }
 
-/// Encoder which keeps track of the encoding length while appending characters.
-pub struct AppendableEncoder<'a> {
+/// Encoder which keeps track of the encoding length while prepending characters.
+pub struct PrependableEncoder<'a> {
     bpe: &'a BytePairEncoding,
     states: Vec<State>,
 }
 
-impl<'a> AppendableEncoder<'a> {
+impl<'a> PrependableEncoder<'a> {
     pub fn new(bpe: &'a BytePairEncoding) -> Self {
         Self {
             bpe,
@@ -20,25 +20,25 @@ impl<'a> AppendableEncoder<'a> {
         }
     }
 
-    /// Appends multiple bytes to the input string.
+    pub fn truncate(&mut self, len: usize) {
+        self.states.truncate(len);
+    }
+
+    /// Prepends multiple bytes to the input string.
     pub fn extend(&mut self, iter: impl Iterator<Item = u8>) {
         for c in iter {
             self.push(c);
         }
     }
 
-    pub fn truncate(&mut self, len: usize) {
-        self.states.truncate(len);
-    }
-
-    /// Appends a byte to the input string which should be tokenized.
+    /// Prepends a byte to the input string which should be tokenized.
     /// The operation is amortized O(1) (due to vector resizing).
     pub fn push(&mut self, c: u8) {
-        let (state, iter) = self.bpe.overlapping_searcher.consume(
+        let (state, iter) = self.bpe.overlapping_searcher_rev.consume(
             self.states
                 .last()
                 .map(|s| s.state)
-                .unwrap_or_else(|| self.bpe.overlapping_searcher.start_state()),
+                .unwrap_or_else(|| self.bpe.overlapping_searcher_rev.start_state()),
             self.states.len() + 1,
             c,
         );
@@ -49,19 +49,19 @@ impl<'a> AppendableEncoder<'a> {
             if new_range.start == 0 {
                 self.states.push(State {
                     state,
-                    last_token: new_token,
+                    prev_token: new_token,
                     count: 1,
                 });
                 break;
             } else {
-                let prev_token =
-                    unsafe { self.states.get_unchecked(new_range.start - 1).last_token };
-                if self.bpe.is_valid_token_pair(prev_token, new_token) {
+                let next_token =
+                    unsafe { self.states.get_unchecked(new_range.start - 1).prev_token };
+                if self.bpe.is_valid_token_pair(new_token, next_token) {
                     let prev_count =
                         unsafe { self.states.get_unchecked(new_range.start - 1).count };
                     self.states.push(State {
                         state,
-                        last_token: new_token,
+                        prev_token: new_token,
                         count: prev_count + 1,
                     });
                     break;
@@ -90,16 +90,16 @@ impl<'a> AppendableEncoder<'a> {
 mod tests {
     use crate::byte_pair_encoding::{create_test_bytes, BytePairEncoding};
 
-    use super::AppendableEncoder;
+    use super::PrependableEncoder;
 
     #[test]
-    fn test_appendable_encoder() {
+    fn test_prependable_encoder() {
         let bpe = BytePairEncoding::cl100k();
-        let mut enc = AppendableEncoder::new(bpe);
+        let mut enc = PrependableEncoder::new(bpe);
         let input_string = create_test_bytes(bpe, 100);
-        for (i, c) in input_string.iter().enumerate() {
-            assert_eq!(enc.token_count(), bpe.count(&input_string[0..i]));
+        for (i, c) in input_string.iter().enumerate().rev() {
             enc.push(*c);
+            assert_eq!(enc.token_count(), bpe.count(&input_string[i..]));
         }
     }
 }

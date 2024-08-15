@@ -9,7 +9,7 @@ bench = false
 
 [dependencies]
 #daachorse = "1"
-daachorse = { git = "https://github.com/aneubeck/daachorse.git", rev = "22f471532a25d90a320eae0902c759db2b8fe962" }
+daachorse = { git = "https://github.com/aneubeck/daachorse.git", rev = "ac44a471a7be5a139535173073b8f1cd2e33bcbd" }
 fnv = "1.0"
 itertools = "0.12"
 once_cell = "1"

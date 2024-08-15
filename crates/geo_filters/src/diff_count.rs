@@ -518,6 +518,9 @@ mod tests {
             let masked_a = masked(&a, mask, mask_size);
             let masked_b = masked(&b, mask, mask_size);
             let masked_expected = masked(&expected, mask, mask_size);
+            // FIXME: test failed once with:
+            // left: ~12.37563 (msb: [390, 334, 263, 242, 222, 215, 164, 148, 100, 97, 66, 36], |lsb|: 36)
+            // right: ~12.37563 (msb: [390, 334, 263, 242, 222, 215, 164, 148, 100, 97, 66, 36], |lsb|: 0)
             assert_eq!(masked_expected, xor(&masked_a, &masked_b));
         }
     }
