@@ -186,7 +186,7 @@ impl BytePairEncoding {
     }
 
     /// Construct a BytePairEncoding instance from an iterator which enumerates all tokens.
-    pub fn from_dictionary<'a>(iter: impl Iterator<Item = Vec<u8>>) -> Self {
+    pub fn from_dictionary(iter: impl Iterator<Item = Vec<u8>>) -> Self {
         let mut all_tokens = Vec::new();
         let mut all_tokens_rev = Vec::new();
         let mut token_starts = vec![0];
