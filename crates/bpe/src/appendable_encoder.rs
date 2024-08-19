@@ -1,5 +1,6 @@
 use crate::byte_pair_encoding::BytePairEncoding;
 
+#[derive(Clone)]
 struct State {
     state: u32,
     last_token: u32,
@@ -7,6 +8,7 @@ struct State {
 }
 
 /// Encoder which keeps track of the encoding length while appending characters.
+#[derive(Clone)]
 pub struct AppendableEncoder<'a> {
     bpe: &'a BytePairEncoding,
     states: Vec<State>,
