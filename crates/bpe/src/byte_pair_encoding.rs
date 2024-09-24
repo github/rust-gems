@@ -588,7 +588,6 @@ mod data {
             if bpes.iter().all(|(bpe, len)| {
                 let mut seen = HashSet::with_capacity(*len);
                 (0..*len)
-                    .into_iter()
                     .all(|i| seen.insert(hash_bytes_with_factor(&bpe._decode_native(&[i]), factor)))
             }) {
                 println!("hash factor: {factor}");
@@ -621,7 +620,7 @@ mod data {
         let abs_path = current_dir.parent().unwrap().parent().unwrap();
         let file = File::create(abs_path.join(data_file)).unwrap();
         let mut serializer = rmp_serde::Serializer::new(file);
-        BytePairEncoding::from_tiktoken(&dict, num_tokens)
+        BytePairEncoding::from_tiktoken(dict, num_tokens)
             .serialize(&mut serializer)
             .unwrap();
     }
