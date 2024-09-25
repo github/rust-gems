@@ -205,9 +205,7 @@ impl BytePairEncoding {
         let mut token_starts = vec![0];
         let mut bytes_hash_to_token = FnvHashMap::default();
         for (i, token) in iter.enumerate() {
-            if let Some(j) = bytes_hash_to_token.insert(hash_bytes(&token), i as u32) {
-                eprintln!("collision: ({i}, {j})");
-            }
+            bytes_hash_to_token.insert(hash_bytes(&token), i as u32);
             all_tokens_rev.extend(token.iter().copied().rev());
             all_tokens.extend(token);
             token_starts.push(all_tokens.len() as u32);
