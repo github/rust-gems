@@ -597,7 +597,6 @@ mod data {
     }
 
     #[test]
-    #[ignore = "run manually to update data files"]
     fn update_token_dicts() {
         serialize_tokens(
             &cl100k_base().expect("tiktoken initialization must not fail!"),
