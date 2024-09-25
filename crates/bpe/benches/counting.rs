@@ -6,85 +6,100 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use rand::{thread_rng, Rng};
 
 fn counting_benchmark(c: &mut Criterion) {
-    let bpe = BytePairEncoding::cl100k();
-    let text = create_test_bytes(&bpe, 20000);
+    for (name, bpe) in [
+        ("cl100k", BytePairEncoding::cl100k()),
+        ("o200k", BytePairEncoding::o200k()),
+    ] {
+        let text = create_test_bytes(&bpe, 20000);
+        let fast = IntervalEncoding::new(&bpe, &text);
 
-    let fast = IntervalEncoding::new(&bpe, &text);
-
-    for bytes in [10, 100, 1000, 10000] {
-        let mut group = c.benchmark_group(format!("bytes-{bytes}"));
-        group.bench_function("hybrid counting", |b| {
-            b.iter_batched(
-                || thread_rng().gen_range(0..text.len() - bytes),
-                |start| fast.count(start..start + bytes),
-                criterion::BatchSize::SmallInput,
-            )
-        });
-        group.bench_function("backtrack counting", |b| {
-            b.iter_batched(
-                || thread_rng().gen_range(0..text.len() - bytes),
-                |start| bpe.count(&text[start..start + bytes]),
-                criterion::BatchSize::SmallInput,
-            )
-        });
+        for bytes in [10, 100, 1000, 10000] {
+            let mut group = c.benchmark_group(format!("bpe-{name}-bytes-{bytes}"));
+            group.bench_function("hybrid counting", |b| {
+                b.iter_batched(
+                    || thread_rng().gen_range(0..text.len() - bytes),
+                    |start| fast.count(start..start + bytes),
+                    criterion::BatchSize::SmallInput,
+                )
+            });
+            group.bench_function("backtrack counting", |b| {
+                b.iter_batched(
+                    || thread_rng().gen_range(0..text.len() - bytes),
+                    |start| bpe.count(&text[start..start + bytes]),
+                    criterion::BatchSize::SmallInput,
+                )
+            });
+        }
     }
 }
 
 fn encoding_benchmark(c: &mut Criterion) {
-    let bpe = BytePairEncoding::cl100k();
-    let tiktoken = tiktoken_rs::cl100k_base().unwrap();
-    let text = create_test_string(&bpe, 20000);
-    let input = text.as_bytes();
+    for (name, bpe, tiktoken) in [
+        (
+            "cl100k",
+            BytePairEncoding::cl100k(),
+            tiktoken_rs::cl100k_base().unwrap(),
+        ),
+        (
+            "o200k",
+            BytePairEncoding::o200k(),
+            tiktoken_rs::o200k_base().unwrap(),
+        ),
+    ] {
+        let text = create_test_string(&bpe, 20000);
+        let input = text.as_bytes();
 
-    for bytes in [10, 100, 1000, 10000] {
-        let mut group = c.benchmark_group(format!("bytes-{bytes}"));
-        group.bench_function("backtracking", |b| {
-            b.iter_batched(
-                || thread_rng().gen_range(0..input.len() - bytes),
-                |start| bpe.encode_via_backtracking(&input[start..start + bytes]),
-                criterion::BatchSize::SmallInput,
-            )
-        });
-        group.bench_function("heap", |b| {
-            b.iter_batched(
-                || thread_rng().gen_range(0..input.len() - bytes),
-                |start| bpe.encode_via_bitfield(&input[start..start + bytes]),
-                criterion::BatchSize::SmallInput,
-            )
-        });
-        group.bench_function("dynamic programming", |b| {
-            b.iter_batched(
-                || thread_rng().gen_range(0..input.len() - bytes),
-                |start| bpe.encode_via_table(&input[start..start + bytes]),
-                criterion::BatchSize::SmallInput,
-            )
-        });
-        group.bench_function("greedy", |b| {
-            b.iter_batched(
-                || thread_rng().gen_range(0..input.len() - bytes),
-                |start| bpe.encode_greedy(&input[start..start + bytes]),
-                criterion::BatchSize::SmallInput,
-            )
-        });
-        group.bench_function("minimal", |b| {
-            b.iter_batched(
-                || thread_rng().gen_range(0..input.len() - bytes),
-                |start| bpe.encode_minimal(&input[start..start + bytes]),
-                criterion::BatchSize::SmallInput,
-            )
-        });
-        group.bench_function("tiktoken", |b| {
-            b.iter_batched(
-                || loop {
-                    let start = thread_rng().gen_range(0..input.len() - bytes - 1);
-                    if is_char_boundary(input[start]) && is_char_boundary(input[start + bytes]) {
-                        return start;
-                    }
-                },
-                |start| tiktoken.encode_ordinary(&text[start..start + bytes]),
-                criterion::BatchSize::SmallInput,
-            )
-        });
+        for bytes in [10, 100, 1000, 10000] {
+            let mut group = c.benchmark_group(format!("bpe-{name}-bytes-{bytes}"));
+            group.bench_function("backtracking", |b| {
+                b.iter_batched(
+                    || thread_rng().gen_range(0..input.len() - bytes),
+                    |start| bpe.encode_via_backtracking(&input[start..start + bytes]),
+                    criterion::BatchSize::SmallInput,
+                )
+            });
+            group.bench_function("heap", |b| {
+                b.iter_batched(
+                    || thread_rng().gen_range(0..input.len() - bytes),
+                    |start| bpe.encode_via_bitfield(&input[start..start + bytes]),
+                    criterion::BatchSize::SmallInput,
+                )
+            });
+            group.bench_function("dynamic programming", |b| {
+                b.iter_batched(
+                    || thread_rng().gen_range(0..input.len() - bytes),
+                    |start| bpe.encode_via_table(&input[start..start + bytes]),
+                    criterion::BatchSize::SmallInput,
+                )
+            });
+            group.bench_function("greedy", |b| {
+                b.iter_batched(
+                    || thread_rng().gen_range(0..input.len() - bytes),
+                    |start| bpe.encode_greedy(&input[start..start + bytes]),
+                    criterion::BatchSize::SmallInput,
+                )
+            });
+            group.bench_function("minimal", |b| {
+                b.iter_batched(
+                    || thread_rng().gen_range(0..input.len() - bytes),
+                    |start| bpe.encode_minimal(&input[start..start + bytes]),
+                    criterion::BatchSize::SmallInput,
+                )
+            });
+            group.bench_function("tiktoken", |b| {
+                b.iter_batched(
+                    || loop {
+                        let start = thread_rng().gen_range(0..input.len() - bytes - 1);
+                        if is_char_boundary(input[start]) && is_char_boundary(input[start + bytes])
+                        {
+                            return start;
+                        }
+                    },
+                    |start| tiktoken.encode_ordinary(&text[start..start + bytes]),
+                    criterion::BatchSize::SmallInput,
+                )
+            });
+        }
     }
 }
 

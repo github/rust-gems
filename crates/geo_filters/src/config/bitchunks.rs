@@ -217,9 +217,8 @@ pub(crate) fn count_ones_from_bitchunks<T: IsBucketType>(
     let mut total = take_ref(&mut ones, max_msb_len - 1).count();
     let smallest_msb = ones
         .next()
-        .map(|bucket| {
+        .inspect(|_| {
             total += 1;
-            bucket
         })
         .unwrap_or_default();
 
