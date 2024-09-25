@@ -35,8 +35,16 @@ fn counting_benchmark(c: &mut Criterion) {
 
 fn encoding_benchmark(c: &mut Criterion) {
     for (name, bpe, tiktoken) in [
-        ("cl100k", BytePairEncoding::cl100k(), tiktoken_rs::cl100k_base().unwrap()),
-        ("o200k", BytePairEncoding::o200k(), tiktoken_rs::o200k_base().unwrap()),
+        (
+            "cl100k",
+            BytePairEncoding::cl100k(),
+            tiktoken_rs::cl100k_base().unwrap(),
+        ),
+        (
+            "o200k",
+            BytePairEncoding::o200k(),
+            tiktoken_rs::o200k_base().unwrap(),
+        ),
     ] {
         let text = create_test_string(&bpe, 20000);
         let input = text.as_bytes();
