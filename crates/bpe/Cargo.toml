@@ -8,8 +8,7 @@ crate-type = ["lib", "staticlib"]
 bench = false
 
 [dependencies]
-#daachorse = "1"
-daachorse = { git = "https://github.com/aneubeck/daachorse.git", rev = "ac44a471a7be5a139535173073b8f1cd2e33bcbd" }
+aneubeck-daachorse = "1.1.1"
 fnv = "1.0"
 itertools = "0.12"
 once_cell = "1"
