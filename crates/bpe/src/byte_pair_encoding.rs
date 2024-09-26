@@ -3,7 +3,7 @@ use std::collections::BinaryHeap;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
-use daachorse::{DoubleArrayAhoCorasick, DoubleArrayAhoCorasickBuilder};
+use aneubeck_daachorse::{DoubleArrayAhoCorasick, DoubleArrayAhoCorasickBuilder};
 use fnv::{FnvHashMap, FnvHasher};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
@@ -213,7 +213,7 @@ impl BytePairEncoding {
         assert_eq!(bytes_hash_to_token.len() + 1, token_starts.len());
 
         let longest_searcher = DoubleArrayAhoCorasickBuilder::new()
-            .match_kind(daachorse::MatchKind::LeftmostLongest)
+            .match_kind(aneubeck_daachorse::MatchKind::LeftmostLongest)
             .build(token_iter(&all_tokens, &token_starts))
             .expect("failed to build AhoCorasick");
 
