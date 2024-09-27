@@ -2,23 +2,23 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
+use std::sync::LazyLock;
 
 use aneubeck_daachorse::{DoubleArrayAhoCorasick, DoubleArrayAhoCorasickBuilder};
 use fnv::{FnvHashMap, FnvHasher};
 use itertools::Itertools;
-use once_cell::sync::Lazy;
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::backtrack_encoder::BacktrackEncoder;
 use crate::bitfield::BitField;
 
-static BPE_CL100K: Lazy<BytePairEncoding> = Lazy::new(|| {
+static BPE_CL100K: LazyLock<BytePairEncoding> = LazyLock::new(|| {
     let bytes = include_bytes!("data/bpe_cl100k.dict");
     rmp_serde::from_slice(bytes).expect("")
 });
 
-static BPE_O200K: Lazy<BytePairEncoding> = Lazy::new(|| {
+static BPE_O200K: LazyLock<BytePairEncoding> = LazyLock::new(|| {
     let bytes = include_bytes!("data/bpe_o200k.dict");
     rmp_serde::from_slice(bytes).expect("")
 });
