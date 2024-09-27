@@ -9,7 +9,6 @@ use itertools::Itertools;
 use once_cell::sync::Lazy;
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use tiktoken_rs::CoreBPE;
 
 use crate::backtrack_encoder::BacktrackEncoder;
 use crate::bitfield::BitField;
@@ -194,7 +193,8 @@ impl BytePairEncoding {
     }
 
     /// Construct a BytePairEncoding instance frmo a tiktoken dictionary.
-    pub fn from_tiktoken(tiktoken_bpe: &CoreBPE, num_tokens: usize) -> Self {
+    #[cfg(feature = "tiktoken-rs")]
+    pub fn from_tiktoken(tiktoken_bpe: &tiktoken_rs::CoreBPE, num_tokens: usize) -> Self {
         Self::from_dictionary((0..num_tokens).map(|i| tiktoken_bpe._decode_native(&[i])))
     }
 
@@ -492,6 +492,7 @@ impl BytePairEncoding {
     }
 }
 
+#[cfg(feature = "rand")]
 pub fn create_test_bytes(bpe: &BytePairEncoding, tokens: usize) -> Vec<u8> {
     use rand::{thread_rng, Rng};
     let mut text = vec![];
@@ -576,7 +577,7 @@ mod data {
     #[test]
     #[ignore = "run manually to find a suitable hash factor"]
     fn find_hash_factor() {
-        let bpes: &mut [(CoreBPE, usize)] = &mut [
+        let bpes = &mut [
             (cl100k_base().unwrap(), BPE_CL100K_LEN),
             (o200k_base().unwrap(), BPE_O200K_LEN),
         ];
@@ -609,7 +610,7 @@ mod data {
     }
 
     #[track_caller]
-    fn serialize_tokens(dict: &CoreBPE, num_tokens: usize, name: &str) {
+    fn serialize_tokens(dict: &tiktoken_rs::CoreBPE, num_tokens: usize, name: &str) {
         let path = PathBuf::from(file!());
         let dir = path.parent().unwrap();
         let data_file = dir.join(format!("data/bpe_{name}.dict"));
