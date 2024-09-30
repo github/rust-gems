@@ -169,23 +169,27 @@ fn hash_bytes(bytes: &[u8], factor: u64) -> u32 {
 /// Find a suitable hash factor for the given tiktoken dictionary that prevents collisions
 /// when constructing a [`BytePairEncoding`] from those tokens.
 #[cfg(all(feature = "tiktoken-rs", feature = "rand"))]
-pub fn find_hash_factor_from_tiktoken(bpe: &tiktoken_rs::CoreBPE, len: usize) -> u64 {
-    find_hash_factor(|i| bpe._decode_native(&[i]), len)
+pub fn find_hash_factor_for_tiktoken(bpe: &tiktoken_rs::CoreBPE, len: usize) -> u64 {
+    find_hash_factor_for_dictionary((0..len).map(|i| bpe._decode_native(&[i])))
 }
 
 /// Find a suitable hash factor for a set of given tokens that prevents collisions when
 /// constructing a [`BytePairEncoding`] from those tokens.
 #[cfg(feature = "rand")]
-pub fn find_hash_factor(tokens: impl Fn(usize) -> Vec<u8>, len: usize) -> u64 {
+pub fn find_hash_factor_for_dictionary(iter: impl Iterator<Item = Vec<u8>>) -> u64 {
     use std::collections::HashSet;
 
     use rand::Rng;
 
+    let all_tokens = iter.collect_vec();
     let mut rnd = rand::thread_rng();
     loop {
         let factor: u64 = rnd.gen();
-        let mut seen = HashSet::with_capacity(len);
-        if (0..len).all(|i| seen.insert(hash_bytes(&tokens(i), factor))) {
+        let mut seen = HashSet::new();
+        if all_tokens
+            .iter()
+            .all(|token| seen.insert(hash_bytes(token, factor)))
+        {
             println!("hash factor: {factor}");
             return factor;
         }
@@ -219,7 +223,7 @@ impl BytePairEncoding {
 
     /// Construct a BytePairEncoding instance from a tiktoken dictionary.
     /// A suitable hash factor may be necessary to prevent hash collisions,
-    /// which can by found using [`crate::data::find_hash_factor_from_tiktoken`].
+    /// which can by found using [`find_hash_factor_for_tiktoken`].
     ///
     /// The recommended approach is to store the serialized value and reuse that,
     /// to prevent repeating the cost of computing the hash factor and encoding.
@@ -237,7 +241,7 @@ impl BytePairEncoding {
 
     /// Construct a BytePairEncoding instance from an iterator that enumerates all tokens.
     /// A suitable hash factor may be necessary to prevent hash collisions, which can be
-    /// found using [`crate::data::find_hash_factor`].
+    /// found using [`find_hash_factor_for_dictionary`].
     ///
     /// The recommended approach is to store the serialized value and reuse that,
     /// to prevent repeating the cost of computing the hash factor and encoding.
