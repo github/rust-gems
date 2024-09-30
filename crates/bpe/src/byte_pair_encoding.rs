@@ -63,6 +63,8 @@ pub struct BytePairEncoding {
     /// But we don't have efficient access to it and therefore store it here again.
     /// If there is none, then the value is set to u32::MAX.
     next_prefix_match: Vec<u32>,
+    /// Hash factor used to prevent hash collisions.
+    hash_factor: u64,
 }
 
 fn serialize_daac<S: Serializer>(
@@ -156,11 +158,7 @@ fn token_bytes<'a>(all_tokens: &'a [u8], token_starts: &[u32], token_id: u32) ->
     &all_tokens[token_range(token_starts, token_id)]
 }
 
-fn hash_bytes(bytes: &[u8]) -> u32 {
-    hash_bytes_with_factor(bytes, 17846336922010275747)
-}
-
-fn hash_bytes_with_factor(bytes: &[u8], factor: u64) -> u32 {
+fn hash_bytes(bytes: &[u8], factor: u64) -> u32 {
     let mut hasher = FnvHasher::default();
     bytes.hash(&mut hasher);
     // Note: we save 1/3 of space for the hashmap by only using the most significant bits of the hash.
@@ -168,13 +166,43 @@ fn hash_bytes_with_factor(bytes: &[u8], factor: u64) -> u32 {
     ((hasher.finish().wrapping_mul(factor)) >> 32) as u32
 }
 
+/// Find a suitable hash factor for the given tiktoken dictionary that prevents collisions
+/// when constructing a [`BytePairEncoding`] from those tokens.
+#[cfg(all(feature = "tiktoken-rs", feature = "rand"))]
+pub fn find_hash_factor_for_tiktoken(bpe: &tiktoken_rs::CoreBPE, len: usize) -> u64 {
+    find_hash_factor_for_dictionary((0..len).map(|i| bpe._decode_native(&[i])))
+}
+
+/// Find a suitable hash factor for a set of given tokens that prevents collisions when
+/// constructing a [`BytePairEncoding`] from those tokens.
+#[cfg(feature = "rand")]
+pub fn find_hash_factor_for_dictionary(iter: impl Iterator<Item = Vec<u8>>) -> u64 {
+    use std::collections::HashSet;
+
+    use rand::Rng;
+
+    let all_tokens = iter.collect_vec();
+    let mut rnd = rand::thread_rng();
+    loop {
+        let factor: u64 = rnd.gen();
+        let mut seen = HashSet::new();
+        if all_tokens
+            .iter()
+            .all(|token| seen.insert(hash_bytes(token, factor)))
+        {
+            return factor;
+        }
+    }
+}
+
 fn find_token_by_bytes(
     all_tokens: &[u8],
     token_starts: &[u32],
     bytes_hash_to_token: &FnvHashMap<u32, u32>,
     bytes: &[u8],
+    hash_factor: u64,
 ) -> Option<u32> {
-    let hash = hash_bytes(bytes);
+    let hash = hash_bytes(bytes, hash_factor);
     let token = *bytes_hash_to_token.get(&hash)?;
     if token_bytes(all_tokens, token_starts, token) == bytes {
         Some(token)
@@ -192,20 +220,40 @@ impl BytePairEncoding {
         &BPE_O200K
     }
 
-    /// Construct a BytePairEncoding instance frmo a tiktoken dictionary.
+    /// Construct a BytePairEncoding instance from a tiktoken dictionary.
+    /// A suitable hash factor may be necessary to prevent hash collisions,
+    /// which can by found using [`find_hash_factor_for_tiktoken`].
+    ///
+    /// The recommended approach is to store the serialized value and reuse that,
+    /// to prevent repeating the cost of computing the hash factor and encoding.
     #[cfg(feature = "tiktoken-rs")]
-    pub fn from_tiktoken(tiktoken_bpe: &tiktoken_rs::CoreBPE, num_tokens: usize) -> Self {
-        Self::from_dictionary((0..num_tokens).map(|i| tiktoken_bpe._decode_native(&[i])))
+    pub fn from_tiktoken(
+        tiktoken_bpe: &tiktoken_rs::CoreBPE,
+        num_tokens: usize,
+        hash_factor: Option<u64>,
+    ) -> Self {
+        Self::from_dictionary(
+            (0..num_tokens).map(|i| tiktoken_bpe._decode_native(&[i])),
+            hash_factor,
+        )
     }
 
-    /// Construct a BytePairEncoding instance from an iterator which enumerates all tokens.
-    pub fn from_dictionary(iter: impl Iterator<Item = Vec<u8>>) -> Self {
+    /// Construct a BytePairEncoding instance from an iterator that enumerates all tokens.
+    /// A suitable hash factor may be necessary to prevent hash collisions, which can be
+    /// found using [`find_hash_factor_for_dictionary`].
+    ///
+    /// The recommended approach is to store the serialized value and reuse that,
+    /// to prevent repeating the cost of computing the hash factor and encoding.
+    pub fn from_dictionary(iter: impl Iterator<Item = Vec<u8>>, hash_factor: Option<u64>) -> Self {
+        let hash_factor = hash_factor
+            .inspect(|f| assert_ne!(*f, 0, "hash factor must be larger than zero"))
+            .unwrap_or(1);
         let mut all_tokens = Vec::new();
         let mut all_tokens_rev = Vec::new();
         let mut token_starts = vec![0];
         let mut bytes_hash_to_token = FnvHashMap::default();
         for (i, token) in iter.enumerate() {
-            bytes_hash_to_token.insert(hash_bytes(&token), i as u32);
+            bytes_hash_to_token.insert(hash_bytes(&token, hash_factor), i as u32);
             all_tokens_rev.extend(token.iter().copied().rev());
             all_tokens.extend(token);
             token_starts.push(all_tokens.len() as u32);
@@ -236,9 +284,13 @@ impl BytePairEncoding {
             let mut token1 = next_prefix_match[id];
             while token1 != u32::MAX {
                 let rest = &token[token_range(&token_starts, token1).len()..];
-                if let Some(token2) =
-                    find_token_by_bytes(&all_tokens, &token_starts, &bytes_hash_to_token, rest)
-                {
+                if let Some(token2) = find_token_by_bytes(
+                    &all_tokens,
+                    &token_starts,
+                    &bytes_hash_to_token,
+                    rest,
+                    hash_factor,
+                ) {
                     if token1 < id as u32
                         && token2 < id as u32
                         && is_valid_token_pair(&pair_lookup, &split_table, token1, token2)
@@ -264,6 +316,7 @@ impl BytePairEncoding {
             next_prefix_match,
             pair_lookup,
             split_table,
+            hash_factor,
         }
     }
 
@@ -308,6 +361,7 @@ impl BytePairEncoding {
             &self.token_starts,
             &self.bytes_hash_to_token,
             bytes,
+            self.hash_factor,
         )
     }
 
@@ -557,60 +611,36 @@ mod tests {
 
 #[cfg(test)]
 mod data {
-    use std::collections::HashSet;
     use std::fs::File;
     use std::path::PathBuf;
 
-    use rand::Rng;
     use serde::Serialize;
-    use tiktoken_rs::{cl100k_base, o200k_base};
 
-    use super::*;
-
-    const BPE_CL100K_LEN: usize = 100256;
-    const BPE_O200K_LEN: usize = 199998;
-
-    /// Use this to find a hashing factor for [`hash_bytes`] that prevents collisions.
-    /// 1. Ensure all supported tokenizers are in the list.
-    /// 2. Update the hash factor in [`hash_bytes`].
-    /// 3. Run [`update_token_dicts`] tests below to update data files.
-    #[test]
-    #[ignore = "run manually to find a suitable hash factor"]
-    fn find_hash_factor() {
-        let bpes = &mut [
-            (cl100k_base().unwrap(), BPE_CL100K_LEN),
-            (o200k_base().unwrap(), BPE_O200K_LEN),
-        ];
-        let mut rnd = rand::thread_rng();
-        loop {
-            let factor: u64 = rnd.gen();
-            if bpes.iter().all(|(bpe, len)| {
-                let mut seen = HashSet::with_capacity(*len);
-                (0..*len)
-                    .all(|i| seen.insert(hash_bytes_with_factor(&bpe._decode_native(&[i]), factor)))
-            }) {
-                println!("hash factor: {factor}");
-                return;
-            }
-        }
-    }
+    use crate::byte_pair_encoding::BytePairEncoding;
 
     #[test]
     fn update_token_dicts() {
         serialize_tokens(
-            &cl100k_base().expect("tiktoken initialization must not fail!"),
-            BPE_CL100K_LEN,
             "cl100k",
+            &tiktoken_rs::cl100k_base().expect("tiktoken initialization must not fail!"),
+            100256,
+            17846336922010275747,
         );
         serialize_tokens(
-            &o200k_base().expect("tiktoken initialization must not fail!"),
-            BPE_O200K_LEN,
             "o200k",
+            &tiktoken_rs::o200k_base().expect("tiktoken initialization must not fail!"),
+            199998,
+            17846336922010275747,
         );
     }
 
     #[track_caller]
-    fn serialize_tokens(dict: &tiktoken_rs::CoreBPE, num_tokens: usize, name: &str) {
+    fn serialize_tokens(
+        name: &str,
+        dict: &tiktoken_rs::CoreBPE,
+        num_tokens: usize,
+        hash_factor: u64,
+    ) {
         let path = PathBuf::from(file!());
         let dir = path.parent().unwrap();
         let data_file = dir.join(format!("data/bpe_{name}.dict"));
@@ -618,7 +648,7 @@ mod data {
         let abs_path = current_dir.parent().unwrap().parent().unwrap();
         let file = File::create(abs_path.join(data_file)).unwrap();
         let mut serializer = rmp_serde::Serializer::new(file);
-        BytePairEncoding::from_tiktoken(dict, num_tokens)
+        BytePairEncoding::from_tiktoken(dict, num_tokens, Some(hash_factor))
             .serialize(&mut serializer)
             .unwrap();
     }
