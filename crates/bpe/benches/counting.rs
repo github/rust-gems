@@ -1,92 +1,112 @@
+use std::sync::LazyLock;
 use std::time::Duration;
 
+use bpe::appendable_encoder::AppendableEncoder;
 use bpe::byte_pair_encoding::{create_test_bytes, BytePairEncoding};
 use bpe::interval_encoding::IntervalEncoding;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{
+    criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
+};
 use rand::{thread_rng, Rng};
+use tiktoken_rs::CoreBPE;
+
+static TOKENIZERS: LazyLock<[(&'static str, &'static BytePairEncoding, CoreBPE); 2]> =
+    LazyLock::new(|| {
+        [
+            (
+                "cl100k",
+                BytePairEncoding::cl100k(),
+                tiktoken_rs::cl100k_base().unwrap(),
+            ),
+            (
+                "o200k",
+                BytePairEncoding::o200k(),
+                tiktoken_rs::o200k_base().unwrap(),
+            ),
+        ]
+    });
 
 fn counting_benchmark(c: &mut Criterion) {
-    for (name, bpe) in [
-        ("cl100k", BytePairEncoding::cl100k()),
-        ("o200k", BytePairEncoding::o200k()),
-    ] {
-        let text = create_test_bytes(&bpe, 20000);
-        let fast = IntervalEncoding::new(&bpe, &text);
+    for (name, bpe, _) in TOKENIZERS.iter() {
+        let input = create_test_bytes(&bpe, 20000);
+        let fast = IntervalEncoding::new(&bpe, &input);
 
+        let mut group = c.benchmark_group(format!("counting-{name}"));
+        group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
         for bytes in [10, 100, 1000, 10000] {
-            let mut group = c.benchmark_group(format!("bpe-{name}-bytes-{bytes}"));
-            group.bench_function("hybrid counting", |b| {
+            group.throughput(criterion::Throughput::Bytes(bytes as u64));
+            group.bench_with_input(BenchmarkId::new("interval", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
-                    || thread_rng().gen_range(0..text.len() - bytes),
+                    || thread_rng().gen_range(0..input.len() - bytes),
                     |start| fast.count(start..start + bytes),
                     criterion::BatchSize::SmallInput,
                 )
             });
-            group.bench_function("backtrack counting", |b| {
-                b.iter_batched(
-                    || thread_rng().gen_range(0..text.len() - bytes),
-                    |start| bpe.count(&text[start..start + bytes]),
-                    criterion::BatchSize::SmallInput,
-                )
-            });
+            group.bench_with_input(
+                BenchmarkId::new("backtracking", bytes),
+                &bytes,
+                |b, bytes| {
+                    b.iter_batched(
+                        || thread_rng().gen_range(0..input.len() - bytes),
+                        |start| bpe.count(&input[start..start + bytes]),
+                        criterion::BatchSize::SmallInput,
+                    )
+                },
+            );
         }
+        group.finish();
     }
 }
 
 fn encoding_benchmark(c: &mut Criterion) {
-    for (name, bpe, tiktoken) in [
-        (
-            "cl100k",
-            BytePairEncoding::cl100k(),
-            tiktoken_rs::cl100k_base().unwrap(),
-        ),
-        (
-            "o200k",
-            BytePairEncoding::o200k(),
-            tiktoken_rs::o200k_base().unwrap(),
-        ),
-    ] {
+    for (name, bpe, tiktoken) in TOKENIZERS.iter() {
         let text = create_test_string(&bpe, 20000);
         let input = text.as_bytes();
 
+        let mut group = c.benchmark_group(format!("encoding-{name}"));
+        group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
         for bytes in [10, 100, 1000, 10000] {
-            let mut group = c.benchmark_group(format!("bpe-{name}-bytes-{bytes}"));
-            group.bench_function("backtracking", |b| {
-                b.iter_batched(
-                    || thread_rng().gen_range(0..input.len() - bytes),
-                    |start| bpe.encode_via_backtracking(&input[start..start + bytes]),
-                    criterion::BatchSize::SmallInput,
-                )
-            });
-            group.bench_function("heap", |b| {
+            group.throughput(criterion::Throughput::Bytes(bytes as u64));
+            group.bench_with_input(
+                BenchmarkId::new("backtracking", bytes),
+                &bytes,
+                |b, bytes| {
+                    b.iter_batched(
+                        || thread_rng().gen_range(0..input.len() - bytes),
+                        |start| bpe.encode_via_backtracking(&input[start..start + bytes]),
+                        criterion::BatchSize::SmallInput,
+                    )
+                },
+            );
+            group.bench_with_input(BenchmarkId::new("heap", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
                     || thread_rng().gen_range(0..input.len() - bytes),
                     |start| bpe.encode_via_bitfield(&input[start..start + bytes]),
                     criterion::BatchSize::SmallInput,
                 )
             });
-            group.bench_function("dynamic programming", |b| {
+            group.bench_with_input(BenchmarkId::new("table", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
                     || thread_rng().gen_range(0..input.len() - bytes),
                     |start| bpe.encode_via_table(&input[start..start + bytes]),
                     criterion::BatchSize::SmallInput,
                 )
             });
-            group.bench_function("greedy", |b| {
+            group.bench_with_input(BenchmarkId::new("greedy", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
                     || thread_rng().gen_range(0..input.len() - bytes),
                     |start| bpe.encode_greedy(&input[start..start + bytes]),
                     criterion::BatchSize::SmallInput,
                 )
             });
-            group.bench_function("minimal", |b| {
+            group.bench_with_input(BenchmarkId::new("minimal", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
                     || thread_rng().gen_range(0..input.len() - bytes),
                     |start| bpe.encode_minimal(&input[start..start + bytes]),
                     criterion::BatchSize::SmallInput,
                 )
             });
-            group.bench_function("tiktoken", |b| {
+            group.bench_with_input(BenchmarkId::new("tiktoken", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
                     || loop {
                         let start = thread_rng().gen_range(0..input.len() - bytes - 1);
@@ -100,6 +120,45 @@ fn encoding_benchmark(c: &mut Criterion) {
                 )
             });
         }
+        group.finish();
+    }
+}
+
+fn appending_benchmark(c: &mut Criterion) {
+    for (name, bpe, _) in TOKENIZERS.iter() {
+        let input = create_test_bytes(&bpe, 20000);
+
+        let mut group = c.benchmark_group(format!("appending-{name}"));
+        group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
+        for bytes in [10, 100, 1000, 10000] {
+            group.throughput(criterion::Throughput::Bytes(bytes as u64));
+            group.bench_with_input(BenchmarkId::new("appending", bytes), &bytes, |b, bytes| {
+                b.iter_batched(
+                    || {
+                        (
+                            thread_rng().gen_range(0..input.len() - bytes),
+                            AppendableEncoder::new(bpe),
+                        )
+                    },
+                    |(start, mut enc)| {
+                        enc.extend(input[start..start + bytes].into_iter().copied())
+                    },
+                    criterion::BatchSize::SmallInput,
+                )
+            });
+            group.bench_with_input(
+                BenchmarkId::new("backtracking", bytes),
+                &bytes,
+                |b, bytes| {
+                    b.iter_batched(
+                        || thread_rng().gen_range(0..input.len() - bytes),
+                        |start| bpe.count(&input[start..start + bytes]),
+                        criterion::BatchSize::SmallInput,
+                    )
+                },
+            );
+        }
+        group.finish();
     }
 }
 
@@ -134,6 +193,6 @@ fn create_test_string(bpe: &BytePairEncoding, tokens: usize) -> String {
 criterion_group!(
     name = benches;
     config = Criterion::default().warm_up_time(Duration::from_millis(500)).measurement_time(Duration::from_millis(500)).nresamples(1000);
-    targets = counting_benchmark, encoding_benchmark
+    targets = counting_benchmark, encoding_benchmark, appending_benchmark
 );
 criterion_main!(benches);
