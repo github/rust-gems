@@ -190,7 +190,6 @@ pub fn find_hash_factor_for_dictionary(iter: impl Iterator<Item = Vec<u8>>) -> u
             .iter()
             .all(|token| seen.insert(hash_bytes(token, factor)))
         {
-            println!("hash factor: {factor}");
             return factor;
         }
     }
