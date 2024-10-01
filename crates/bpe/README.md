@@ -4,6 +4,7 @@ The main purpose of this library is to provide fast and correct token counting f
 As a by-product, it can also be used to efficiently encode those chunks if desired.
 
 For chunking the following operations are of interest:
+
 1) Split text after exactly n tokens at a character boundary.
 1) Count tokens for sub-ranges of a text.
 1) Incrementally count tokens while appending text to a chunk.
@@ -29,6 +30,7 @@ This library presents novel algorithms to compute BPE encodings which address th
 ## Prior Art
 
 There are mostly three strategies for BPE encoding.
+
 1) Trivial solution. Search brute force for the most frequent pair in the encoded text according the dictionary and replace those occurrences. This has a `O(n^2)` complexity and is therefore not very appealing in production.
 2) Heap based. Set up a heap with the frequencies. This improves the linear search time to a logarithmic factor. If done properly, the overall complexity reduces now to `O(n log n)`.
 3) Split the input into sections of a maximum size first and then process each section individually. This shrinks in theory the complexity to `O(n)` if the section size is small enough. But it will in general produce now different results. In order to produce the "correct" encoding, one would need to choose split points at token boundaries. But without having the text encoded already, this is in general impossible.
@@ -89,13 +91,13 @@ If BPE wants to make a different merge decision when it sees the full input, the
 
 Given a valid encoding sequence `e_0..e_i` and a valid encoding tuple `e_i e_j`, then `e_0..e_i e_j` is also a valid encoding sequence.
 
-
 ## Novel Algorithm
 
 At a first glance, it seems impossible to achieve `O(n)` complexity while preserving the encoding output of the original BPE algorithm, since the original BPE algorithm needs to first scan the full input before it can make any encoding decision.
 For instance, the sequence `abab` would be encoded as `ab ab` when the dictionary contains the tokens `a b ab ba bc abc babc ababc` ordered by frequency. But appending a single character `ababc` would result in a pretty different tokenization: `ab a bc`. So without looking ahead it seems impossible to properly tokenize the text.
 
 The solution is to track the encodings of ALL text prefixes. For our example `ababc` we would get:
+
 - `a` ------> `a`
 - `ab` -----> `ab`
 - `aba` ----> `ab a`
@@ -136,6 +138,7 @@ Once that happens the reencoding will be different and the algorithm can stop.
 The actual implementation needs essentially at most 14 lookups for the most complex cases to determine whether two tokens are compatible or not.
 
 Putting all these pieces together leads to the following algorithmic sketch:
+
 ```rust
 let last_tokens = vec![];
 for pos in 0..text.len() {
@@ -166,6 +169,7 @@ The main observation is that often the greedy heuristic picks already the correc
 In the cases, where it doesn't the algorithm has to somehow backtrack to the next tokenization until it converged to the correct solution.
 
 Our backtracking implementation solves the enumeration problem as follows:
+
 1) If the current tokenization sequence is valid, then append the longest matching token to the right.
 2) Otherwise, replace the right most token with the next longest prefix token.
 3) If there is no such token, then remove that token and go back to step 2.
