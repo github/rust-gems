@@ -28,8 +28,8 @@ static TOKENIZERS: LazyLock<[(&'static str, &'static BytePairEncoding, CoreBPE);
 
 fn counting_benchmark(c: &mut Criterion) {
     for (name, bpe, _) in TOKENIZERS.iter() {
-        let input = create_test_bytes(&bpe, 20000);
-        let fast = IntervalEncoding::new(&bpe, &input);
+        let input = create_test_bytes(bpe, 20000);
+        let fast = IntervalEncoding::new(bpe, &input);
 
         let mut group = c.benchmark_group(format!("counting-{name}"));
         group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
@@ -60,7 +60,7 @@ fn counting_benchmark(c: &mut Criterion) {
 
 fn encoding_benchmark(c: &mut Criterion) {
     for (name, bpe, tiktoken) in TOKENIZERS.iter() {
-        let text = create_test_string(&bpe, 20000);
+        let text = create_test_string(bpe, 20000);
         let input = text.as_bytes();
 
         let mut group = c.benchmark_group(format!("encoding-{name}"));
@@ -126,7 +126,7 @@ fn encoding_benchmark(c: &mut Criterion) {
 
 fn appending_benchmark(c: &mut Criterion) {
     for (name, bpe, _) in TOKENIZERS.iter() {
-        let input = create_test_bytes(&bpe, 20000);
+        let input = create_test_bytes(bpe, 20000);
 
         let mut group = c.benchmark_group(format!("appending-{name}"));
         group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
@@ -140,7 +140,7 @@ fn appending_benchmark(c: &mut Criterion) {
                             AppendableEncoder::new(bpe),
                         )
                     },
-                    |(start, mut enc)| enc.extend(input[start..start + bytes].into_iter().copied()),
+                    |(start, mut enc)| enc.extend(input[start..start + bytes].iter().copied()),
                     criterion::BatchSize::SmallInput,
                 )
             });
