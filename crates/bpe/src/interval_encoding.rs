@@ -82,6 +82,11 @@ impl<'a> IntervalEncoding<'a> {
         }
         encoder.count()
     }
+
+    pub(crate) fn encode_interval(&self, states: &mut Vec<State>, range: Range<usize>) {
+        // TODO Use the precomputed tokens
+        self.bpe.encode_next_bytes(states, &self.text[range]);
+    }
 }
 
 #[cfg(test)]

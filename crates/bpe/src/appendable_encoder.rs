@@ -1,4 +1,7 @@
+use std::ops::Range;
+
 use crate::byte_pair_encoding::{BytePairEncoding, State};
+use crate::interval_encoding::IntervalEncoding;
 
 /// Encoder which keeps track of the encoding length while appending characters.
 #[derive(Clone)]
@@ -32,6 +35,16 @@ impl<'a> AppendableEncoder<'a> {
         self.bpe.encode_next_byte(&mut self.states, c);
     }
 
+    /// Appends a range from the given internval encoding to be tokenized.
+    /// The operation is typically O(1) time the number of tokens to encode
+    /// the range (see [`IntervalEncoding::count`]).
+    ///
+    /// **Careful** Only correct if this and the given interval encoding are
+    /// constructed with the same [`BytePairEncoding`].
+    pub fn push_interval(&mut self, ie: &IntervalEncoding, range: Range<usize>) {
+        ie.encode_interval(&mut self.states, range);
+    }
+
     /// Returns the number of tokens required to tokenize the input text.
     /// This operation is O(1) and can be called at any point in time.
     pub fn token_count(&self) -> usize {
@@ -51,17 +64,32 @@ impl<'a> AppendableEncoder<'a> {
 #[cfg(test)]
 mod tests {
     use crate::byte_pair_encoding::{create_test_bytes, BytePairEncoding};
+    use crate::interval_encoding::IntervalEncoding;
 
     use super::AppendableEncoder;
 
     #[test]
-    fn test_appendable_encoder() {
+    fn test_append_bytes() {
         let bpe = BytePairEncoding::cl100k();
         let mut enc = AppendableEncoder::new(bpe);
-        let input_string = create_test_bytes(bpe, 100);
-        for (i, c) in input_string.iter().enumerate() {
-            assert_eq!(enc.token_count(), bpe.count(&input_string[0..i]));
+        let text = create_test_bytes(bpe, 100);
+        for (i, c) in text.iter().enumerate() {
+            assert_eq!(enc.token_count(), bpe.count(&text[0..i]));
             enc.push(*c);
+        }
+    }
+
+    #[test]
+    fn test_append_interval() {
+        let bpe = BytePairEncoding::cl100k();
+        let text = create_test_bytes(bpe, 100);
+        let ie = IntervalEncoding::new(bpe, &text);
+        for start in 0..text.len() {
+            for end in start..text.len() {
+                let mut enc = AppendableEncoder::new(bpe);
+                enc.push_interval(&ie, start..end);
+                assert_eq!(enc.token_count(), bpe.count(&text[start..end]));
+            }
         }
     }
 }
