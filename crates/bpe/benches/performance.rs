@@ -190,7 +190,10 @@ fn create_test_string(bpe: &BytePairEncoding, tokens: usize) -> String {
 
 criterion_group!(
     name = benches;
-    config = Criterion::default().warm_up_time(Duration::from_millis(500)).measurement_time(Duration::from_millis(500)).nresamples(1000);
+    config = Criterion::default()
+                .warm_up_time(Duration::from_millis(500))
+                .measurement_time(Duration::from_millis(1000))
+                .nresamples(1000);
     targets = counting_benchmark, encoding_benchmark, appending_benchmark
 );
 criterion_main!(benches);
