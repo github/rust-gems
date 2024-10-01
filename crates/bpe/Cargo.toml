@@ -8,8 +8,8 @@ crate-type = ["lib", "staticlib"]
 bench = false
 
 [[bench]]
-name = "counting"
-path = "benches/counting.rs"
+name = "performance"
+path = "benches/performance.rs"
 harness = false
 
 [features]
