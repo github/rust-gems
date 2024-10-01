@@ -140,9 +140,7 @@ fn appending_benchmark(c: &mut Criterion) {
                             AppendableEncoder::new(bpe),
                         )
                     },
-                    |(start, mut enc)| {
-                        enc.extend(input[start..start + bytes].into_iter().copied())
-                    },
+                    |(start, mut enc)| enc.extend(input[start..start + bytes].into_iter().copied()),
                     criterion::BatchSize::SmallInput,
                 )
             });

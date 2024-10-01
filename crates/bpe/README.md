@@ -198,3 +198,21 @@ As can be seen, our Backtracking implementation beats the TikToken Rust implemen
 And even the fully dynamic programming solution is faster with a more consistent runtime.
 The tuned heap implementation is still quite competitive to TikToken (especially for smaller inputs).
 If the requirement of correct BPE output can be relaxed, then the Greedy approach or the minimal encoding approach are the clear winners.
+
+### Counting results
+
+Results for counting o200k tokens for random 10000 byte slices. The setup time of the interval encoder is comparable to backtracking. After setup counting of slices of the original data are approximately constant time.
+
+![Counting o200k tokens for random 10000 byte slices](./benches/result/reports/counting-o200k/lines.svg)
+
+### Encoding results
+
+Results for encoding o200k tokens for random 1000 bytes. The backtracking encoder consistently outperforms tiktoken by a constant factor.
+
+![Encoding o200k tokens for 10000 random bytes](./benches/result/reports/encoding-o200k/lines.svg)
+
+### Incremental encoding results
+
+Results for incrementally encoding o200k tokens by appending 10000 random bytes. The appending encoder is slower by a constant factor but overall has similar performance curve as the backtracking encoder encoding all data at once. 
+
+![Incrementally encoding o200k tokens by appending 10000 random bytes](./benches/result/reports/appending-o200k/lines.svg)

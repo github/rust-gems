@@ -1,2 +1,2 @@
 # save report in this directory, even if a custom target directory is set
-criterion_home = "./target/criterion"
+criterion_home = "./benches/result"

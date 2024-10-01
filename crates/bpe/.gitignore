@@ -1,0 +1,10 @@
+# Ignore benchmark results except figures references in the README.
+# Negated ignore patterns do not work for files inside a directory that is itself ignored.
+# Therefore ignore using `**` and then negate the nested directories (but not the files inside).
+/benches/result/**
+!/benches/result/*/
+!/benches/result/*/*/
+# Negate the actual figures we want to keep.
+!/benches/result/reports/counting-o200k/lines.svg
+!/benches/result/reports/encoding-o200k/lines.svg
+!/benches/result/reports/appending-o200k/lines.svg
