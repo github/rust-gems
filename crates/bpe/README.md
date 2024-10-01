@@ -203,16 +203,16 @@ If the requirement of correct BPE output can be relaxed, then the Greedy approac
 
 Results for counting o200k tokens for random 10000 byte slices. The setup time of the interval encoder is comparable to backtracking. After setup counting of slices of the original data are approximately constant time.
 
-![counting runtime comparison](./benches/result/reports/counting-o200k/lines.svg)
+<img src="./benches/result/reports/counting-o200k/lines.svg" style="background-color: white" />
 
 ### Encoding results
 
 Results for encoding o200k tokens for random 1000 bytes. The backtracking encoder consistently outperforms tiktoken by a constant factor.
 
-![encoding runtime comparison](./benches/result/reports/encoding-o200k/lines.svg)
+<img src="./benches/result/reports/encoding-o200k/lines.svg" style="background-color: white" />
 
 ### Incremental encoding results
 
 Results for incrementally encoding o200k tokens by appending 10000 random bytes. The appending encoder is slower by a constant factor but overall has similar performance curve as the backtracking encoder encoding all data at once. 
 
-![appending runtime comparison](./benches/result/reports/appending-o200k/lines.svg)
+<img src="./benches/result/reports/appending-o200k/lines.svg" style="background-color: white" />
