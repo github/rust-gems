@@ -211,6 +211,13 @@ fn find_token_by_bytes(
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct State {
+    state: u32,
+    pub(crate) last_token: u32,
+    pub(crate) count: u32,
+}
+
 impl BytePairEncoding {
     pub fn cl100k() -> &'static Self {
         &BPE_CL100K
@@ -376,30 +383,45 @@ impl BytePairEncoding {
         text
     }
 
-    /// Computes for every prefix of the input text a corresponding last token.
-    pub(crate) fn encode_all_prefixes(&self, text: &[u8]) -> Vec<u32> {
-        let mut last_token = Vec::with_capacity(text.len());
-        let mut state = self.overlapping_searcher.start_state();
-        for (pos, c) in text.iter().enumerate() {
-            let (s, iter) = self.overlapping_searcher.consume(state, pos + 1, *c);
-            state = s;
-            for m in iter {
-                let new_token = m.value();
-                let new_range = m.start()..m.end();
-                assert_eq!(new_range.end, last_token.len() + 1);
-                if new_range.start == 0 {
-                    last_token.push(new_token);
-                    break;
-                } else {
-                    let prev_token = unsafe { *last_token.get_unchecked(new_range.start - 1) };
-                    if self.is_valid_token_pair(prev_token, new_token) {
-                        last_token.push(new_token);
-                        break;
-                    }
+    pub(crate) fn encode_next_bytes(&self, states: &mut Vec<State>, text: &[u8]) {
+        for c in text {
+            self.encode_next_byte(states, *c);
+        }
+    }
+
+    pub(crate) fn encode_next_byte(&self, states: &mut Vec<State>, c: u8) {
+        let (state, iter) = self.overlapping_searcher.consume(
+            states
+                .last()
+                .map(|s| s.state)
+                .unwrap_or_else(|| self.overlapping_searcher.start_state()),
+            states.len() + 1,
+            c,
+        );
+        for m in iter {
+            let new_token = m.value();
+            let new_range = m.start()..m.end();
+            assert_eq!(new_range.end, states.len() + 1);
+            if new_range.start == 0 {
+                states.push(State {
+                    state,
+                    last_token: new_token,
+                    count: 1,
+                });
+                return;
+            } else {
+                let prev_token = unsafe { states.get_unchecked(new_range.start - 1).last_token };
+                if self.is_valid_token_pair(prev_token, new_token) {
+                    let prev_count = unsafe { states.get_unchecked(new_range.start - 1).count };
+                    states.push(State {
+                        state,
+                        last_token: new_token,
+                        count: prev_count + 1,
+                    });
+                    return;
                 }
             }
         }
-        last_token
     }
 
     /// Counts the number tokens produced when encoding the text.
@@ -432,11 +454,12 @@ impl BytePairEncoding {
     }
 
     pub fn encode_via_table(&self, text: &[u8]) -> Vec<u32> {
-        let last_token = self.encode_all_prefixes(text);
+        let mut states = Vec::with_capacity(text.len());
+        self.encode_next_bytes(&mut states, text);
         let mut encoded = Vec::with_capacity(text.len() / 3);
         let mut pos = text.len();
         while pos > 0 {
-            let token = last_token[pos - 1];
+            let token = states[pos - 1].last_token;
             encoded.push(token);
             pos -= self.token_len(token);
         }

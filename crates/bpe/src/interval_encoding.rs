@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::backtrack_encoder::BacktrackEncoder;
-use crate::byte_pair_encoding::BytePairEncoding;
+use crate::byte_pair_encoding::{BytePairEncoding, State};
 
 /// This data structure allows fast, i.e. typically O(1), counting of tokens for arbitrary substrings of the original input text.
 /// It achieves this by precomputing for every position the last token which ends at this position.
@@ -17,7 +17,7 @@ use crate::byte_pair_encoding::BytePairEncoding;
 pub struct IntervalEncoding<'a> {
     bpe: &'a BytePairEncoding,
     text: &'a [u8],
-    last_token: Vec<u32>,
+    states: Vec<State>,
     /// index 0 is reserved as root of the tree and corresponds to the empty prefix.
     tree_id: Vec<u32>,
     tree_end: Vec<u32>,
@@ -26,18 +26,19 @@ pub struct IntervalEncoding<'a> {
 
 impl<'a> IntervalEncoding<'a> {
     pub fn new(bpe: &'a BytePairEncoding, text: &'a [u8]) -> Self {
-        let last_token = bpe.encode_all_prefixes(text);
+        let mut states = Vec::with_capacity(text.len());
+        bpe.encode_next_bytes(&mut states, text);
         let mut tree_size = vec![1; text.len() + 1];
-        for (id, token) in last_token.iter().copied().enumerate().rev() {
+        for (id, state) in states.iter().enumerate().rev() {
             let id = id + 1;
-            tree_size[id - bpe.token_len(token)] += tree_size[id];
+            tree_size[id - bpe.token_len(state.last_token)] += tree_size[id];
         }
         let mut tree_end = vec![1];
         let mut tree_id = vec![0];
         let mut tree_depth = vec![0];
-        for (id, token) in last_token.iter().copied().enumerate() {
+        for (id, state) in states.iter().enumerate() {
             let id = id + 1;
-            let parent = id - bpe.token_len(token);
+            let parent = id - bpe.token_len(state.last_token);
             tree_id.push(tree_end[parent]);
             tree_end.push(tree_end[parent] + 1);
             tree_depth.push(tree_depth[parent] + 1);
@@ -46,7 +47,7 @@ impl<'a> IntervalEncoding<'a> {
         Self {
             bpe,
             text,
-            last_token,
+            states,
             tree_id,
             tree_end,
             tree_depth,
@@ -70,8 +71,9 @@ impl<'a> IntervalEncoding<'a> {
                 // is the position compatible with the chosen leaf node
                 // and does next and prev token match?
                 if (self.tree_id[end_pos]..self.tree_end[end_pos]).contains(&leaf)
-                    && self.last_token[end_pos - 1] == prev_token
-                    && self.last_token[end_pos - 1 + self.bpe.token_len(next_token)] == next_token
+                    && self.states[end_pos - 1].last_token == prev_token
+                    && self.states[end_pos - 1 + self.bpe.token_len(next_token)].last_token
+                        == next_token
                 {
                     return encoder.count()
                         + (self.tree_depth[range.end] - self.tree_depth[end_pos]) as usize;
