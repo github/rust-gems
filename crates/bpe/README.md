@@ -216,3 +216,20 @@ Results for encoding o200k tokens for random 1000 bytes. The backtracking encode
 Results for incrementally encoding o200k tokens by appending 10000 random bytes. The appending encoder is slower by a constant factor but overall has similar performance curve as the backtracking encoder encoding all data at once.
 
 ![appending runtime comparison](./benches/result/appending-o200k.svg)
+
+### Running the benchmarks
+
+Run the benchmark as follows (required [cargo-criterion](https://crates.io/crates/cargo-criterion) installed):
+
+```sh
+cargo criterion
+```
+
+(Using `cargo bench` ignores the settings in `criterion.toml`!)
+Open the full report which should be located in `target/criterion/reports/index.html`.
+
+Update the figures in this repo as follows (requires `rsvg-convert` from `librsvg` installed):
+
+```sh
+script/copy-benchmark-results
+```
