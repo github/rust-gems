@@ -84,8 +84,31 @@ impl<'a> IntervalEncoding<'a> {
     }
 
     pub(crate) fn encode_interval(&self, states: &mut Vec<State>, range: Range<usize>) {
-        // TODO Use the precomputed tokens
-        self.bpe.encode_next_bytes(states, &self.text[range]);
+        assert!(range.start <= range.end && range.end <= self.text.len());
+        for pos in range.clone() {
+            if let (Some(last_state), Some(prev_state)) =
+                (states.last(), (pos > 0).then(|| &self.states[pos - 1]))
+            {
+                // If we have reached the same state and token, copy the remaining states as-is.
+                if last_state.state == prev_state.state
+                    && last_state.last_token == prev_state.last_token
+                {
+                    for next_pos in pos..range.end {
+                        let next_state = &self.states[next_pos];
+                        let next_count =
+                            states[states.len() - self.bpe.token_len(next_state.last_token)].count
+                                + 1;
+                        states.push(State {
+                            state: next_state.state,
+                            last_token: next_state.last_token,
+                            count: next_count,
+                        });
+                    }
+                    return;
+                }
+            }
+            self.bpe.encode_next_byte(states, self.text[pos]);
+        }
     }
 }
 

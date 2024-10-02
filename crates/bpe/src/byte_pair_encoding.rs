@@ -211,9 +211,9 @@ fn find_token_by_bytes(
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct State {
-    state: u32,
+    pub(crate) state: u32,
     pub(crate) last_token: u32,
     pub(crate) count: u32,
 }
@@ -422,6 +422,7 @@ impl BytePairEncoding {
                 }
             }
         }
+        unreachable!()
     }
 
     /// Counts the number tokens produced when encoding the text.
