@@ -183,7 +183,7 @@ On average it is about ~4 faster, since the short-cuts usually pay off.
 
 ## Benchmarks
 
-We ran several benchmarks to compare performance between different encoders and with the tiktoken library:
+We ran several benchmarks to compare performance of different encoders and the [tiktoken-rs](https://crates.io/crates/tiktoken-rs) library (a wrapper around OpenAI's tiktoken implementation):
 
 - The first measures encoding runtime for our different encoders and the tiktoken Rust implementation.
   This shows a ~3.5x performance improvement for our fastest correct encoder compared to the tiktoken library.
