@@ -183,7 +183,12 @@ On average it is about ~4 faster, since the short-cuts usually pay off.
 
 ## Benchmarks
 
-We ran several benchmarks to compare performance of different encoders and the [tiktoken-rs](https://crates.io/crates/tiktoken-rs) library (a wrapper around OpenAI's tiktoken implementation):
+We ran several benchmarks to compare performance of different encoders and a tiktoken implementation.
+For the tiktoken implementation we used [tiktoken-rs](https://crates.io/crates/tiktoken-rs) library, a wrapper around OpenAI's tiktoken implementation.
+Note that tiktoken does not run BPE on the full input text.
+Instead it splits it into large chunks using a regex and runs BPE on the individual chunks.
+We have not tried to see if that approach is compatible with our BPE implementation.
+We benchmarked the following scenarios:
 
 - The first measures encoding runtime for our different encoders and the tiktoken Rust implementation.
   This shows a ~3.5x performance improvement for our fastest correct encoder compared to the tiktoken library.
