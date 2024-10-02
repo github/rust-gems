@@ -211,7 +211,7 @@ Two additional encoders are included that are faster but deviate from the origin
 - The greedy encoder picks the left-longest token.
 - The minimal encoder computes an encoding with the minimal number of tokens.
 
-The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 1000 from a random 20000 token original text using the o200k token set.
+The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original text using the o200k token set.
 (All encodings were computed from scratch for each slice.)
 
 The graph below shows encoding runtime vs slice length.
@@ -224,20 +224,16 @@ If the requirement of correct BPE output can be relaxed, then the Greedy approac
 
 ### Incremental encoding
 
-Incremental encoding tokenizes a text while appending bytes. This type of algorithm is interesting for use cases where a certain token budget must not be exceeded.
-This benchmark uses two encoders:
+Incremental encoding tokenizes a text while appending bytes.
+This type of algorithm is interesting for use cases where a certain token budget must not be exceeded.
+This benchmark shows the runtime for the appending encoder when a text is encoded byte-by-byte.
+For comparison we show the runtime of the backtracking encoder when it encodes the whole text at once.
 
-- The backtracking encoder, which retokenizes the text froms cratch every time it changes.
-- The appending encoder, which supports incremental encoding when bytes are added.
-
-The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 1000 from a random 20000 token original using the o200k token set.
-The backtracking encoder encoded the final text in one go.
-The appending encoder got the text bytes on by one.
+The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original using the o200k token set.
 
 The graph below shows encoding runtime vs slice length.
-Runtime of both encoders grows similarly with slice length.
-The incremental encoder shows a constant factor overhead.
-Note that this is still a huge win for incremental use cases, which would otherwise require retokenization after each append, resulting in a quadratic slowdown.
+The overall runtime of byte-by-byte incremental encoder for encoding the full text is comparable to the runtime of the backtracking encoder, with only a constant factor overhead.
+Note that this is a huge win for incremental use cases, which would otherwise require retokenization after each append, resulting in a quadratic slowdown.
 
 ![appending runtime comparison](./benches/result/appending-o200k.svg)
 
