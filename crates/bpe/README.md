@@ -4,6 +4,7 @@ The main purpose of this library is to provide fast and correct token counting f
 As a by-product, it can also be used to efficiently encode those chunks if desired.
 
 For chunking the following operations are of interest:
+
 1) Split text after exactly n tokens at a character boundary.
 1) Count tokens for sub-ranges of a text.
 1) Incrementally count tokens while appending text to a chunk.
@@ -29,6 +30,7 @@ This library presents novel algorithms to compute BPE encodings which address th
 ## Prior Art
 
 There are mostly three strategies for BPE encoding.
+
 1) Trivial solution. Search brute force for the most frequent pair in the encoded text according the dictionary and replace those occurrences. This has a `O(n^2)` complexity and is therefore not very appealing in production.
 2) Heap based. Set up a heap with the frequencies. This improves the linear search time to a logarithmic factor. If done properly, the overall complexity reduces now to `O(n log n)`.
 3) Split the input into sections of a maximum size first and then process each section individually. This shrinks in theory the complexity to `O(n)` if the section size is small enough. But it will in general produce now different results. In order to produce the "correct" encoding, one would need to choose split points at token boundaries. But without having the text encoded already, this is in general impossible.
@@ -89,38 +91,38 @@ If BPE wants to make a different merge decision when it sees the full input, the
 
 Given a valid encoding sequence `e_0..e_i` and a valid encoding tuple `e_i e_j`, then `e_0..e_i e_j` is also a valid encoding sequence.
 
-
 ## Novel Algorithm
 
 At a first glance, it seems impossible to achieve `O(n)` complexity while preserving the encoding output of the original BPE algorithm, since the original BPE algorithm needs to first scan the full input before it can make any encoding decision.
-For instance, the sequence `abab` would be encoded as `ab ab` when the dictionary contains the tokens `a b ab ba bc abc babc ababc` ordered by frequency. But appending a single character `ababc` would result in a pretty different tokenization: `ab a bc`. So without looking ahead it seems impossible to properly tokenize the text.
+For instance, the sequence `abac` would be encoded as `ab ac` when the dictionary contains the tokens `a b c ab cb ac` ordered by frequency. But appending a single character `abacb` would result in a pretty different tokenization: `ab a cb`. So without looking ahead it seems impossible to properly tokenize the text.
 
-The solution is to track the encodings of ALL text prefixes. For our example `ababc` we would get:
+The solution is to track the encodings of ALL text prefixes. For our example `abacb` we would get:
+
 - `a` ------> `a`
 - `ab` -----> `ab`
 - `aba` ----> `ab a`
-- `abab` ---> `ab ab`
-- `ababc` --> `ab a bc`
+- `abab` ---> `ab ac`
+- `ababc` --> `ab a cb`
 
 This can be done much more efficiently thanks to Corollary IIa, since now only the last token of every prefix has to be remembered:
 
 - `a` ------> `a`
 - `ab` -----> `ab`
 - `aba` ----> `a`
-- `abab` ---> `ab`
-- `ababc` --> `bc`
+- `abac` ---> `ac`
+- `abacb` --> `bc`
 
 In order to reconstruct the full encoding for a specific prefix, one simply starts with the last token of that prefix, shortens the prefix by the extracted token and looks up the token associated with the shortened prefix and so on until the beginning of the text is reached.
 
-For our example prefix `ababc`, this procedure executes the following steps and determines the correct encoding in reverse order:
+For our example prefix `abacb`, this procedure executes the following steps and determines the correct encoding in reverse order:
 
-- `ababc` -> `bc`
+- `abacb` -> `cb`
 - `aba` ---> `a`
 - `ab` ----> `ab`
 - `<empty>`
 
 The actual challenge is to determine for every prefix this last token efficiently.
-The prefix `abab` could for instance end with either the token `b` or `ab`, but only `ab` leads to a valid encoding sequence.
+The prefix `abac` could for instance end with either the token `c` or `ac`, but only `ac` leads to a valid encoding sequence.
 But, Corollary IIa tells us that **one and only one** last token can be the correct one and Corollary IIIa shows us how to find it:
 We only have to check whether a possible next token is "compatible" with its previous token, i.e. whether the two tokens form a valid encoding sequence.
 
@@ -136,6 +138,7 @@ Once that happens the reencoding will be different and the algorithm can stop.
 The actual implementation needs essentially at most 14 lookups for the most complex cases to determine whether two tokens are compatible or not.
 
 Putting all these pieces together leads to the following algorithmic sketch:
+
 ```rust
 let last_tokens = vec![];
 for pos in 0..text.len() {
@@ -166,6 +169,7 @@ The main observation is that often the greedy heuristic picks already the correc
 In the cases, where it doesn't the algorithm has to somehow backtrack to the next tokenization until it converged to the correct solution.
 
 Our backtracking implementation solves the enumeration problem as follows:
+
 1) If the current tokenization sequence is valid, then append the longest matching token to the right.
 2) Otherwise, replace the right most token with the next longest prefix token.
 3) If there is no such token, then remove that token and go back to step 2.
@@ -179,18 +183,96 @@ On average it is about ~4 faster, since the short-cuts usually pay off.
 
 ## Benchmarks
 
-We compared our implementations with the tiktoken implementation on a MacBook Pro on a random input sequence:
+We ran several benchmarks to compare performance of different encoders and a tiktoken implementation.
+For the tiktoken implementation we used [tiktoken-rs](https://crates.io/crates/tiktoken-rs) library, a wrapper around OpenAI's tiktoken implementation.
+Note that tiktoken does not run BPE on the full input text.
+Instead it splits it into large chunks using a regex and runs BPE on the individual chunks.
+We have not tried to see if that approach is compatible with our BPE implementation.
+We benchmarked the following scenarios:
 
-| Algorithm    | Runtime  | correct BPE output |
-| ------------ | -------- | ---------- |
-| Greedy       | 100 µs   | ✘          |
-| Minimal      | 300 µs   | ✘          |
-| Backtracking | 400 µs   | ✔          |
-| Dynamic Programming | 1300 µs | ✔    |
-| TikToken     | 1500 µs  | ✘          |
-| Heap         | 1900 µs  | ✔          |
+- The first measures encoding runtime for our different encoders and the tiktoken Rust implementation.
+  This shows a ~3.5x performance improvement for our fastest correct encoder compared to the tiktoken library.
 
-As can be seen, our Backtracking implementation beats the TikToken Rust implementation by ~4x.
-And even the fully dynamic programming solution is faster with a more consistent runtime.
-The tuned heap implementation is still quite competitive to TikToken (especially for smaller inputs).
+- The second measures incremental encoding runtime, where the text is built up byte-by-byte.
+  This mode is not available in tiktoken, which only supports counting/encoding a complete text.
+
+- The third measures interval counting runtime, where tokens of sub-slices of a fixed text are counted.
+  The data structure we built specifically for this purpose can answer those interval counting requests in typically constant times after the initial linear preprocessing of the text.
+  This mode is not available in tiktoken, which only supports counting/encoding a complete text.
+
+All benchmarks were run single-threaded on a MacBook Pro M1.
+
+### Encoding
+
+Encoding is computing the tokens for a given text.
+This benchmark compares several encoders:
+
+- The backtracking encoder uses the backtracking algorithm with memorisation based on top of a string matching automaton.
+- The heap encoder uses a priority heap and a bitmask to represent token positions to implement the traditional BPE algorithm.
+- The table encoder implements the raw dynamic programming algorithm proposed above.
+
+Two additional encoders are included that are faster but deviate from the original BPE encoding strategy:
+
+- The greedy encoder picks the left-longest token.
+- The minimal encoder computes an encoding with the minimal number of tokens.
+
+The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original text using the o200k token set.
+(All encodings were computed from scratch for each slice.)
+
+The graph below shows encoding runtime vs slice length.
+All encoders (except the heap encoder) show the expected linear runtime complexity.
+The backtracking encoder, the fastest encoder that still returns correct results, shows a performance gain of approximately 3.5x compared to tiktoken.
+The fully dynamic programming solution and the heap implementation are still quite competitive to TikToken (especially for smaller inputs).
 If the requirement of correct BPE output can be relaxed, then the Greedy approach or the minimal encoding approach are the clear winners.
+
+![encoding runtime comparison](./benches/result/encoding-o200k.svg)
+
+### Incremental encoding
+
+Incremental encoding tokenizes a text while appending bytes.
+This type of algorithm is interesting for use cases where a certain token budget must not be exceeded.
+This benchmark shows the runtime for the appending encoder when a text is encoded byte-by-byte.
+For comparison we show the runtime of the backtracking encoder when it encodes the whole text at once.
+
+The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original using the o200k token set.
+
+The graph below shows encoding runtime vs slice length.
+The overall runtime of byte-by-byte incremental encoder for encoding the full text is comparable to the runtime of the backtracking encoder, with only a constant factor overhead.
+Note that this is a huge win for incremental use cases, which would otherwise require retokenization after each append, resulting in a quadratic slowdown.
+
+![appending runtime comparison](./benches/result/appending-o200k.svg)
+
+### Interval counting
+
+Interval counting is counting the tokens for a slice of an original text.
+This benchmark uses two encoders:
+
+- The backtracking encoder encodes the slice from scratch.
+  This is similar to what one has to do with other libraries, like `tiktoken`.
+- The interval encoder encodes the original text once and reuses that encoding to count tokens for intervals of the original text.
+  The initial encoding time for the interval encoder is comparable to that of the backtracking encoder.
+
+The benchmark measured the runtime of counting o200k tokens on slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original text.
+
+The graph below shows counting runtime vs slice length.
+The runtime of the backtracking encoder grows with the length of the slice.
+The interval encoder counts any interval in typically constant time.
+
+![counting runtime comparison](./benches/result/counting-o200k.svg)
+
+### Running the benchmarks
+
+Run the benchmark as follows (required [cargo-criterion](https://crates.io/crates/cargo-criterion) installed):
+
+```sh
+cargo criterion
+```
+
+(Using `cargo bench` ignores the settings in `criterion.toml`!)
+Open the full report which should be located in `target/criterion/reports/index.html`.
+
+Update the figures in this repo as follows (requires `rsvg-convert` from `librsvg` installed):
+
+```sh
+script/copy-benchmark-results
+```

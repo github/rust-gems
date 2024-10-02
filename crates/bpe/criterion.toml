@@ -1,0 +1,16 @@
+# save report in this directory, even if a custom target directory is set
+criterion_home = "./target/criterion"
+
+# The colors table allows users to configure the colors used by the charts 
+# cargo-criterion generates.
+[colors]
+# Color-blind friendly color scheme from https://personal.sron.nl/~pault/.
+comparison_colors = [
+  {r = 102, g = 204, b = 238}, # cyan
+  {r = 204, g = 187, b = 68},  # yellow
+  {r = 238, g = 102, b = 119}, # red
+  {r = 68,  g = 119, b = 170}, # blue
+  {r = 170, g = 51,  b = 119}, # purple
+  {r = 34,  g = 136, b = 51},  # green
+# {r = 187, g = 187, b = 187}, # grey
+]
