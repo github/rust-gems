@@ -176,12 +176,12 @@ pub fn find_hash_factor_for_tiktoken(bpe: &tiktoken_rs::CoreBPE, len: usize) -> 
 /// Find a suitable hash factor for a set of given tokens that prevents collisions when
 /// constructing a [`BytePairEncoding`] from those tokens.
 #[cfg(feature = "rand")]
-pub fn find_hash_factor_for_dictionary(iter: impl Iterator<Item = Vec<u8>>) -> u64 {
+pub fn find_hash_factor_for_dictionary(tokens: impl IntoIterator<Item = Vec<u8>>) -> u64 {
     use std::collections::HashSet;
 
     use rand::Rng;
 
-    let all_tokens = iter.collect_vec();
+    let all_tokens = tokens.into_iter().collect_vec();
     let mut rnd = rand::thread_rng();
     loop {
         let factor: u64 = rnd.gen();
@@ -244,7 +244,10 @@ impl BytePairEncoding {
     ///
     /// The recommended approach is to store the serialized value and reuse that,
     /// to prevent repeating the cost of computing the hash factor and encoding.
-    pub fn from_dictionary(iter: impl Iterator<Item = Vec<u8>>, hash_factor: Option<u64>) -> Self {
+    pub fn from_dictionary(
+        tokens: impl IntoIterator<Item = Vec<u8>>,
+        hash_factor: Option<u64>,
+    ) -> Self {
         let hash_factor = hash_factor
             .inspect(|f| assert_ne!(*f, 0, "hash factor must be larger than zero"))
             .unwrap_or(1);
@@ -252,7 +255,7 @@ impl BytePairEncoding {
         let mut all_tokens_rev = Vec::new();
         let mut token_starts = vec![0];
         let mut bytes_hash_to_token = FnvHashMap::default();
-        for (i, token) in iter.enumerate() {
+        for (i, token) in tokens.into_iter().enumerate() {
             bytes_hash_to_token.insert(hash_bytes(&token, hash_factor), i as u32);
             all_tokens_rev.extend(token.iter().copied().rev());
             all_tokens.extend(token);

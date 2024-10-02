@@ -94,35 +94,35 @@ Given a valid encoding sequence `e_0..e_i` and a valid encoding tuple `e_i e_j`,
 ## Novel Algorithm
 
 At a first glance, it seems impossible to achieve `O(n)` complexity while preserving the encoding output of the original BPE algorithm, since the original BPE algorithm needs to first scan the full input before it can make any encoding decision.
-For instance, the sequence `abab` would be encoded as `ab ab` when the dictionary contains the tokens `a b ab ba bc abc babc ababc` ordered by frequency. But appending a single character `ababc` would result in a pretty different tokenization: `ab a bc`. So without looking ahead it seems impossible to properly tokenize the text.
+For instance, the sequence `abac` would be encoded as `ab ac` when the dictionary contains the tokens `a b c ab cb ac` ordered by frequency. But appending a single character `abacb` would result in a pretty different tokenization: `ab a cb`. So without looking ahead it seems impossible to properly tokenize the text.
 
-The solution is to track the encodings of ALL text prefixes. For our example `ababc` we would get:
+The solution is to track the encodings of ALL text prefixes. For our example `abacb` we would get:
 
 - `a` ------> `a`
 - `ab` -----> `ab`
 - `aba` ----> `ab a`
-- `abab` ---> `ab ab`
-- `ababc` --> `ab a bc`
+- `abab` ---> `ab ac`
+- `ababc` --> `ab a cb`
 
 This can be done much more efficiently thanks to Corollary IIa, since now only the last token of every prefix has to be remembered:
 
 - `a` ------> `a`
 - `ab` -----> `ab`
 - `aba` ----> `a`
-- `abab` ---> `ab`
-- `ababc` --> `bc`
+- `abac` ---> `ac`
+- `abacb` --> `bc`
 
 In order to reconstruct the full encoding for a specific prefix, one simply starts with the last token of that prefix, shortens the prefix by the extracted token and looks up the token associated with the shortened prefix and so on until the beginning of the text is reached.
 
-For our example prefix `ababc`, this procedure executes the following steps and determines the correct encoding in reverse order:
+For our example prefix `abacb`, this procedure executes the following steps and determines the correct encoding in reverse order:
 
-- `ababc` -> `bc`
+- `abacb` -> `cb`
 - `aba` ---> `a`
 - `ab` ----> `ab`
 - `<empty>`
 
 The actual challenge is to determine for every prefix this last token efficiently.
-The prefix `abab` could for instance end with either the token `b` or `ab`, but only `ab` leads to a valid encoding sequence.
+The prefix `abac` could for instance end with either the token `c` or `ac`, but only `ac` leads to a valid encoding sequence.
 But, Corollary IIa tells us that **one and only one** last token can be the correct one and Corollary IIIa shows us how to find it:
 We only have to check whether a possible next token is "compatible" with its previous token, i.e. whether the two tokens form a valid encoding sequence.
 
