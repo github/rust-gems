@@ -185,37 +185,37 @@ On average it is about ~4 faster, since the short-cuts usually pay off.
 
 We ran several benchmarks to compare performance between different encoders and with the tiktoken library:
 
-- The first measuers encoding runtime for our different encoders and the tiktoken Rust implementation.
-  This shows a ~3.5x performance increase for our fastest correct encoder comapred to the tiktoken library.
+- The first measures encoding runtime for our different encoders and the tiktoken Rust implementation.
+  This shows a ~3.5x performance improvement for our fastest correct encoder compared to the tiktoken library.
 
 - The second measures incremental encoding runtime, where the text is built up byte-by-byte.
   This mode is not available in tiktoken, which only supports counting/encoding a complete text.
 
-- The third measures interval counting runtime, where the token count for slices of an original text are determined.
-  After the initial tokenization of the text, token counting for slices is typically constant time.
+- The third measures interval counting runtime, where tokens of sub-slices of a fixed text are counted.
+  The data structure we built specifically for this purpose can answer those interval counting requests in typically constant times after the initial linear preprocessing of the text.
   This mode is not available in tiktoken, which only supports counting/encoding a complete text.
 
-All benchmarks were run on a MacBook Pro M1.
+All benchmarks were run single-threaded on a MacBook Pro M1.
 
 ### Encoding
 
 Encoding is computing the tokens for a given text.
-This benchmark uses several encoders:
+This benchmark compares several encoders:
 
-- The backtracking encoder uses a backtracking algorithm based on a string matching automaton.
-- The heap encoder uses a priority heap to implement the traditional BPE algorithm.
-- The table encoder uses a dynamic programming algorithm.
+- The backtracking encoder uses the backtracking algorithm with memorisation based on top of a string matching automaton.
+- The heap encoder uses a priority heap and a bitmask to represent token positions to implement the traditional BPE algorithm.
+- The table encoder implements the raw dynamic programming algorithm proposed above.
 
-Two additional encoders are included that are faster but do not always give exact results:
+Two additional encoders are included that are faster but deviate from the original BPE encoding strategy:
 
-- The greedy encoder uses a left-to-right greedy algorithm.
+- The greedy encoder picks the left-longest token.
 - The minimal encoder computes an encoding with the minimal number of tokens.
 
 The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 1000 from a random 20000 token original text using the o200k token set.
 (All encodings were computed from scratch for each slice.)
 
 The graph below shows encoding runtime vs slice length.
-All encoders show similar runtime increases with increasing slice length.
+All encoders (except the heap encoder) show the expected linear runtime complexity.
 The backtracking encoder, the fastest encoder that still returns correct results, shows a performance gain of approximately 3.5x compared to tiktoken.
 The fully dynamic programming solution and the heap implementation are still quite competitive to TikToken (especially for smaller inputs).
 If the requirement of correct BPE output can be relaxed, then the Greedy approach or the minimal encoding approach are the clear winners.
@@ -224,7 +224,7 @@ If the requirement of correct BPE output can be relaxed, then the Greedy approac
 
 ### Incremental encoding
 
-Incremental encoding tokenizes a text to which bytes are appended.
+Incremental encoding tokenizes a text while appending bytes. This type of algorithm is interesting for use cases where a certain token budget must not be exceeded.
 This benchmark uses two encoders:
 
 - The backtracking encoder, which retokenizes the text froms cratch every time it changes.
@@ -251,7 +251,7 @@ This benchmark uses two encoders:
 - The interval encoder encodes the original text once and reuses that encoding to count tokens for intervals of the original text.
   The initial encoding time for the interval encoder is comparable to that of the backtracking encoder.
 
-The benchmark measured the runtime of counting o200k tokens on slices of lengths 10, 100, 1000, and 1000 from a random 20000 token original text.
+The benchmark measured the runtime of counting o200k tokens on slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original text.
 
 The graph below shows counting runtime vs slice length.
 The runtime of the backtracking encoder grows with the length of the slice.
