@@ -12,15 +12,18 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::backtrack_encoder::BacktrackEncoder;
 use crate::bitfield::BitField;
+use crate::byte_pair_encoding::data::TokenDict;
 
 static BPE_CL100K: LazyLock<BytePairEncoding> = LazyLock::new(|| {
     let bytes = include_bytes!("data/bpe_cl100k.dict");
-    rmp_serde::from_slice(bytes).expect("")
+    let dict: TokenDict = rmp_serde::from_slice(bytes).expect("");
+    dict.into_bpe()
 });
 
 static BPE_O200K: LazyLock<BytePairEncoding> = LazyLock::new(|| {
     let bytes = include_bytes!("data/bpe_o200k.dict");
-    rmp_serde::from_slice(bytes).expect("")
+    let dict: TokenDict = rmp_serde::from_slice(bytes).expect("");
+    dict.into_bpe()
 });
 
 /// Representation of the byte pair dictionary.
@@ -612,14 +615,22 @@ mod tests {
     }
 }
 
-#[cfg(test)]
 mod data {
-    use std::fs::File;
-    use std::path::PathBuf;
-
-    use serde::Serialize;
+    use serde::{Deserialize, Serialize};
 
     use crate::byte_pair_encoding::BytePairEncoding;
+
+    #[derive(Serialize, Deserialize)]
+    pub(crate) struct TokenDict {
+        tokens: Vec<Vec<u8>>,
+        hash_factor: u64,
+    }
+
+    impl TokenDict {
+        pub(crate) fn into_bpe(self) -> BytePairEncoding {
+            BytePairEncoding::from_dictionary(self.tokens, Some(self.hash_factor))
+        }
+    }
 
     #[test]
     fn update_token_dicts() {
@@ -637,13 +648,20 @@ mod data {
         );
     }
 
+    #[cfg(test)]
     #[track_caller]
     fn serialize_tokens(
         name: &str,
-        dict: &tiktoken_rs::CoreBPE,
+        bpe: &tiktoken_rs::CoreBPE,
         num_tokens: usize,
         hash_factor: u64,
     ) {
+        use std::fs::File;
+        use std::path::PathBuf;
+
+        use itertools::Itertools;
+        use serde::Serialize;
+
         let path = PathBuf::from(file!());
         let dir = path.parent().unwrap();
         let data_file = dir.join(format!("data/bpe_{name}.dict"));
@@ -651,8 +669,13 @@ mod data {
         let abs_path = current_dir.parent().unwrap().parent().unwrap();
         let file = File::create(abs_path.join(data_file)).unwrap();
         let mut serializer = rmp_serde::Serializer::new(file);
-        BytePairEncoding::from_tiktoken(dict, num_tokens, Some(hash_factor))
-            .serialize(&mut serializer)
-            .unwrap();
+        let tokens = (0..num_tokens)
+            .map(|i| bpe._decode_native(&[i]))
+            .collect_vec();
+        let dict = TokenDict {
+            tokens,
+            hash_factor,
+        };
+        dict.serialize(&mut serializer).unwrap();
     }
 }
