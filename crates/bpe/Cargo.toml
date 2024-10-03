@@ -1,7 +1,12 @@
 [package]
 name = "bpe"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
+description = "Fast byte-pair encoding implementation."
+repository = "https://github.com/github/rust-gems"
+license = "MIT"
+keywords = ["tokenizer", "algorithm", "encoding", "bpe"]
+categories = ["algorithms", "data-structures", "encoding", "science"]
 
 [lib]
 crate-type = ["lib", "staticlib"]
