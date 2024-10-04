@@ -1,11 +1,7 @@
-use crate::byte_pair_encoding::BytePairEncoding;
+use std::ops::Range;
 
-#[derive(Clone)]
-struct State {
-    state: u32,
-    last_token: u32,
-    count: u32,
-}
+use crate::byte_pair_encoding::{BytePairEncoding, State};
+use crate::interval_encoding::IntervalEncoding;
 
 /// Encoder which keeps track of the encoding length while appending characters.
 #[derive(Clone)]
@@ -36,40 +32,17 @@ impl<'a> AppendableEncoder<'a> {
     /// Appends a byte to the input string which should be tokenized.
     /// The operation is amortized O(1) (due to vector resizing).
     pub fn push(&mut self, c: u8) {
-        let (state, iter) = self.bpe.overlapping_searcher.consume(
-            self.states
-                .last()
-                .map(|s| s.state)
-                .unwrap_or_else(|| self.bpe.overlapping_searcher.start_state()),
-            self.states.len() + 1,
-            c,
-        );
-        for m in iter {
-            let new_token = m.value();
-            let new_range = m.start()..m.end();
-            assert_eq!(new_range.end, self.states.len() + 1);
-            if new_range.start == 0 {
-                self.states.push(State {
-                    state,
-                    last_token: new_token,
-                    count: 1,
-                });
-                break;
-            } else {
-                let prev_token =
-                    unsafe { self.states.get_unchecked(new_range.start - 1).last_token };
-                if self.bpe.is_valid_token_pair(prev_token, new_token) {
-                    let prev_count =
-                        unsafe { self.states.get_unchecked(new_range.start - 1).count };
-                    self.states.push(State {
-                        state,
-                        last_token: new_token,
-                        count: prev_count + 1,
-                    });
-                    break;
-                }
-            }
-        }
+        self.bpe.encode_next_byte(&mut self.states, c);
+    }
+
+    /// Appends a range from the given internval encoding to be tokenized.
+    /// The operation is typically O(1) time the number of tokens to encode
+    /// the range (see [`IntervalEncoding::count`]).
+    ///
+    /// **Careful** Only correct if this and the given interval encoding are
+    /// constructed with the same [`BytePairEncoding`].
+    pub fn push_interval(&mut self, ie: &IntervalEncoding, range: Range<usize>) {
+        ie.encode_interval(&mut self.states, range);
     }
 
     /// Returns the number of tokens required to tokenize the input text.
@@ -91,17 +64,32 @@ impl<'a> AppendableEncoder<'a> {
 #[cfg(test)]
 mod tests {
     use crate::byte_pair_encoding::{create_test_bytes, BytePairEncoding};
+    use crate::interval_encoding::IntervalEncoding;
 
     use super::AppendableEncoder;
 
     #[test]
-    fn test_appendable_encoder() {
+    fn test_append_bytes() {
         let bpe = BytePairEncoding::cl100k();
         let mut enc = AppendableEncoder::new(bpe);
-        let input_string = create_test_bytes(bpe, 100);
-        for (i, c) in input_string.iter().enumerate() {
-            assert_eq!(enc.token_count(), bpe.count(&input_string[0..i]));
+        let text = create_test_bytes(bpe, 100);
+        for (i, c) in text.iter().enumerate() {
+            assert_eq!(enc.token_count(), bpe.count(&text[0..i]));
             enc.push(*c);
+        }
+    }
+
+    #[test]
+    fn test_append_interval() {
+        let bpe = BytePairEncoding::cl100k();
+        let text = create_test_bytes(bpe, 100);
+        let ie = IntervalEncoding::new(bpe, &text);
+        for start in 0..text.len() {
+            for end in start..text.len() {
+                let mut enc = AppendableEncoder::new(bpe);
+                enc.push_interval(&ie, start..end);
+                assert_eq!(enc.token_count(), bpe.count(&text[start..end]));
+            }
         }
     }
 }
