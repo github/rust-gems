@@ -23,10 +23,11 @@ fn main() {
 }
 
 fn serialize_tokens(name: &str, bpe: &CoreBPE, num_tokens: usize, hash_factor: u64) {
-    let mut path = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let mut path = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set during build"));
     path.push(format!("bpe_{name}.dict"));
-    let file = File::create(path).unwrap();
+    let file = File::create(path).expect("can create output file");
     let mut serializer = rmp_serde::Serializer::new(file);
     let bpe = BytePairEncoding::from_tiktoken(bpe, num_tokens, Some(hash_factor));
-    bpe.serialize(&mut serializer).unwrap();
+    bpe.serialize(&mut serializer)
+        .expect("serialization succeeds");
 }
