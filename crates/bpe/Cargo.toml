@@ -16,6 +16,7 @@ bench = false
 name = "performance"
 path = "benches/performance.rs"
 harness = false
+test = false
 
 [features]
 rand = ["dep:rand"]
