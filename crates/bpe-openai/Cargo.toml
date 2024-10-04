@@ -1,6 +1,6 @@
 [package]
 name = "bpe-openai"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 description = "Prebuilt fast byte-pair encoders for OpenAI."
 repository = "https://github.com/github/rust-gems"
@@ -13,12 +13,12 @@ crate-type = ["lib", "staticlib"]
 bench = false
 
 [dependencies]
-bpe = { version = "0.0.1", path = "../bpe" }
+bpe = { version = "0.1.0", path = "../bpe" }
 rmp-serde = "1"
 serde = { version = "1" }
 
 [build-dependencies]
-bpe = { version = "0.0.1", path = "../bpe", features = ["tiktoken-rs"] }
+bpe = { version = "0.1.0", path = "../bpe", features = ["tiktoken-rs"] }
 rmp-serde = "1"
 tiktoken-rs = { version = "0.5" }
 serde = { version = "1" }
