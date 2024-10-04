@@ -10,21 +10,28 @@ use criterion::{
 use rand::{thread_rng, Rng};
 use tiktoken_rs::CoreBPE;
 
-static TOKENIZERS: LazyLock<[(&'static str, &'static BytePairEncoding, CoreBPE); 2]> =
-    LazyLock::new(|| {
-        [
-            (
-                "cl100k",
-                BytePairEncoding::cl100k(),
-                tiktoken_rs::cl100k_base().unwrap(),
+static TOKENIZERS: LazyLock<[(&'static str, BytePairEncoding, CoreBPE); 2]> = LazyLock::new(|| {
+    [
+        (
+            "cl100k",
+            BytePairEncoding::from_tiktoken(
+                &tiktoken_rs::cl100k_base_singleton().lock(),
+                100256,
+                Some(17846336922010275747),
             ),
-            (
-                "o200k",
-                BytePairEncoding::o200k(),
-                tiktoken_rs::o200k_base().unwrap(),
+            tiktoken_rs::cl100k_base().unwrap(),
+        ),
+        (
+            "o200k",
+            BytePairEncoding::from_tiktoken(
+                &tiktoken_rs::o200k_base_singleton().lock(),
+                199998,
+                Some(17846336922010275747),
             ),
-        ]
-    });
+            tiktoken_rs::o200k_base().unwrap(),
+        ),
+    ]
+});
 
 fn counting_benchmark(c: &mut Criterion) {
     for (name, bpe, _) in TOKENIZERS.iter() {
@@ -160,6 +167,31 @@ fn appending_benchmark(c: &mut Criterion) {
     }
 }
 
+fn worstcase_benchmark(c: &mut Criterion) {
+    for (name, bpe, tiktoken) in TOKENIZERS.iter() {
+        let text: String = ('\0'..char::MAX).filter(|c| !c.is_whitespace()).collect();
+        let input = text.as_bytes();
+
+        let mut group = c.benchmark_group(format!("worstcase-{name}"));
+        for bytes in [10, 100, 1000, 5000, 10000, 25000, 50000, 75000, 100000] {
+            group.throughput(criterion::Throughput::Bytes(bytes as u64));
+            group.bench_with_input(
+                BenchmarkId::new("backtracking", bytes),
+                &bytes,
+                |b, bytes| b.iter(|| bpe.encode_via_backtracking(select_test_bytes(input, *bytes))),
+            );
+            group.bench_with_input(BenchmarkId::new("tiktoken", bytes), &bytes, |b, bytes| {
+                b.iter_batched(
+                    || select_test_bytes(input, *bytes),
+                    |input| tiktoken.encode_ordinary(std::str::from_utf8(input).unwrap()),
+                    criterion::BatchSize::SmallInput,
+                )
+            });
+        }
+        group.finish();
+    }
+}
+
 fn is_char_boundary(b: u8) -> bool {
     // Single byte encodings satisfy the bit pattern 0xxxxxxx, i.e. b < 128
     // Continuation bytes satisfy the bit pattern 10xxxxxx, i.e. b < 192
@@ -188,12 +220,24 @@ fn create_test_string(bpe: &BytePairEncoding, tokens: usize) -> String {
     text
 }
 
+fn select_test_bytes(input: &[u8], bytes: usize) -> &[u8] {
+    let mut start = thread_rng().gen_range(0..input.len() - bytes);
+    while start > 0 && !is_char_boundary(input[start]) {
+        start -= 1;
+    }
+    let mut end = start + bytes;
+    while end < input.len() && !is_char_boundary(input[end]) {
+        end += 1;
+    }
+    &input[start..end]
+}
+
 criterion_group!(
     name = benches;
     config = Criterion::default()
                 .warm_up_time(Duration::from_millis(500))
-                .measurement_time(Duration::from_millis(1000))
+                .measurement_time(Duration::from_millis(4000))
                 .nresamples(1000);
-    targets = counting_benchmark, encoding_benchmark, appending_benchmark
+    targets = counting_benchmark, encoding_benchmark, appending_benchmark, worstcase_benchmark
 );
 criterion_main!(benches);

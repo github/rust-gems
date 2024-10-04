@@ -2,7 +2,6 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::LazyLock;
 
 use aneubeck_daachorse::{DoubleArrayAhoCorasick, DoubleArrayAhoCorasickBuilder};
 use fnv::{FnvHashMap, FnvHasher};
@@ -12,19 +11,26 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::backtrack_encoder::BacktrackEncoder;
 use crate::bitfield::BitField;
-use crate::byte_pair_encoding::data::TokenDict;
 
-static BPE_CL100K: LazyLock<BytePairEncoding> = LazyLock::new(|| {
-    let bytes = include_bytes!("data/bpe_cl100k.dict");
-    let dict: TokenDict = rmp_serde::from_slice(bytes).expect("");
-    dict.into_bpe()
-});
+#[cfg(test)]
+pub(crate) static BPE_CL100K: std::sync::LazyLock<BytePairEncoding> =
+    std::sync::LazyLock::new(|| {
+        BytePairEncoding::from_tiktoken(
+            &tiktoken_rs::cl100k_base_singleton().lock(),
+            100256,
+            Some(17846336922010275747),
+        )
+    });
 
-static BPE_O200K: LazyLock<BytePairEncoding> = LazyLock::new(|| {
-    let bytes = include_bytes!("data/bpe_o200k.dict");
-    let dict: TokenDict = rmp_serde::from_slice(bytes).expect("");
-    dict.into_bpe()
-});
+#[cfg(test)]
+pub(crate) static BPE_O200K: std::sync::LazyLock<BytePairEncoding> =
+    std::sync::LazyLock::new(|| {
+        BytePairEncoding::from_tiktoken(
+            &tiktoken_rs::o200k_base_singleton().lock(),
+            199998,
+            Some(17846336922010275747),
+        )
+    });
 
 /// Representation of the byte pair dictionary.
 /// This struct provides various conversions.
@@ -215,14 +221,6 @@ fn find_token_by_bytes(
 }
 
 impl BytePairEncoding {
-    pub fn cl100k() -> &'static Self {
-        &BPE_CL100K
-    }
-
-    pub fn o200k() -> &'static Self {
-        &BPE_O200K
-    }
-
     /// Construct a BytePairEncoding instance from a tiktoken dictionary.
     /// A suitable hash factor may be necessary to prevent hash collisions,
     /// which can by found using [`find_hash_factor_for_tiktoken`].
@@ -570,12 +568,12 @@ mod tests {
     use std::time::Instant;
 
     use itertools::Itertools;
-    use tiktoken_rs::cl100k_base_singleton;
+    use tiktoken_rs::{cl100k_base_singleton, o200k_base_singleton};
 
-    use crate::byte_pair_encoding::{create_test_bytes, BytePairEncoding};
+    use crate::byte_pair_encoding::{create_test_bytes, BPE_CL100K, BPE_O200K};
 
     #[test]
-    fn test_correctness() {
+    fn test_correctness_cl100k() {
         // This is quite a challenging test case...
         let test_string = std::str::from_utf8(&[
             125, 34, 10, 10, 46, 109, 107, 100, 105, 114, 115, 32, 102, 100, 115, 32, 97, 100, 105,
@@ -585,7 +583,7 @@ mod tests {
         ])
         .unwrap();
         let time = Instant::now();
-        let bpe = BytePairEncoding::cl100k();
+        let bpe = &BPE_CL100K;
         println!("{:?}", time.elapsed());
         let encoded1 = cl100k_base_singleton()
             .lock()
@@ -602,8 +600,35 @@ mod tests {
     }
 
     #[test]
+    fn test_correctness_o200k() {
+        // This is quite a challenging test case...
+        let test_string = std::str::from_utf8(&[
+            125, 34, 10, 10, 46, 109, 107, 100, 105, 114, 115, 32, 102, 100, 115, 32, 97, 100, 105,
+            112, 105, 115, 105, 99, 105, 110, 103, 105, 116, 121, 69, 110, 103, 105, 110, 101, 32,
+            69, 67, 105, 114, 105, 101, 32, 111, 112, 116, 105, 109, 97, 108, 95, 68, 65, 32, 111,
+            102, 102, 101, 110, 100,
+        ])
+        .unwrap();
+        let time = Instant::now();
+        let bpe = &BPE_O200K;
+        println!("{:?}", time.elapsed());
+        let encoded1 = o200k_base_singleton()
+            .lock()
+            .encode_ordinary(test_string)
+            .into_iter()
+            .map(|t| t as u32)
+            .collect_vec();
+        let encoded2 = bpe.encode_via_backtracking(test_string.as_bytes());
+        assert_eq!(encoded1, encoded2);
+        let encoded3 = bpe.encode_via_table(test_string.as_bytes());
+        assert_eq!(encoded1, encoded3);
+        let encoded4 = bpe.encode_via_bitfield(test_string.as_bytes());
+        assert_eq!(encoded1, encoded4);
+    }
+
+    #[test]
     fn test_bpe_equivalence() {
-        let bpe = BytePairEncoding::cl100k();
+        let bpe = &BPE_CL100K;
         for tokens in [10, 1000, 10000] {
             for _ in 0..5 {
                 let test_input = create_test_bytes(bpe, tokens);
@@ -612,70 +637,5 @@ mod tests {
                 assert_eq!(encoded1, encoded2, "{} {}", encoded1.len(), encoded2.len());
             }
         }
-    }
-}
-
-mod data {
-    use serde::{Deserialize, Serialize};
-
-    use crate::byte_pair_encoding::BytePairEncoding;
-
-    #[derive(Serialize, Deserialize)]
-    pub(crate) struct TokenDict {
-        tokens: Vec<Vec<u8>>,
-        hash_factor: u64,
-    }
-
-    impl TokenDict {
-        pub(crate) fn into_bpe(self) -> BytePairEncoding {
-            BytePairEncoding::from_dictionary(self.tokens, Some(self.hash_factor))
-        }
-    }
-
-    #[test]
-    fn update_token_dicts() {
-        serialize_tokens(
-            "cl100k",
-            &tiktoken_rs::cl100k_base().expect("tiktoken initialization must not fail!"),
-            100256,
-            17846336922010275747,
-        );
-        serialize_tokens(
-            "o200k",
-            &tiktoken_rs::o200k_base().expect("tiktoken initialization must not fail!"),
-            199998,
-            17846336922010275747,
-        );
-    }
-
-    #[cfg(test)]
-    #[track_caller]
-    fn serialize_tokens(
-        name: &str,
-        bpe: &tiktoken_rs::CoreBPE,
-        num_tokens: usize,
-        hash_factor: u64,
-    ) {
-        use std::fs::File;
-        use std::path::PathBuf;
-
-        use itertools::Itertools;
-        use serde::Serialize;
-
-        let path = PathBuf::from(file!());
-        let dir = path.parent().unwrap();
-        let data_file = dir.join(format!("data/bpe_{name}.dict"));
-        let current_dir = std::env::current_dir().unwrap();
-        let abs_path = current_dir.parent().unwrap().parent().unwrap();
-        let file = File::create(abs_path.join(data_file)).unwrap();
-        let mut serializer = rmp_serde::Serializer::new(file);
-        let tokens = (0..num_tokens)
-            .map(|i| bpe._decode_native(&[i]))
-            .collect_vec();
-        let dict = TokenDict {
-            tokens,
-            hash_factor,
-        };
-        dict.serialize(&mut serializer).unwrap();
     }
 }
