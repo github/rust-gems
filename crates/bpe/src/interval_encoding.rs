@@ -86,13 +86,13 @@ impl<'a> IntervalEncoding<'a> {
 mod tests {
     use rand::{thread_rng, Rng};
 
-    use crate::byte_pair_encoding::{create_test_bytes, BytePairEncoding};
+    use crate::byte_pair_encoding::{create_test_bytes, BPE_CL100K};
 
     use super::IntervalEncoding;
 
     #[test]
     fn test_interval_count() {
-        let bpe = BytePairEncoding::cl100k();
+        let bpe = &BPE_CL100K;
         let text = create_test_bytes(bpe, 10000);
         let intervals = IntervalEncoding::new(bpe, &text);
         for _ in 0..1000 {
