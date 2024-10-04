@@ -567,12 +567,39 @@ mod tests {
     use std::time::Instant;
 
     use itertools::Itertools;
-    use tiktoken_rs::cl100k_base_singleton;
+    use tiktoken_rs::{cl100k_base_singleton, o200k_base_singleton};
 
     use crate::byte_pair_encoding::{create_test_bytes, BytePairEncoding};
 
     #[test]
-    fn test_correctness() {
+    fn test_correctness_cl100k() {
+        // This is quite a challenging test case...
+        let test_string = std::str::from_utf8(&[
+            125, 34, 10, 10, 46, 109, 107, 100, 105, 114, 115, 32, 102, 100, 115, 32, 97, 100, 105,
+            112, 105, 115, 105, 99, 105, 110, 103, 105, 116, 121, 69, 110, 103, 105, 110, 101, 32,
+            69, 67, 105, 114, 105, 101, 32, 111, 112, 116, 105, 109, 97, 108, 95, 68, 65, 32, 111,
+            102, 102, 101, 110, 100,
+        ])
+        .unwrap();
+        let time = Instant::now();
+        let bpe = BytePairEncoding::o200k();
+        println!("{:?}", time.elapsed());
+        let encoded1 = o200k_base_singleton()
+            .lock()
+            .encode_ordinary(test_string)
+            .into_iter()
+            .map(|t| t as u32)
+            .collect_vec();
+        let encoded2 = bpe.encode_via_backtracking(test_string.as_bytes());
+        assert_eq!(encoded1, encoded2);
+        let encoded3 = bpe.encode_via_table(test_string.as_bytes());
+        assert_eq!(encoded1, encoded3);
+        let encoded4 = bpe.encode_via_bitfield(test_string.as_bytes());
+        assert_eq!(encoded1, encoded4);
+    }
+
+    #[test]
+    fn test_correctness_o200k() {
         // This is quite a challenging test case...
         let test_string = std::str::from_utf8(&[
             125, 34, 10, 10, 46, 109, 107, 100, 105, 114, 115, 32, 102, 100, 115, 32, 97, 100, 105,

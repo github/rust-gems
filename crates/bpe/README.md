@@ -227,6 +227,12 @@ If the requirement of correct BPE output can be relaxed, then the Greedy approac
 
 ![encoding runtime comparison](./benches/result/encoding-o200k.svg)
 
+The graph below shows encoding results for input that is particularly challenging for tiktoken.
+The input consists of random ranges taken from the continuous list of all Unicode code points excluding whitespace.
+This inhibits tiktoken ability to split the input before applying BPE revealing its quadratic runtime complexity.
+
+![worst-case encoding runtime comparison](./benches/result/worstcase-o200k.svg)
+
 ### Incremental encoding
 
 Incremental encoding tokenizes a text while appending bytes.
