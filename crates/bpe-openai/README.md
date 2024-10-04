@@ -2,7 +2,7 @@
 
 Fast tokenizers for OpenAI token sets based on the [bpe](https://crates.io/crates/bpe) crate.
 Serialized BPE instances are generated during build and lazily loaded at runtime as static values.
-The overhead of loading the tokenizers is small because it happens only once per proces and only requires deserialization (as opposed to actually building the internal datastructures).
+The overhead of loading the tokenizers is small because it happens only once per process and only requires deserialization (as opposed to actually building the internal data structures).
 For convencience it re-exports the `bpe` crate so that depending on this crate is enough to use these tokenizers.
 
 Supported token sets:
