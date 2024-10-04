@@ -8,6 +8,24 @@ use tiktoken_rs::CoreBPE;
 
 fn main() {
     serialize_tokens(
+        "r50k",
+        &tiktoken_rs::r50k_base().expect("tiktoken initialization must not fail!"),
+        50256,
+        1,
+    );
+    serialize_tokens(
+        "p50k",
+        &tiktoken_rs::p50k_base().expect("tiktoken initialization must not fail!"),
+        50280,
+        1,
+    );
+    serialize_tokens(
+        "cl100k",
+        &tiktoken_rs::cl100k_base().expect("tiktoken initialization must not fail!"),
+        100256,
+        17846336922010275747,
+    );
+    serialize_tokens(
         "cl100k",
         &tiktoken_rs::cl100k_base().expect("tiktoken initialization must not fail!"),
         100256,
