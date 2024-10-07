@@ -90,13 +90,13 @@ impl<'a> AppendableEncoder<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::byte_pair_encoding::{create_test_bytes, BytePairEncoding};
+    use crate::byte_pair_encoding::{create_test_bytes, BPE_CL100K};
 
     use super::AppendableEncoder;
 
     #[test]
     fn test_appendable_encoder() {
-        let bpe = BytePairEncoding::cl100k();
+        let bpe = &BPE_CL100K;
         let mut enc = AppendableEncoder::new(bpe);
         let input_string = create_test_bytes(bpe, 100);
         for (i, c) in input_string.iter().enumerate() {

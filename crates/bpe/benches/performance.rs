@@ -10,21 +10,28 @@ use criterion::{
 use rand::{thread_rng, Rng};
 use tiktoken_rs::CoreBPE;
 
-static TOKENIZERS: LazyLock<[(&'static str, &'static BytePairEncoding, CoreBPE); 2]> =
-    LazyLock::new(|| {
-        [
-            (
-                "cl100k",
-                BytePairEncoding::cl100k(),
-                tiktoken_rs::cl100k_base().unwrap(),
+static TOKENIZERS: LazyLock<[(&'static str, BytePairEncoding, CoreBPE); 2]> = LazyLock::new(|| {
+    [
+        (
+            "cl100k",
+            BytePairEncoding::from_tiktoken(
+                &tiktoken_rs::cl100k_base_singleton().lock(),
+                100256,
+                Some(17846336922010275747),
             ),
-            (
-                "o200k",
-                BytePairEncoding::o200k(),
-                tiktoken_rs::o200k_base().unwrap(),
+            tiktoken_rs::cl100k_base().unwrap(),
+        ),
+        (
+            "o200k",
+            BytePairEncoding::from_tiktoken(
+                &tiktoken_rs::o200k_base_singleton().lock(),
+                199998,
+                Some(17846336922010275747),
             ),
-        ]
-    });
+            tiktoken_rs::o200k_base().unwrap(),
+        ),
+    ]
+});
 
 fn counting_benchmark(c: &mut Criterion) {
     for (name, bpe, _) in TOKENIZERS.iter() {
