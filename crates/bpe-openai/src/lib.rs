@@ -78,7 +78,7 @@ mod tests {
             .map(|i| i as u32)
             .collect();
 
-        let without_splitting = BPE_CL100K.encode_via_backtracking(&input);
+        let without_splitting = BPE_CL100K.encode_via_backtracking(input);
         assert_ne!(without_splitting, expected);
 
         let pat = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
