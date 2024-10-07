@@ -12,6 +12,10 @@ Supported token sets:
 - cl100k
 - o200k
 
+> **⚠ CAUTION ⚠**
+> This crate does not implement the regex-based input splitting tiktoken applies before it does byte-pair encoding.
+> Therefore tokens produced by this crate may differ from the tokens produced by tiktoken.
+
 ## Usage
 
 Add a dependency by running

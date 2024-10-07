@@ -17,6 +17,10 @@ bpe = { version = "0.1.0", path = "../bpe" }
 rmp-serde = "1"
 serde = { version = "1" }
 
+[dev-dependencies]
+fancy-regex = "0.13"
+tiktoken-rs = { version = "0.5" }
+
 [build-dependencies]
 bpe = { version = "0.1.0", path = "../bpe", features = ["tiktoken-rs"] }
 rmp-serde = "1"
