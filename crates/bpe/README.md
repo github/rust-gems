@@ -183,8 +183,8 @@ On average it is about ~4 faster, since the short-cuts usually pay off.
 
 ## Benchmarks
 
-We ran several benchmarks to compare performance of different encoders and a tiktoken implementation.
-For the tiktoken implementation we used [tiktoken-rs](https://crates.io/crates/tiktoken-rs) library, a wrapper around OpenAI's tiktoken implementation.
+We ran several benchmarks to compare performance of different encoders, and tiktoken and Huggingface tokenizers.
+We used [tiktoken-rs](https://crates.io/crates/tiktoken-rs), a wrapper around OpenAI's tiktoken implementation, and Huggingface's [tokenizers](https://crates.io/crates/tokenizers).
 Note that tiktoken does not run BPE on the full input text.
 Instead it splits it into large chunks using a regex and runs BPE on the individual chunks.
 We have not tried to see if that approach is compatible with our BPE implementation.
@@ -225,13 +225,13 @@ The backtracking encoder, the fastest encoder that still returns correct results
 The fully dynamic programming solution and the heap implementation are still quite competitive to TikToken (especially for smaller inputs).
 If the requirement of correct BPE output can be relaxed, then the Greedy approach or the minimal encoding approach are the clear winners.
 
-![encoding runtime comparison](./benches/result/encoding-o200k.svg)
+![encoding runtime comparison](./images/performance-encoding.svg)
 
 The graph below shows encoding results for input that is particularly challenging for tiktoken.
 The input consists of random ranges taken from the continuous list of all Unicode code points excluding whitespace.
 This inhibits tiktoken ability to split the input before applying BPE revealing its quadratic runtime complexity.
 
-![worst-case encoding runtime comparison](./benches/result/worstcase-o200k.svg)
+![worst-case encoding runtime comparison](./images/performance-worstcase.svg)
 
 ### Incremental encoding
 
@@ -246,7 +246,7 @@ The graph below shows encoding runtime vs slice length.
 The overall runtime of byte-by-byte incremental encoder for encoding the full text is comparable to the runtime of the backtracking encoder, with only a constant factor overhead.
 Note that this is a huge win for incremental use cases, which would otherwise require retokenization after each append, resulting in a quadratic slowdown.
 
-![appending runtime comparison](./benches/result/appending-o200k.svg)
+![appending runtime comparison](./images/performance-appending.svg)
 
 ### Interval counting
 
@@ -264,9 +264,15 @@ The graph below shows counting runtime vs slice length.
 The runtime of the backtracking encoder grows with the length of the slice.
 The interval encoder counts any interval in typically constant time.
 
-![counting runtime comparison](./benches/result/counting-o200k.svg)
+![counting runtime comparison](./images/performance-counting.svg)
 
 ### Running the benchmarks
+
+Benchmarks are located in a separate crate in the `benchmarks` directory.
+
+```sh
+cd benchmarks
+```
 
 Run the benchmark as follows (required [cargo-criterion](https://crates.io/crates/cargo-criterion) installed):
 
@@ -280,5 +286,5 @@ Open the full report which should be located in `target/criterion/reports/index.
 Update the figures in this repo as follows (requires `rsvg-convert` from `librsvg` installed):
 
 ```sh
-script/copy-benchmark-results
+script/copy-results
 ```

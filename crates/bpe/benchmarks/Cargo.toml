@@ -1,0 +1,17 @@
+[package]
+name = "bpe-benches"
+edition = "2021"
+
+[[bench]]
+name = "performance"
+path = "performance.rs"
+harness = false
+test = false
+
+[dev-dependencies]
+bpe = { path = "../../bpe", features = ["rand", "tiktoken-rs"] }
+bpe-openai = { path = "../../bpe-openai" }
+criterion = "0.5"
+rand = "0.8"
+tiktoken-rs = "0.5"
+tokenizers = "0.20"

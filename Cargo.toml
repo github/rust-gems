@@ -2,6 +2,7 @@
 
 members = [
     "crates/*",
+    "crates/bpe/benchmarks",
 ]
 resolver = "2"
 

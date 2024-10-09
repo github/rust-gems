@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+set -eu
+
+result_dir="../images"
+
+mkdir -p "$result_dir"
+
+for i in counting encoding appending worstcase; do
+    rsvg-convert --format svg --output "$result_dir/performance-$i.svg" --background-color white "target/criterion/reports/$i-o200k/lines.svg"
+done
