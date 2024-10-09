@@ -4,6 +4,7 @@ edition = "2021"
 
 [lib]
 path = "lib.rs"
+test = false
 
 [[bench]]
 name = "performance"
@@ -14,7 +15,6 @@ test = false
 [[test]]
 name = "equivalence"
 path = "equivalence.rs"
-harness = true
 test = true
 
 [dependencies]

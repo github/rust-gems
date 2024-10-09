@@ -1,15 +1,16 @@
 use std::sync::LazyLock;
 
 use bpe::byte_pair_encoding::BytePairEncoding;
+use bpe_openai::Tokenizer;
 use rand::{thread_rng, Rng};
-use tiktoken_rs::CoreBPE as TiktokenBPE;
+use tiktoken_rs::CoreBPE as TiktokenTokenizer;
 use tokenizers::tokenizer::Tokenizer as HuggingfaceTokenizer;
 
 pub static TOKENIZERS: LazyLock<
     [(
         &'static str,
-        &'static BytePairEncoding,
-        TiktokenBPE,
+        &'static Tokenizer,
+        TiktokenTokenizer,
         HuggingfaceTokenizer,
     ); 2],
 > = LazyLock::new(|| {

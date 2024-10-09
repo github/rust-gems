@@ -11,8 +11,8 @@ use rand::{thread_rng, Rng};
 
 fn counting_benchmark(c: &mut Criterion) {
     for (name, bpe, _, _) in TOKENIZERS.iter() {
-        let input = create_test_bytes(bpe, 20000);
-        let fast = IntervalEncoding::new(bpe, &input);
+        let input = create_test_bytes(&bpe.bpe, 20000);
+        let fast = IntervalEncoding::new(&bpe.bpe, &input);
 
         let mut group = c.benchmark_group(format!("counting-{name}"));
         group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
@@ -31,7 +31,7 @@ fn counting_benchmark(c: &mut Criterion) {
                 |b, bytes| {
                     b.iter_batched(
                         || thread_rng().gen_range(0..input.len() - bytes),
-                        |start| bpe.count(&input[start..start + bytes]),
+                        |start| bpe.bpe.count(&input[start..start + bytes]),
                         criterion::BatchSize::SmallInput,
                     )
                 },
@@ -42,8 +42,8 @@ fn counting_benchmark(c: &mut Criterion) {
 }
 
 fn encoding_benchmark(c: &mut Criterion) {
-    for (name, bpe, tiktoken, huggingface) in TOKENIZERS.iter() {
-        let text = create_test_string(bpe, 20000);
+    for (name, bpe, _, _) in TOKENIZERS.iter() {
+        let text = create_test_string(&bpe.bpe, 20000);
         let input = text.as_bytes();
 
         let mut group = c.benchmark_group(format!("encoding-{name}"));
@@ -56,7 +56,7 @@ fn encoding_benchmark(c: &mut Criterion) {
                 |b, bytes| {
                     b.iter_batched(
                         || select_test_bytes(input, *bytes),
-                        |input| bpe.encode_via_backtracking(input).len(),
+                        |input| bpe.bpe.encode_via_backtracking(input),
                         criterion::BatchSize::SmallInput,
                     )
                 },
@@ -64,53 +64,31 @@ fn encoding_benchmark(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new("heap", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
                     || select_test_bytes(input, *bytes),
-                    |input| bpe.encode_via_bitfield(input).len(),
+                    |input| bpe.bpe.encode_via_bitfield(input),
                     criterion::BatchSize::SmallInput,
                 )
             });
             group.bench_with_input(BenchmarkId::new("table", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
                     || select_test_bytes(input, *bytes),
-                    |input| bpe.encode_via_table(input).len(),
+                    |input| bpe.bpe.encode_via_table(input),
                     criterion::BatchSize::SmallInput,
                 )
             });
             group.bench_with_input(BenchmarkId::new("greedy", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
                     || select_test_bytes(input, *bytes),
-                    |input| bpe.encode_greedy(input).len(),
+                    |input| bpe.bpe.encode_greedy(input),
                     criterion::BatchSize::SmallInput,
                 )
             });
             group.bench_with_input(BenchmarkId::new("minimal", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
                     || select_test_bytes(input, *bytes),
-                    |input| bpe.encode_minimal(input).len(),
+                    |input| bpe.bpe.encode_minimal(input),
                     criterion::BatchSize::SmallInput,
                 )
             });
-            group.bench_with_input(BenchmarkId::new("tiktoken", bytes), &bytes, |b, bytes| {
-                b.iter_batched(
-                    || select_test_bytes(input, *bytes),
-                    |input| tiktoken.encode_ordinary(std::str::from_utf8(input).unwrap()),
-                    criterion::BatchSize::SmallInput,
-                )
-            });
-            group.bench_with_input(
-                BenchmarkId::new("huggingface", bytes),
-                &bytes,
-                |b, bytes| {
-                    b.iter_batched(
-                        || select_test_bytes(input, *bytes),
-                        |input| {
-                            huggingface
-                                .encode_fast(std::str::from_utf8(input).unwrap(), false)
-                                .unwrap()
-                        },
-                        criterion::BatchSize::SmallInput,
-                    )
-                },
-            );
         }
         group.finish();
     }
@@ -118,7 +96,7 @@ fn encoding_benchmark(c: &mut Criterion) {
 
 fn appending_benchmark(c: &mut Criterion) {
     for (name, bpe, _, _) in TOKENIZERS.iter() {
-        let input = create_test_bytes(bpe, 20000);
+        let input = create_test_bytes(&bpe.bpe, 20000);
 
         let mut group = c.benchmark_group(format!("appending-{name}"));
         group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
@@ -128,7 +106,7 @@ fn appending_benchmark(c: &mut Criterion) {
                 b.iter_batched(
                     || {
                         (
-                            AppendableEncoder::new(bpe),
+                            AppendableEncoder::new(&bpe.bpe),
                             select_test_bytes(&input, *bytes),
                         )
                     },
@@ -142,7 +120,7 @@ fn appending_benchmark(c: &mut Criterion) {
                 |b, bytes| {
                     b.iter_batched(
                         || select_test_bytes(&input, *bytes),
-                        |input| bpe.count(input),
+                        |input| bpe.bpe.count(input),
                         criterion::BatchSize::SmallInput,
                     )
                 },
@@ -152,7 +130,50 @@ fn appending_benchmark(c: &mut Criterion) {
     }
 }
 
-fn worstcase_benchmark(c: &mut Criterion) {
+fn comparison_benchmark(c: &mut Criterion) {
+    for (name, bpe, tiktoken, huggingface) in TOKENIZERS.iter() {
+        let text = create_test_string(&bpe.bpe, 20000);
+        let input = text.as_bytes();
+
+        let mut group = c.benchmark_group(format!("comparison-{name}"));
+        group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
+        for bytes in [10, 100, 1000, 10000] {
+            group.throughput(criterion::Throughput::Bytes(bytes as u64));
+            group.bench_with_input(
+                BenchmarkId::new("backtracking", bytes),
+                &bytes,
+                |b, bytes| {
+                    b.iter_batched(
+                        || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
+                        |text| bpe.encode(text),
+                        criterion::BatchSize::SmallInput,
+                    )
+                },
+            );
+            group.bench_with_input(BenchmarkId::new("tiktoken", bytes), &bytes, |b, bytes| {
+                b.iter_batched(
+                    || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
+                    |text| tiktoken.encode_ordinary(text),
+                    criterion::BatchSize::SmallInput,
+                )
+            });
+            group.bench_with_input(
+                BenchmarkId::new("huggingface", bytes),
+                &bytes,
+                |b, bytes| {
+                    b.iter_batched(
+                        || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
+                        |text| huggingface.encode_fast(text, false).unwrap(),
+                        criterion::BatchSize::SmallInput,
+                    )
+                },
+            );
+        }
+        group.finish();
+    }
+}
+
+fn worstcase_comparison_benchmark(c: &mut Criterion) {
     for (name, bpe, tiktoken, huggingface) in TOKENIZERS.iter() {
         let text: String = ('\0'..char::MAX).filter(|c| !c.is_whitespace()).collect();
         let input = text.as_bytes();
@@ -163,12 +184,18 @@ fn worstcase_benchmark(c: &mut Criterion) {
             group.bench_with_input(
                 BenchmarkId::new("backtracking", bytes),
                 &bytes,
-                |b, bytes| b.iter(|| bpe.encode_via_backtracking(select_test_bytes(input, *bytes))),
+                |b, bytes| {
+                    b.iter_batched(
+                        || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
+                        |text| bpe.encode(text),
+                        criterion::BatchSize::SmallInput,
+                    )
+                },
             );
             group.bench_with_input(BenchmarkId::new("tiktoken", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
-                    || select_test_bytes(input, *bytes),
-                    |input| tiktoken.encode_ordinary(std::str::from_utf8(input).unwrap()),
+                    || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
+                    |text| tiktoken.encode_ordinary(text),
                     criterion::BatchSize::SmallInput,
                 )
             });
@@ -177,12 +204,8 @@ fn worstcase_benchmark(c: &mut Criterion) {
                 &bytes,
                 |b, bytes| {
                     b.iter_batched(
-                        || select_test_bytes(input, *bytes),
-                        |input| {
-                            huggingface
-                                .encode_fast(std::str::from_utf8(input).unwrap(), false)
-                                .unwrap()
-                        },
+                        || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
+                        |text| huggingface.encode_fast(text, false).unwrap(),
                         criterion::BatchSize::SmallInput,
                     )
                 },
@@ -198,6 +221,6 @@ criterion_group!(
                 .warm_up_time(Duration::from_millis(500))
                 .measurement_time(Duration::from_millis(4000))
                 .nresamples(1000);
-    targets = counting_benchmark, encoding_benchmark, appending_benchmark, worstcase_benchmark
+    targets = counting_benchmark, encoding_benchmark, appending_benchmark, comparison_benchmark, worstcase_comparison_benchmark
 );
 criterion_main!(benches);

@@ -3,7 +3,7 @@ use bpe_benchmarks::*;
 #[test]
 fn test_encoding_equivalence() {
     for (_, bpe, tiktoken, huggingface) in TOKENIZERS.iter() {
-        let text = create_test_string(bpe, 20000);
+        let text = create_test_string(&bpe.bpe, 20000);
         let inputs = (0..32)
             .map(|_| select_test_bytes(text.as_bytes(), 100))
             .chain(std::iter::once(
@@ -11,7 +11,7 @@ fn test_encoding_equivalence() {
             ));
         for input in inputs {
             let text = std::str::from_utf8(input).unwrap();
-            let out = bpe.encode_via_backtracking(input);
+            let out = bpe.encode(text);
             let tiktoken_out: Vec<_> = tiktoken.encode_ordinary(text);
             let tiktoken_out2: Vec<_> = tiktoken_out.iter().map(|i| *i as u32).collect();
             let tiktoken_text = tiktoken.decode(tiktoken_out.clone()).unwrap();
@@ -25,27 +25,26 @@ fn test_encoding_equivalence() {
             if tiktoken_out2 != huggingface_out {
                 let huggingface_text = huggingface.decode(&huggingface_out, true).unwrap();
                 if tiktoken_text != huggingface_text {
-                    eprintln!(
+                    panic!(
                         "huggingface tokens and text differ: {:?} != {:?}",
                         huggingface_text, tiktoken_text
                     );
                 } else {
-                    eprintln!(
+                    panic!(
                         "huggingface tokens differ: {:?} != {:?}",
                         huggingface_out, tiktoken_out2
                     );
                 }
             }
             if tiktoken_out2 != out {
-                let output = bpe.decode_tokens(&out);
-                let text = std::str::from_utf8(&output).unwrap();
+                let text = bpe.decode(&out).unwrap();
                 if tiktoken_text != text {
-                    eprintln!(
+                    panic!(
                         "bpe tokens and text differ: {:?} != {:?}",
                         text, tiktoken_text
                     );
                 } else {
-                    eprintln!("bpe tokens differ: {:?} != {:?}", out, tiktoken_out2);
+                    panic!("bpe tokens differ: {:?} != {:?}", out, tiktoken_out2);
                 }
             }
         }

@@ -221,17 +221,10 @@ The benchmark measured the runtime of encoding of slices of lengths 10, 100, 100
 
 The graph below shows encoding runtime vs slice length.
 All encoders (except the heap encoder) show the expected linear runtime complexity.
-The backtracking encoder, the fastest encoder that still returns correct results, shows a performance gain of approximately 3.5x compared to tiktoken.
-The fully dynamic programming solution and the heap implementation are still quite competitive to TikToken (especially for smaller inputs).
+The fully dynamic programming solution and the heap implementation are still quite competitive to the backtracking encoder.
 If the requirement of correct BPE output can be relaxed, then the Greedy approach or the minimal encoding approach are the clear winners.
 
 ![encoding runtime comparison](./images/performance-encoding.svg)
-
-The graph below shows encoding results for input that is particularly challenging for tiktoken.
-The input consists of random ranges taken from the continuous list of all Unicode code points excluding whitespace.
-This inhibits tiktoken ability to split the input before applying BPE revealing its quadratic runtime complexity.
-
-![worst-case encoding runtime comparison](./images/performance-worstcase.svg)
 
 ### Incremental encoding
 
@@ -265,6 +258,29 @@ The runtime of the backtracking encoder grows with the length of the slice.
 The interval encoder counts any interval in typically constant time.
 
 ![counting runtime comparison](./images/performance-counting.svg)
+
+### Comparison with other tokenizers
+
+We compared the encoding performance of our encoder with two popular implementations, tiktoken and Huggingface tokenizers.
+
+The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original text using the o200k token set.
+In this benchmark, our own encoder includes a pre-tokenization step so that it produces exactly the same results as the other two.
+(All encodings were computed from scratch for each slice.)
+
+The graph below shows encoding runtime vs slice length.
+All encoders (except the heap encoder) show the expected linear runtime complexity.
+The backtracking encoder, the fastest encoder that still returns correct results, shows a performance gain of approximately 3.5x compared to tiktoken.
+The fully dynamic programming solution and the heap implementation are still quite competitive to TikToken (especially for smaller inputs).
+If the requirement of correct BPE output can be relaxed, then the Greedy approach or the minimal encoding approach are the clear winners.
+
+![encoding runtime comparison](./images/performance-comparison.svg)
+
+The graph below shows encoding results for input that is particularly challenging for tiktoken.
+The input consists of random ranges taken from the continuous list of all Unicode code points excluding whitespace.
+The performance of tiktoken suffers shows a quadratic growth with the input size.
+The Huggingface encoder scales better, but at a slower pace than our own encoder.
+
+![worst-case encoding runtime comparison](./images/performance-worstcase.svg)
 
 ### Running the benchmarks
 
