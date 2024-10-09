@@ -6,28 +6,28 @@ use fancy_regex::Regex;
 
 static BPE_R50K: LazyLock<Tokenizer> = LazyLock::new(|| {
     let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_r50k.dict"));
-    let bpe = rmp_serde::from_slice(bytes).expect("");
+    let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
     let pat = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
-    Tokenizer::new(bpe, Some(pat)).unwrap()
+    Tokenizer::new(bpe, Some(pat)).expect("valid regex")
 });
 
 static BPE_P50K: LazyLock<Tokenizer> = LazyLock::new(|| {
     let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_p50k.dict"));
-    let bpe = rmp_serde::from_slice(bytes).expect("");
+    let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
     let pat = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
-    Tokenizer::new(bpe, Some(pat)).unwrap()
+    Tokenizer::new(bpe, Some(pat)).expect("valid regex")
 });
 
 static BPE_CL100K: LazyLock<Tokenizer> = LazyLock::new(|| {
     let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_cl100k.dict"));
-    let bpe = rmp_serde::from_slice(bytes).expect("");
+    let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
     let pat = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
-    Tokenizer::new(bpe, Some(pat)).unwrap()
+    Tokenizer::new(bpe, Some(pat)).expect("valid regex")
 });
 
 static BPE_O200K: LazyLock<Tokenizer> = LazyLock::new(|| {
     let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_o200k.dict"));
-    let bpe = rmp_serde::from_slice(bytes).expect("");
+    let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
     let pat = [
         "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
         "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
@@ -37,7 +37,7 @@ static BPE_O200K: LazyLock<Tokenizer> = LazyLock::new(|| {
         "\\s+(?!\\S)",
         "\\s+",
     ].join("|");
-    Tokenizer::new(bpe, Some(&pat)).unwrap()
+    Tokenizer::new(bpe, Some(&pat)).expect("valid regex")
 });
 
 pub use bpe::*;
@@ -50,8 +50,9 @@ pub struct Tokenizer {
 }
 
 impl Tokenizer {
+    #[allow(clippy::result_large_err)]
     pub fn new(bpe: BytePairEncoding, pat: Option<&str>) -> fancy_regex::Result<Self> {
-        let pat = pat.map(|pat| fancy_regex::Regex::new(pat)).transpose()?;
+        let pat = pat.map(fancy_regex::Regex::new).transpose()?;
         Ok(Self { bpe, pat })
     }
 
