@@ -35,7 +35,7 @@ pub(crate) static BPE_O200K: std::sync::LazyLock<BytePairEncoding> =
 /// Representation of the byte pair dictionary.
 /// This struct provides various conversions.
 /// We put all of them into a single struct so that they can be reused by different implementations.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BytePairEncoding {
     /// All the decoded tokens concatenated into
     all_tokens: Vec<u8>,

@@ -2,6 +2,7 @@
 
 members = [
     "crates/*",
+    "crates/bpe/bindings/python",
 ]
 resolver = "2"
 

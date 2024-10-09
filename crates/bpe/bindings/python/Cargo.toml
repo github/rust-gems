@@ -1,0 +1,13 @@
+[package]
+name = "python-bpe"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "bpe"
+crate-type = ["cdylib"]
+
+[dependencies]
+bpe = { version = "0.1", path = "../../../bpe" }
+bpe-openai = { version = "0.1", path = "../../../bpe-openai" }
+pyo3 = "0.22.3"
