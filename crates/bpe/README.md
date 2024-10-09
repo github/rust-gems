@@ -284,6 +284,10 @@ The backtracking encoder, the fastest encoder that still returns correct results
 The fully dynamic programming solution and the heap implementation are still quite competitive to TikToken (especially for smaller inputs).
 If the requirement of correct BPE output can be relaxed, then the Greedy approach or the minimal encoding approach are the clear winners.
 
+An interesting observation here is that pre-tokenization slows down encoding quite a bit.
+Compared with the encoding benchmark above, the backtracking encoder without pre-tokenization is almost 4x faster than the one with pre-tokenization in this benchmark.
+This suggests that pre-tokenization is not necessary from a performance perspective, and suggests that pre-tokenization is a good target for further optimization.
+
 ![encoding runtime comparison](./images/performance-comparison.svg)
 
 The graph below shows encoding results for input that is particularly challenging for tiktoken.
