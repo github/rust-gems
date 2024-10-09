@@ -42,7 +42,9 @@ fn counting_benchmark(c: &mut Criterion) {
 }
 
 fn encoding_benchmark(c: &mut Criterion) {
-    for (name, bpe, _, _) in TOKENIZERS.iter() {
+    for (name, bpe, _, huggingface) in TOKENIZERS.iter() {
+        let huggingface = without_pretokenizer(huggingface);
+
         let text = create_test_string(&bpe.bpe, 20000);
         let input = text.as_bytes();
 
@@ -89,6 +91,17 @@ fn encoding_benchmark(c: &mut Criterion) {
                     criterion::BatchSize::SmallInput,
                 )
             });
+            group.bench_with_input(
+                BenchmarkId::new("huggingface", bytes),
+                &bytes,
+                |b, bytes| {
+                    b.iter_batched(
+                        || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
+                        |text| huggingface.encode_fast(text, false).unwrap(),
+                        criterion::BatchSize::SmallInput,
+                    )
+                },
+            );
         }
         group.finish();
     }

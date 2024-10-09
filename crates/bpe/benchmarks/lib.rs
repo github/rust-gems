@@ -4,6 +4,7 @@ use bpe::byte_pair_encoding::BytePairEncoding;
 use bpe_openai::Tokenizer;
 use rand::{thread_rng, Rng};
 use tiktoken_rs::CoreBPE as TiktokenTokenizer;
+use tokenizers::pre_tokenizers::byte_level::ByteLevel as HuggingfaceByteLevel;
 use tokenizers::tokenizer::Tokenizer as HuggingfaceTokenizer;
 
 pub static TOKENIZERS: LazyLock<
@@ -19,13 +20,13 @@ pub static TOKENIZERS: LazyLock<
             "cl100k",
             bpe_openai::cl100k(),
             tiktoken_rs::cl100k_base().unwrap(),
-            { HuggingfaceTokenizer::from_pretrained("Xenova/gpt-4", None).unwrap() },
+            HuggingfaceTokenizer::from_pretrained("Xenova/gpt-4", None).unwrap(),
         ),
         (
             "o200k",
             bpe_openai::o200k(),
             tiktoken_rs::o200k_base().unwrap(),
-            { HuggingfaceTokenizer::from_pretrained("Xenova/gpt-4o", None).unwrap() },
+            HuggingfaceTokenizer::from_pretrained("Xenova/gpt-4o", None).unwrap(),
         ),
     ]
 });
@@ -68,4 +69,12 @@ pub fn select_test_bytes(input: &[u8], bytes: usize) -> &[u8] {
         end += 1;
     }
     &input[start..end]
+}
+
+pub fn without_pretokenizer(enc: &HuggingfaceTokenizer) -> HuggingfaceTokenizer {
+    let mut enc = enc.clone();
+    // boolean values taken from Xenova's tokenizer config
+    let pre_tokenizer = HuggingfaceByteLevel::new(false, false, false);
+    enc.with_pre_tokenizer(Some(pre_tokenizer));
+    enc
 }
