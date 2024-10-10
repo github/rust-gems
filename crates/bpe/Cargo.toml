@@ -12,12 +12,6 @@ categories = ["algorithms", "data-structures", "encoding", "science"]
 crate-type = ["lib", "staticlib"]
 bench = false
 
-[[bench]]
-name = "performance"
-path = "benches/performance.rs"
-harness = false
-test = false
-
 [features]
 rand = ["dep:rand"]
 tiktoken-rs = ["dep:tiktoken-rs"]
@@ -33,4 +27,3 @@ tiktoken-rs = { version = "0.5", optional = true }
 
 [dev-dependencies]
 bpe = { path = ".", features = ["rand", "tiktoken-rs"] }
-criterion = "0.5"
