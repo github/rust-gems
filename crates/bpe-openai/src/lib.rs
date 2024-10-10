@@ -47,7 +47,7 @@ pub use bpe::*;
 /// produce the same output as the tiktoken tokenizers. The type gives access
 /// to the regex and underlying bye-pair encoding if needed. Note that using
 /// the byte-pair encoding directly does not take the regex into account and
-/// may result in output that differs from tiktoken. 
+/// may result in output that differs from tiktoken.
 pub struct Tokenizer {
     /// The byte-pair encoding for this tokenizer.
     pub bpe: BytePairEncoding,
