@@ -42,6 +42,12 @@ static BPE_O200K: LazyLock<Tokenizer> = LazyLock::new(|| {
 
 pub use bpe::*;
 
+/// A byte-pair encoding tokenizer that supports a pre-tokenization regex.
+/// The direct methods on this type pre-tokenize the input text and should
+/// produce the same output as the tiktoken tokenizers. The type gives access
+/// to the regex and underlying bye-pair encoding if needed. Note that using
+/// the byte-pair encoding directly does not take the regex into account and
+/// may result in output that differs from tiktoken. 
 pub struct Tokenizer {
     /// The byte-pair encoding for this tokenizer.
     pub bpe: BytePairEncoding,
