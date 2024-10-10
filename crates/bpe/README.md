@@ -221,7 +221,7 @@ Two additional encoders are included that are faster but deviate from the origin
 The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original text using the o200k token set.
 (All encodings were computed from scratch for each slice.)
 
-Be aware that this benchmark none of the tokenizers pre-tokenize the input.
+Be aware that in this benchmark none of the tokenizers (ours or Huggingface's) pre-tokenize the input as is normally done for o200k.
 It therefore shows the true performance characteristics of the encoding logic itself.
 Unfortunately tiktoken does not allow us to disable pre-tokenization, which is why it is not included.
 Below we have a comparison with pre-tokenization that includes tiktoken as well.
@@ -280,10 +280,8 @@ It is therefore difficult to judge the performance differences of the BPE logic 
 It does give a good indication of how the algorithms might perform in practice.
 
 The graph below shows encoding runtime vs slice length.
-All encoders (except the heap encoder) show the expected linear runtime complexity.
-The backtracking encoder, the fastest encoder that still returns correct results, shows a performance gain of approximately 3.5x compared to tiktoken.
-The fully dynamic programming solution and the heap implementation are still quite competitive to TikToken (especially for smaller inputs).
-If the requirement of correct BPE output can be relaxed, then the Greedy approach or the minimal encoding approach are the clear winners.
+All encoders show a similar runtime complexity.
+The backtracking encoder and tiktoken have comparable performance, and both are about 3.5--4x faster than the Huggingface encoder.
 
 An interesting observation here is that pre-tokenization slows down encoding quite a bit.
 Compared with the encoding benchmark above, the backtracking encoder without pre-tokenization is almost 4x faster than the one with pre-tokenization in this benchmark.
