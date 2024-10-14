@@ -6,9 +6,8 @@ As a by-product, it can also be used to efficiently encode those chunks if desir
 For chunking the following operations are of interest:
 
 1) Split text after exactly n tokens at a character boundary.
-1) Count tokens for sub-ranges of a text.
-1) Incrementally count tokens while appending text to a chunk.
-1) Determine whether a sub-range of text is below some token limit or not.
+2) Count tokens for sub-ranges of a text.
+3) Incrementally count tokens while appending text to a chunk.
 
 Those operations are surprisingly difficult to implement efficiently for BPE.
 
@@ -25,19 +24,22 @@ BPE counting is unfortunately non-monotonic, i.e. appending more text could resu
 
 Naive implementations for the other two operations will essentially have similar problems: either performance becomes very bad or counting is imprecise.
 
-This library presents novel algorithms to compute BPE encodings which address those problems. For the standard encoding or counting task, the algorithm will beat the Rust tiktoken implementation by 4x despite tiktoken using heuristics to speed up the encoding, but may lead to "incorrect" results.
+This library presents novel algorithms to compute BPE encodings which address those problems.
+For the standard encoding or counting task, the algorithm is about 10x faster than the Huggingface BPE tokenizer.
+The comparison with the Rust tiktoken implementation is more subtle, because pre-tokenization obscures the performance of the BPE algorithm by keeping BPE inputs small. In typical cases the algorithm performs similar to tiktoken, but worstcase inputs show the algorithm scales linearly where tiktoken scales quadraticly.
 
 ## Prior Art
 
-There are mostly three strategies for BPE encoding.
+There are mostly two strategies for BPE encoding.
 
 1) Trivial solution. Search brute force for the most frequent pair in the encoded text according the dictionary and replace those occurrences. This has a `O(n^2)` complexity and is therefore not very appealing in production.
 2) Heap based. Set up a heap with the frequencies. This improves the linear search time to a logarithmic factor. If done properly, the overall complexity reduces now to `O(n log n)`.
-3) Split the input into sections of a maximum size first and then process each section individually. This shrinks in theory the complexity to `O(n)` if the section size is small enough. But it will in general produce now different results. In order to produce the "correct" encoding, one would need to choose split points at token boundaries. But without having the text encoded already, this is in general impossible.
+
+Note that many tokenizers split the input into substrings and then process each substring individually. This shrinks in theory the complexity to `O(n)` if the substring size is small enough. But it will in general produce now different results. In order to produce the "correct" encoding, one would need to choose split points at token boundaries. But without having the text encoded already, this is in general impossible. Input splitting may is therefore not a viable strategy for improving encoding performance.
 
 We have implemented a fast heap based solution as baseline. It uses a bitfield to mark token boundaries. This is more memory efficient than using linked lists or other approaches and should also be faster.
 
-Note: the tik-token library uses a combination of 1) and 3) where sections are determined via a set of regular expressions. Unfortunately, this approach leads to encodings which differ from the original BPE algorithm and can therefore not be used as reference implementation for our approach, but it also has quadratic worst case complexity for certain inputs which makes it impractical for production use!
+Note: the tik-token library uses a combination of 1) and 3) where substrings are determined via a set of regular expressions. Unfortunately, this approach leads to encodings which differ from the original BPE algorithm and can therefore not be used as reference implementation for our approach, but it also has quadratic worst case complexity for certain inputs which makes it impractical for production use!
 
 ## Properties of BPE
 
@@ -101,8 +103,8 @@ The solution is to track the encodings of ALL text prefixes. For our example `ab
 - `a` ------> `a`
 - `ab` -----> `ab`
 - `aba` ----> `ab a`
-- `abab` ---> `ab ac`
-- `ababc` --> `ab a cb`
+- `abac` ---> `ab ac`
+- `abacb` --> `ab a cb`
 
 This can be done much more efficiently thanks to Corollary IIa, since now only the last token of every prefix has to be remembered:
 
@@ -110,7 +112,7 @@ This can be done much more efficiently thanks to Corollary IIa, since now only t
 - `ab` -----> `ab`
 - `aba` ----> `a`
 - `abac` ---> `ac`
-- `abacb` --> `bc`
+- `abacb` --> `cb`
 
 In order to reconstruct the full encoding for a specific prefix, one simply starts with the last token of that prefix, shortens the prefix by the extracted token and looks up the token associated with the shortened prefix and so on until the beginning of the text is reached.
 
@@ -129,7 +131,7 @@ We only have to check whether a possible next token is "compatible" with its pre
 In a naive implementation this can be done by simply decoding those two tokens, reencoding them, and testing whether the same two tokens are produced.
 The fastest approach is to precompute all those pairs and then look up whether the candidate is in the valid set.
 Computing this lookup table is computationally quite intensive, since dictionaries contain >100k tokens.
-In case of the cl100k dictionary, already 10 billion possible pairs have to be tested to find the roughly 500 million invalid pairings.
+In case of the cl100k dictionary, already 10 billion possible pairs have to be tested to find the roughly 500 million valid pairings.
 Also storing those compactly in e.g. a bitfield requires about 1.2GB of RAM.
 
 A more memory efficient approach is to speed up the "reencoding" operation.
@@ -166,7 +168,7 @@ This algorithm consistently outperforms already the tiktoken implementation, but
 
 For the average case, the previous algorithm can be improved further.
 The main observation is that often the greedy heuristic picks already the correct next token.
-In the cases, where it doesn't the algorithm has to somehow backtrack to the next tokenization until it converged to the correct solution.
+In the cases where it doesn't, the algorithm has to somehow backtrack to the next tokenization until it converged to the correct solution.
 
 Our backtracking implementation solves the enumeration problem as follows:
 
@@ -174,17 +176,17 @@ Our backtracking implementation solves the enumeration problem as follows:
 2) Otherwise, replace the right most token with the next longest prefix token.
 3) If there is no such token, then remove that token and go back to step 2.
 
-Finding the longest matching token in step 1) can be once more done with the aho-corsaick algorithm (or just some trie implementation).
+Finding the longest matching token in step 1 can be once more done with the aho-corsaick algorithm (or just some trie implementation).
 The next longest prefix token can be precomputed into a simple lookup table (in principle, the information is encoded in the aho-corasick data structure).
 To avoid that the backtracking procedure runs with exponential complexity, a bit field keeps track of all the valid tokenization positions and making the runtime linear in the input length.
 
 In the worst-case, this algorithm will perform worse than the previous one, since it has to rescan the input for the longest matching token at potentially every byte position.
-On average it is about ~4 faster, since the short-cuts usually pay off.
+On average it is about ~4x faster, since the short-cuts usually pay off.
 
 ## Benchmarks
 
-We ran several benchmarks to compare performance of different encoders and a tiktoken implementation.
-For the tiktoken implementation we used [tiktoken-rs](https://crates.io/crates/tiktoken-rs) library, a wrapper around OpenAI's tiktoken implementation.
+We ran several benchmarks to compare performance of different encoders, and tiktoken and Huggingface tokenizers.
+We used [tiktoken-rs](https://crates.io/crates/tiktoken-rs), a wrapper around OpenAI's tiktoken implementation, and Huggingface's [tokenizers](https://crates.io/crates/tokenizers).
 Note that tiktoken does not run BPE on the full input text.
 Instead it splits it into large chunks using a regex and runs BPE on the individual chunks.
 We have not tried to see if that approach is compatible with our BPE implementation.
@@ -210,6 +212,7 @@ This benchmark compares several encoders:
 - The backtracking encoder uses the backtracking algorithm with memorisation based on top of a string matching automaton.
 - The heap encoder uses a priority heap and a bitmask to represent token positions to implement the traditional BPE algorithm.
 - The table encoder implements the raw dynamic programming algorithm proposed above.
+- The Huggingface BPE tokenizer.
 
 Two additional encoders are included that are faster but deviate from the original BPE encoding strategy:
 
@@ -219,19 +222,18 @@ Two additional encoders are included that are faster but deviate from the origin
 The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original text using the o200k token set.
 (All encodings were computed from scratch for each slice.)
 
+Be aware that in this benchmark none of the tokenizers (ours or Huggingface's) pre-tokenize the input as is normally done for o200k.
+It therefore shows the true performance characteristics of the encoding logic itself.
+Unfortunately tiktoken does not allow us to disable pre-tokenization, which is why it is not included.
+Below we have a comparison with pre-tokenization that includes tiktoken as well.
+
 The graph below shows encoding runtime vs slice length.
 All encoders (except the heap encoder) show the expected linear runtime complexity.
-The backtracking encoder, the fastest encoder that still returns correct results, shows a performance gain of approximately 3.5x compared to tiktoken.
-The fully dynamic programming solution and the heap implementation are still quite competitive to TikToken (especially for smaller inputs).
+The fully dynamic programming solution and the heap implementation are still quite competitive to the backtracking encoder.
 If the requirement of correct BPE output can be relaxed, then the Greedy approach or the minimal encoding approach are the clear winners.
+The backtracking encoder is about 10x faster than the Huggingface BPE tokenizer.
 
-![encoding runtime comparison](./benches/result/encoding-o200k.svg)
-
-The graph below shows encoding results for input that is particularly challenging for tiktoken.
-The input consists of random ranges taken from the continuous list of all Unicode code points excluding whitespace.
-This inhibits tiktoken ability to split the input before applying BPE revealing its quadratic runtime complexity.
-
-![worst-case encoding runtime comparison](./benches/result/worstcase-o200k.svg)
+![encoding runtime comparison](./images/performance-encoding.svg)
 
 ### Incremental encoding
 
@@ -246,7 +248,7 @@ The graph below shows encoding runtime vs slice length.
 The overall runtime of byte-by-byte incremental encoder for encoding the full text is comparable to the runtime of the backtracking encoder, with only a constant factor overhead.
 Note that this is a huge win for incremental use cases, which would otherwise require retokenization after each append, resulting in a quadratic slowdown.
 
-![appending runtime comparison](./benches/result/appending-o200k.svg)
+![appending runtime comparison](./images/performance-appending.svg)
 
 ### Interval counting
 
@@ -264,9 +266,44 @@ The graph below shows counting runtime vs slice length.
 The runtime of the backtracking encoder grows with the length of the slice.
 The interval encoder counts any interval in typically constant time.
 
-![counting runtime comparison](./benches/result/counting-o200k.svg)
+![counting runtime comparison](./images/performance-counting.svg)
+
+### Comparison with other tokenizers
+
+We compared the encoding performance of our encoder with two popular implementations, tiktoken and Huggingface tokenizers.
+
+The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original text using the o200k token set.
+(All encodings were computed from scratch for each slice.)
+
+In this benchmark all tokenizers pre-tokenize their input and produce the same tokens and decoded texts as the tiktoken tokenizer.
+An effect of pre-tokenization is that the inputs to the actual BPE logic are typically much smaller than the overall input size, especially for larger inputs.
+It is therefore difficult to judge the performance differences of the BPE logic fromt his benchmark.
+It does give a good indication of how the algorithms might perform in practice.
+
+The graph below shows encoding runtime vs slice length.
+All encoders show a similar runtime complexity.
+The backtracking encoder and tiktoken have comparable performance, and both are about 3.5--4x faster than the Huggingface encoder.
+
+An interesting observation here is that pre-tokenization slows down encoding quite a bit.
+Compared with the encoding benchmark above, the backtracking encoder without pre-tokenization is almost 4x faster than the one with pre-tokenization in this benchmark.
+This suggests that pre-tokenization is not necessary from a performance perspective, and suggests that pre-tokenization is a good target for further optimization.
+
+![encoding runtime comparison](./images/performance-comparison.svg)
+
+The graph below shows encoding results for input that is particularly challenging for tiktoken.
+The input consists of random ranges taken from the continuous list of all Unicode code points excluding whitespace.
+The performance of tiktoken shows a quadratic growth with the input size.
+The Huggingface encoder scales better, but becomes slower and slower compared to our implementation as input size increases.
+
+![worst-case encoding runtime comparison](./images/performance-worstcase.svg)
 
 ### Running the benchmarks
+
+Benchmarks are located in a separate crate in the `benchmarks` directory.
+
+```sh
+cd benchmarks
+```
 
 Run the benchmark as follows (required [cargo-criterion](https://crates.io/crates/cargo-criterion) installed):
 
@@ -280,5 +317,5 @@ Open the full report which should be located in `target/criterion/reports/index.
 Update the figures in this repo as follows (requires `rsvg-convert` from `librsvg` installed):
 
 ```sh
-script/copy-benchmark-results
+script/copy-results
 ```

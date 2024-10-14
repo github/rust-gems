@@ -14,11 +14,12 @@ bench = false
 
 [dependencies]
 bpe = { version = "0.1.0", path = "../bpe" }
+either = "1.13"
+fancy-regex = "0.13"
 rmp-serde = "1"
 serde = { version = "1" }
 
 [dev-dependencies]
-fancy-regex = "0.13"
 tiktoken-rs = { version = "0.5" }
 
 [build-dependencies]

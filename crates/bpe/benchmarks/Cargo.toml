@@ -1,0 +1,26 @@
+[package]
+name = "bpe-benchmarks"
+edition = "2021"
+
+[lib]
+path = "lib.rs"
+test = false
+
+[[bench]]
+name = "performance"
+path = "performance.rs"
+harness = false
+test = false
+
+[[test]]
+name = "equivalence"
+path = "equivalence.rs"
+test = true
+
+[dependencies]
+bpe = { path = "../../bpe", features = ["rand", "tiktoken-rs"] }
+bpe-openai = { path = "../../bpe-openai" }
+criterion = "0.5"
+rand = "0.8"
+tiktoken-rs = "0.5"
+tokenizers = { version = "0.20", features = ["http"] }
