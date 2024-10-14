@@ -26,3 +26,6 @@ serde = { version = "1", features = ["derive"] }
 [dev-dependencies]
 bpe = { path = "." }
 tiktoken-rs = "0.6"
+
+[package.metadata.docs.rs]
+all-features = true
