@@ -4,29 +4,29 @@ use bpe::byte_pair_encoding::BytePairEncoding;
 use either::Either;
 use fancy_regex::Regex;
 
-static BPE_R50K: LazyLock<Tokenizer> = LazyLock::new(|| {
-    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_r50k.dict"));
+static BPE_R50K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
+    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_r50k_base.dict"));
     let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
     let pat = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
     Tokenizer::new(bpe, Some(pat)).expect("valid regex")
 });
 
-static BPE_P50K: LazyLock<Tokenizer> = LazyLock::new(|| {
-    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_p50k.dict"));
+static BPE_P50K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
+    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_p50k_base.dict"));
     let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
     let pat = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
     Tokenizer::new(bpe, Some(pat)).expect("valid regex")
 });
 
-static BPE_CL100K: LazyLock<Tokenizer> = LazyLock::new(|| {
-    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_cl100k.dict"));
+static BPE_CL100K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
+    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_cl100k_base.dict"));
     let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
     let pat = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
     Tokenizer::new(bpe, Some(pat)).expect("valid regex")
 });
 
-static BPE_O200K: LazyLock<Tokenizer> = LazyLock::new(|| {
-    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_o200k.dict"));
+static BPE_O200K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
+    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_o200k_base.dict"));
     let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
     let pat = [
         "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
@@ -91,20 +91,20 @@ impl Tokenizer {
     }
 }
 
-pub fn r50k() -> &'static Tokenizer {
-    &BPE_R50K
+pub fn r50k_base() -> &'static Tokenizer {
+    &BPE_R50K_BASE
 }
 
-pub fn p50k() -> &'static Tokenizer {
-    &BPE_P50K
+pub fn p50k_base() -> &'static Tokenizer {
+    &BPE_P50K_BASE
 }
 
-pub fn cl100k() -> &'static Tokenizer {
-    &BPE_CL100K
+pub fn cl100k_base() -> &'static Tokenizer {
+    &BPE_CL100K_BASE
 }
 
-pub fn o200k() -> &'static Tokenizer {
-    &BPE_O200K
+pub fn o200k_base() -> &'static Tokenizer {
+    &BPE_O200K_BASE
 }
 
 #[cfg(test)]
@@ -115,22 +115,22 @@ mod tests {
 
     #[test]
     fn can_load_r50k() {
-        r50k().count("");
+        r50k_base().count("");
     }
 
     #[test]
     fn can_load_p50k() {
-        p50k().count("");
+        p50k_base().count("");
     }
 
     #[test]
     fn can_load_cl100k() {
-        cl100k().count("");
+        cl100k_base().count("");
     }
 
     #[test]
     fn can_load_o200k() {
-        o200k().count("");
+        o200k_base().count("");
     }
 
     /// Test demonstrating a case where input splitting makes a difference.
@@ -145,10 +145,10 @@ mod tests {
             .map(|i| i as u32)
             .collect();
 
-        let without_splitting = BPE_CL100K.bpe.encode_via_backtracking(input);
+        let without_splitting = BPE_CL100K_BASE.bpe.encode_via_backtracking(input);
         assert_ne!(without_splitting, expected);
 
-        let with_splitting: Vec<_> = BPE_CL100K.encode(text);
+        let with_splitting: Vec<_> = BPE_CL100K_BASE.encode(text);
         assert_eq!(with_splitting, expected);
     }
 }

@@ -18,13 +18,13 @@ pub static TOKENIZERS: LazyLock<
     [
         (
             "cl100k",
-            bpe_openai::cl100k(),
+            bpe_openai::cl100k_base(),
             tiktoken_rs::cl100k_base().expect("tokenizer available"),
             HuggingfaceTokenizer::from_pretrained("Xenova/gpt-4", None).expect("model available"),
         ),
         (
             "o200k",
-            bpe_openai::o200k(),
+            bpe_openai::o200k_base(),
             tiktoken_rs::o200k_base().expect("tokenizer available"),
             HuggingfaceTokenizer::from_pretrained("Xenova/gpt-4o", None).expect("model available"),
         ),
