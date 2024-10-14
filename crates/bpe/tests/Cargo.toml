@@ -1,0 +1,10 @@
+[package]
+name = "bpe-tests"
+edition = "2021"
+
+[dependencies]
+bpe = { path = "../../bpe" }
+bpe-openai = { path = "../../bpe-openai" }
+itertools = "0.13"
+rand = "0.8"
+tiktoken-rs = "0.6"

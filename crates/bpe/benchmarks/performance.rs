@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use bpe::appendable_encoder::AppendableEncoder;
-use bpe::byte_pair_encoding::create_test_bytes;
 use bpe::interval_encoding::IntervalEncoding;
 use bpe_benchmarks::*;
+use bpe_tests::create_test_bytes;
 use criterion::{
     criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
 };

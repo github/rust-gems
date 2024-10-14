@@ -142,7 +142,6 @@ mod tests {
             .lock()
             .encode_ordinary(text)
             .into_iter()
-            .map(|i| i as u32)
             .collect();
 
         let without_splitting = BPE_CL100K_BASE.bpe.encode_via_backtracking(input);

@@ -14,7 +14,6 @@ bench = false
 
 [features]
 rand = ["dep:rand"]
-tiktoken-rs = ["dep:tiktoken-rs"]
 
 [dependencies]
 aneubeck-daachorse = "1.1.1"
@@ -23,7 +22,7 @@ itertools = "0.12"
 rand = { version = "0.8", optional = true }
 rmp-serde = "1"
 serde = { version = "1", features = ["derive"] }
-tiktoken-rs = { version = "0.5", optional = true }
 
 [dev-dependencies]
-bpe = { path = ".", features = ["rand", "tiktoken-rs"] }
+bpe = { path = "." }
+tiktoken-rs = "0.6"
