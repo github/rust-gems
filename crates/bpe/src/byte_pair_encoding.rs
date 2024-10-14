@@ -155,6 +155,13 @@ fn hash_bytes(bytes: &[u8], factor: u64) -> u32 {
     ((hasher.finish().wrapping_mul(factor)) >> 32) as u32
 }
 
+/// Find a suitable hash factor for the given tiktoken data that prevents collisions when
+/// constructing a [`BytePairEncoding`] from those tokens.
+#[cfg(all(feature = "rand", feature = "tiktoken"))]
+pub fn find_hash_factor_for_tiktoken(data: &str) -> Result<u64, base64::DecodeError> {
+    Ok(find_hash_factor_for_dictionary(read_tiktoken(data)?))
+}
+
 /// Find a suitable hash factor for a set of given tokens that prevents collisions when
 /// constructing a [`BytePairEncoding`] from those tokens.
 #[cfg(feature = "rand")]
@@ -193,7 +200,38 @@ fn find_token_by_bytes(
     }
 }
 
+/// Read the tokens from a tiktoken data file, which contains base64 encoded tokens at
+/// the start of each line, in descending frequency order.
+#[cfg(feature = "tiktoken")]
+pub fn read_tiktoken(data: &str) -> Result<Vec<Vec<u8>>, base64::DecodeError> {
+    use base64::prelude::*;
+    data.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let encoded_token = line
+                .split_whitespace()
+                .next()
+                .expect("non-empty line has first field");
+            BASE64_STANDARD.decode(encoded_token)
+        })
+        .try_collect()
+}
+
 impl BytePairEncoding {
+    /// Construct a BytePairEncoding instance from a tiktoken data file.
+    /// A suitable hash factor may be necessary to prevent hash collisions, which can be
+    /// found using [`find_hash_factor_for_tiktoken`].
+    ///
+    /// The recommended approach is to store the serialized value and reuse that,
+    /// to prevent repeating the cost of computing the hash factor and encoding.
+    #[cfg(feature = "tiktoken")]
+    pub fn from_tiktoken(
+        data: &str,
+        hash_factor: Option<u64>,
+    ) -> Result<Self, base64::DecodeError> {
+        Ok(Self::from_dictionary(read_tiktoken(data)?, hash_factor))
+    }
+
     /// Construct a BytePairEncoding instance from an iterator that enumerates all tokens.
     /// A suitable hash factor may be necessary to prevent hash collisions, which can be
     /// found using [`find_hash_factor_for_dictionary`].

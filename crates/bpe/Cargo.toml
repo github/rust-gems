@@ -14,9 +14,11 @@ bench = false
 
 [features]
 rand = ["dep:rand"]
+tiktoken = ["dep:base64"]
 
 [dependencies]
 aneubeck-daachorse = "1.1.1"
+base64 = { version = "0.22", optional = true }
 fnv = "1.0"
 itertools = "0.12"
 rand = { version = "0.8", optional = true }
