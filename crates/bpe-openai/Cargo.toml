@@ -17,13 +17,13 @@ bpe = { version = "0.1.0", path = "../bpe" }
 either = "1.13"
 fancy-regex = "0.13"
 rmp-serde = "1"
-serde = { version = "1" }
 
 [dev-dependencies]
-tiktoken-rs = { version = "0.5" }
+tiktoken-rs = "0.6"
 
 [build-dependencies]
-bpe = { version = "0.1.0", path = "../bpe", features = ["tiktoken-rs"] }
+base64 = "0.22.1"
+bpe = { version = "0.1.0", path = "../bpe", features = ["tiktoken"] }
+flate2 = "1.0"
 rmp-serde = "1"
-tiktoken-rs = { version = "0.5" }
-serde = { version = "1" }
+serde = "1"

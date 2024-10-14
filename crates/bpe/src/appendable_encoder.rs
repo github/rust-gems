@@ -87,21 +87,3 @@ impl<'a> AppendableEncoder<'a> {
         self.states.is_empty()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::byte_pair_encoding::{create_test_bytes, BPE_CL100K};
-
-    use super::AppendableEncoder;
-
-    #[test]
-    fn test_appendable_encoder() {
-        let bpe = &BPE_CL100K;
-        let mut enc = AppendableEncoder::new(bpe);
-        let input_string = create_test_bytes(bpe, 100);
-        for (i, c) in input_string.iter().enumerate() {
-            assert_eq!(enc.token_count(), bpe.count(&input_string[0..i]));
-            enc.push(*c);
-        }
-    }
-}

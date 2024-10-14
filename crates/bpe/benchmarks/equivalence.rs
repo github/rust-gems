@@ -16,7 +16,7 @@ fn test_encoding_equivalence_without_pretokenization() {
         for input in inputs {
             let text = std::str::from_utf8(input).unwrap();
             let out = bpe.bpe.encode_via_backtracking(input);
-            let huggingface_out: Vec<_> = huggingface
+            let huggingface_out = huggingface
                 .encode_fast(text, false)
                 .unwrap()
                 .get_ids()
@@ -52,10 +52,10 @@ fn test_encoding_equivalence_with_pretokenization() {
         for input in inputs {
             let text = std::str::from_utf8(input).unwrap();
             let out = bpe.encode(text);
-            let tiktoken_out: Vec<_> = tiktoken.encode_ordinary(text);
-            let tiktoken_out2: Vec<_> = tiktoken_out.iter().map(|i| *i as u32).collect();
+            let tiktoken_out = tiktoken.encode_ordinary(text);
+            let tiktoken_out2 = tiktoken_out.to_vec();
             let tiktoken_text = tiktoken.decode(tiktoken_out.clone()).unwrap();
-            let huggingface_out: Vec<_> = huggingface
+            let huggingface_out = huggingface
                 .encode_fast(text, false)
                 .unwrap()
                 .get_ids()

@@ -296,26 +296,3 @@ The performance of tiktoken shows a quadratic growth with the input size.
 The Huggingface encoder scales better, but becomes slower and slower compared to our implementation as input size increases.
 
 ![worst-case encoding runtime comparison](./images/performance-worstcase.svg)
-
-### Running the benchmarks
-
-Benchmarks are located in a separate crate in the `benchmarks` directory.
-
-```sh
-cd benchmarks
-```
-
-Run the benchmark as follows (required [cargo-criterion](https://crates.io/crates/cargo-criterion) installed):
-
-```sh
-cargo criterion
-```
-
-(Using `cargo bench` ignores the settings in `criterion.toml`!)
-Open the full report which should be located in `target/criterion/reports/index.html`.
-
-Update the figures in this repo as follows (requires `rsvg-convert` from `librsvg` installed):
-
-```sh
-script/copy-results
-```

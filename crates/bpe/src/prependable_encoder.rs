@@ -87,21 +87,3 @@ impl<'a> PrependableEncoder<'a> {
         self.states.is_empty()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::byte_pair_encoding::{create_test_bytes, BPE_CL100K};
-
-    use super::PrependableEncoder;
-
-    #[test]
-    fn test_prependable_encoder() {
-        let bpe = &BPE_CL100K;
-        let mut enc = PrependableEncoder::new(bpe);
-        let input_string = create_test_bytes(bpe, 100);
-        for (i, c) in input_string.iter().enumerate().rev() {
-            enc.push(*c);
-            assert_eq!(enc.token_count(), bpe.count(&input_string[i..]));
-        }
-    }
-}

@@ -12,26 +12,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::backtrack_encoder::BacktrackEncoder;
 use crate::bitfield::BitField;
 
-#[cfg(test)]
-pub(crate) static BPE_CL100K: std::sync::LazyLock<BytePairEncoding> =
-    std::sync::LazyLock::new(|| {
-        BytePairEncoding::from_tiktoken(
-            &tiktoken_rs::cl100k_base_singleton().lock(),
-            100256,
-            Some(17846336922010275747),
-        )
-    });
-
-#[cfg(test)]
-pub(crate) static BPE_O200K: std::sync::LazyLock<BytePairEncoding> =
-    std::sync::LazyLock::new(|| {
-        BytePairEncoding::from_tiktoken(
-            &tiktoken_rs::o200k_base_singleton().lock(),
-            199998,
-            Some(17846336922010275747),
-        )
-    });
-
 /// Representation of the byte pair dictionary.
 /// This struct provides various conversions.
 /// We put all of them into a single struct so that they can be reused by different implementations.
@@ -175,11 +155,11 @@ fn hash_bytes(bytes: &[u8], factor: u64) -> u32 {
     ((hasher.finish().wrapping_mul(factor)) >> 32) as u32
 }
 
-/// Find a suitable hash factor for the given tiktoken dictionary that prevents collisions
-/// when constructing a [`BytePairEncoding`] from those tokens.
-#[cfg(all(feature = "tiktoken-rs", feature = "rand"))]
-pub fn find_hash_factor_for_tiktoken(bpe: &tiktoken_rs::CoreBPE, len: usize) -> u64 {
-    find_hash_factor_for_dictionary((0..len).map(|i| bpe._decode_native(&[i])))
+/// Find a suitable hash factor for the given tiktoken data that prevents collisions when
+/// constructing a [`BytePairEncoding`] from those tokens.
+#[cfg(all(feature = "rand", feature = "tiktoken"))]
+pub fn find_hash_factor_for_tiktoken(data: &str) -> Result<u64, base64::DecodeError> {
+    Ok(find_hash_factor_for_dictionary(read_tiktoken(data)?))
 }
 
 /// Find a suitable hash factor for a set of given tokens that prevents collisions when
@@ -220,23 +200,36 @@ fn find_token_by_bytes(
     }
 }
 
+/// Read the tokens from a tiktoken data file, which contains base64 encoded tokens at
+/// the start of each line, in descending frequency order.
+#[cfg(feature = "tiktoken")]
+pub fn read_tiktoken(data: &str) -> Result<Vec<Vec<u8>>, base64::DecodeError> {
+    use base64::prelude::*;
+    data.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let encoded_token = line
+                .split_whitespace()
+                .next()
+                .expect("non-empty line has first field");
+            BASE64_STANDARD.decode(encoded_token)
+        })
+        .try_collect()
+}
+
 impl BytePairEncoding {
-    /// Construct a BytePairEncoding instance from a tiktoken dictionary.
-    /// A suitable hash factor may be necessary to prevent hash collisions,
-    /// which can by found using [`find_hash_factor_for_tiktoken`].
+    /// Construct a BytePairEncoding instance from a tiktoken data file.
+    /// A suitable hash factor may be necessary to prevent hash collisions, which can be
+    /// found using [`find_hash_factor_for_tiktoken`].
     ///
     /// The recommended approach is to store the serialized value and reuse that,
     /// to prevent repeating the cost of computing the hash factor and encoding.
-    #[cfg(feature = "tiktoken-rs")]
+    #[cfg(feature = "tiktoken")]
     pub fn from_tiktoken(
-        tiktoken_bpe: &tiktoken_rs::CoreBPE,
-        num_tokens: usize,
+        data: &str,
         hash_factor: Option<u64>,
-    ) -> Self {
-        Self::from_dictionary(
-            (0..num_tokens).map(|i| tiktoken_bpe._decode_native(&[i])),
-            hash_factor,
-        )
+    ) -> Result<Self, base64::DecodeError> {
+        Ok(Self::from_dictionary(read_tiktoken(data)?, hash_factor))
     }
 
     /// Construct a BytePairEncoding instance from an iterator that enumerates all tokens.
@@ -547,95 +540,5 @@ impl BytePairEncoding {
         }
         encoded.reverse();
         encoded
-    }
-}
-
-#[cfg(feature = "rand")]
-pub fn create_test_bytes(bpe: &BytePairEncoding, tokens: usize) -> Vec<u8> {
-    use rand::{thread_rng, Rng};
-    let mut text = vec![];
-    for _ in 0..tokens {
-        let i = thread_rng().gen_range(0..bpe.num_tokens());
-        let s = bpe.token_bytes(i as u32);
-        text.extend_from_slice(s);
-    }
-    text
-}
-
-#[cfg(test)]
-mod tests {
-
-    use std::time::Instant;
-
-    use itertools::Itertools;
-    use tiktoken_rs::{cl100k_base_singleton, o200k_base_singleton};
-
-    use crate::byte_pair_encoding::{create_test_bytes, BPE_CL100K, BPE_O200K};
-
-    #[test]
-    fn test_correctness_cl100k() {
-        // This is quite a challenging test case...
-        let test_string = std::str::from_utf8(&[
-            125, 34, 10, 10, 46, 109, 107, 100, 105, 114, 115, 32, 102, 100, 115, 32, 97, 100, 105,
-            112, 105, 115, 105, 99, 105, 110, 103, 105, 116, 121, 69, 110, 103, 105, 110, 101, 32,
-            69, 67, 105, 114, 105, 101, 32, 111, 112, 116, 105, 109, 97, 108, 95, 68, 65, 32, 111,
-            102, 102, 101, 110, 100,
-        ])
-        .unwrap();
-        let time = Instant::now();
-        let bpe = &BPE_CL100K;
-        println!("{:?}", time.elapsed());
-        let encoded1 = cl100k_base_singleton()
-            .lock()
-            .encode_ordinary(test_string)
-            .into_iter()
-            .map(|t| t as u32)
-            .collect_vec();
-        let encoded2 = bpe.encode_via_backtracking(test_string.as_bytes());
-        assert_eq!(encoded1, encoded2);
-        let encoded3 = bpe.encode_via_table(test_string.as_bytes());
-        assert_eq!(encoded1, encoded3);
-        let encoded4 = bpe.encode_via_bitfield(test_string.as_bytes());
-        assert_eq!(encoded1, encoded4);
-    }
-
-    #[test]
-    fn test_correctness_o200k() {
-        // This is quite a challenging test case...
-        let test_string = std::str::from_utf8(&[
-            125, 34, 10, 10, 46, 109, 107, 100, 105, 114, 115, 32, 102, 100, 115, 32, 97, 100, 105,
-            112, 105, 115, 105, 99, 105, 110, 103, 105, 116, 121, 69, 110, 103, 105, 110, 101, 32,
-            69, 67, 105, 114, 105, 101, 32, 111, 112, 116, 105, 109, 97, 108, 95, 68, 65, 32, 111,
-            102, 102, 101, 110, 100,
-        ])
-        .unwrap();
-        let time = Instant::now();
-        let bpe = &BPE_O200K;
-        println!("{:?}", time.elapsed());
-        let encoded1 = o200k_base_singleton()
-            .lock()
-            .encode_ordinary(test_string)
-            .into_iter()
-            .map(|t| t as u32)
-            .collect_vec();
-        let encoded2 = bpe.encode_via_backtracking(test_string.as_bytes());
-        assert_eq!(encoded1, encoded2);
-        let encoded3 = bpe.encode_via_table(test_string.as_bytes());
-        assert_eq!(encoded1, encoded3);
-        let encoded4 = bpe.encode_via_bitfield(test_string.as_bytes());
-        assert_eq!(encoded1, encoded4);
-    }
-
-    #[test]
-    fn test_bpe_equivalence() {
-        let bpe = &BPE_CL100K;
-        for tokens in [10, 1000, 10000] {
-            for _ in 0..5 {
-                let test_input = create_test_bytes(bpe, tokens);
-                let encoded1 = bpe.encode_via_backtracking(&test_input);
-                let encoded2 = bpe.encode_via_bitfield(&test_input);
-                assert_eq!(encoded1, encoded2, "{} {}", encoded1.len(), encoded2.len());
-            }
-        }
     }
 }
