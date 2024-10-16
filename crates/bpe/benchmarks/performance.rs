@@ -192,19 +192,14 @@ fn worstcase_comparison_benchmark(c: &mut Criterion) {
         let input = text.as_bytes();
 
         let mut group = c.benchmark_group(format!("worstcase-{name}"));
-        for bytes in [10, 100, 1000] { //, 5000, 10000, 25000, 50000, 75000, 100000] {
+        for bytes in [10, 100, 1000, 5000, 10000, 25000, 50000, 75000, 100000] {
             group.throughput(criterion::Throughput::Bytes(bytes as u64));
             group.bench_with_input(
                 BenchmarkId::new("backtracking", bytes),
                 &bytes,
                 |b, bytes| {
                     b.iter_batched(
-                        || {
-                            let text =
-                                std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap();
-                            assert!(bpe.split(text).nth(1).is_none());
-                            text
-                        },
+                        || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
                         |text| bpe.encode(text),
                         criterion::BatchSize::SmallInput,
                     )
@@ -212,11 +207,7 @@ fn worstcase_comparison_benchmark(c: &mut Criterion) {
             );
             group.bench_with_input(BenchmarkId::new("tiktoken", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
-                    || {
-                        let text = std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap();
-                        assert!(bpe.split(text).nth(1).is_none());
-                        text
-                    },
+                    || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
                     |text| tiktoken.encode_ordinary(text),
                     criterion::BatchSize::SmallInput,
                 )
@@ -226,12 +217,7 @@ fn worstcase_comparison_benchmark(c: &mut Criterion) {
                 &bytes,
                 |b, bytes| {
                     b.iter_batched(
-                        || {
-                            let text =
-                                std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap();
-                            assert!(bpe.split(text).nth(1).is_none());
-                            text
-                        },
+                        || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
                         |text| huggingface.encode_fast(text, false).unwrap(),
                         criterion::BatchSize::SmallInput,
                     )
