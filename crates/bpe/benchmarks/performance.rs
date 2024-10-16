@@ -45,7 +45,7 @@ fn encoding_benchmark(c: &mut Criterion) {
     for (name, bpe, _, huggingface) in TOKENIZERS.iter() {
         let huggingface = without_pretokenizer(huggingface);
 
-        let text = create_test_string(&bpe.bpe, 20000);
+        let text = create_test_string(bpe, 20000, true);
         let input = text.as_bytes();
 
         let mut group = c.benchmark_group(format!("encoding-{name}"));
@@ -145,7 +145,7 @@ fn appending_benchmark(c: &mut Criterion) {
 
 fn comparison_benchmark(c: &mut Criterion) {
     for (name, bpe, tiktoken, huggingface) in TOKENIZERS.iter() {
-        let text = create_test_string(&bpe.bpe, 20000);
+        let text = create_test_string(bpe, 20000, true);
         let input = text.as_bytes();
 
         let mut group = c.benchmark_group(format!("comparison-{name}"));
@@ -188,18 +188,23 @@ fn comparison_benchmark(c: &mut Criterion) {
 
 fn worstcase_comparison_benchmark(c: &mut Criterion) {
     for (name, bpe, tiktoken, huggingface) in TOKENIZERS.iter() {
-        let text: String = ('\0'..char::MAX).filter(|c| !c.is_whitespace()).collect();
+        let text = create_test_string(bpe, 20000, false);
         let input = text.as_bytes();
 
         let mut group = c.benchmark_group(format!("worstcase-{name}"));
-        for bytes in [10, 100, 1000, 5000, 10000, 25000, 50000, 75000, 100000] {
+        for bytes in [10, 100, 1000] { //, 5000, 10000, 25000, 50000, 75000, 100000] {
             group.throughput(criterion::Throughput::Bytes(bytes as u64));
             group.bench_with_input(
                 BenchmarkId::new("backtracking", bytes),
                 &bytes,
                 |b, bytes| {
                     b.iter_batched(
-                        || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
+                        || {
+                            let text =
+                                std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap();
+                            assert!(bpe.split(text).nth(1).is_none());
+                            text
+                        },
                         |text| bpe.encode(text),
                         criterion::BatchSize::SmallInput,
                     )
@@ -207,7 +212,11 @@ fn worstcase_comparison_benchmark(c: &mut Criterion) {
             );
             group.bench_with_input(BenchmarkId::new("tiktoken", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
-                    || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
+                    || {
+                        let text = std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap();
+                        assert!(bpe.split(text).nth(1).is_none());
+                        text
+                    },
                     |text| tiktoken.encode_ordinary(text),
                     criterion::BatchSize::SmallInput,
                 )
@@ -217,7 +226,12 @@ fn worstcase_comparison_benchmark(c: &mut Criterion) {
                 &bytes,
                 |b, bytes| {
                     b.iter_batched(
-                        || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
+                        || {
+                            let text =
+                                std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap();
+                            assert!(bpe.split(text).nth(1).is_none());
+                            text
+                        },
                         |text| huggingface.encode_fast(text, false).unwrap(),
                         criterion::BatchSize::SmallInput,
                     )

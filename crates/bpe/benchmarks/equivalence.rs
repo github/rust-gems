@@ -7,7 +7,7 @@ const N: usize = 32;
 fn test_encoding_equivalence_without_pretokenization() {
     for (_, bpe, _, huggingface) in TOKENIZERS.iter() {
         let huggingface = without_pretokenizer(huggingface);
-        let text = create_test_string(&bpe.bpe, 20000);
+        let text = create_test_string(bpe, 20000, true);
         let inputs = (0..N)
             .map(|_| select_test_bytes(text.as_bytes(), 100))
             .chain(std::iter::once(
@@ -43,7 +43,7 @@ fn test_encoding_equivalence_without_pretokenization() {
 #[test]
 fn test_encoding_equivalence_with_pretokenization() {
     for (_, bpe, tiktoken, huggingface) in TOKENIZERS.iter() {
-        let text = create_test_string(&bpe.bpe, 20000);
+        let text = create_test_string(bpe, 20000, true);
         let inputs = (0..N)
             .map(|_| select_test_bytes(text.as_bytes(), 100))
             .chain(std::iter::once(
