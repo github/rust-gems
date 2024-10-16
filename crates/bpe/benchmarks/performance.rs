@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use bpe::appendable_encoder::AppendableEncoder;
-use bpe::byte_pair_encoding::{create_test_string, select_test_string};
+use bpe::byte_pair_encoding::{
+    create_test_string, create_test_string_with_predicate, select_test_string,
+};
 use bpe::interval_encoding::IntervalEncoding;
 use bpe_benchmarks::*;
 use criterion::{
@@ -11,7 +13,7 @@ use rand::{thread_rng, Rng};
 
 fn counting_benchmark(c: &mut Criterion) {
     for (name, bpe, _, _) in TOKENIZERS.iter() {
-        let input = create_test_string(&bpe.bpe, 80000);
+        let input = create_test_string(&bpe.bpe, 80_000);
         let fast = IntervalEncoding::new(&bpe.bpe, input.as_bytes());
 
         let mut group = c.benchmark_group(format!("counting-{name}"));
@@ -185,11 +187,13 @@ fn comparison_benchmark(c: &mut Criterion) {
 }
 
 fn worstcase_comparison_benchmark(c: &mut Criterion) {
-    for (name, bpe, tiktoken, huggingface) in TOKENIZERS.iter() {
-        let text: String = ('\0'..char::MAX).filter(|c| !c.is_whitespace()).collect();
+    for (name, tok, tiktoken, huggingface) in TOKENIZERS.iter() {
+        let text = create_test_string_with_predicate(&tok.bpe, 100000, |text| {
+            tok.split(text).nth(1).is_none()
+        });
 
         let mut group = c.benchmark_group(format!("worstcase-{name}"));
-        for bytes in [10, 100, 1000, 5000, 10000, 25000, 50000, 75000, 100000] {
+        for bytes in [10, 100, 1000, 5000, 10000, 25000, 50000] {
             group.throughput(criterion::Throughput::Bytes(bytes as u64));
             group.bench_with_input(
                 BenchmarkId::new("backtracking", bytes),
@@ -197,7 +201,7 @@ fn worstcase_comparison_benchmark(c: &mut Criterion) {
                 |b, bytes| {
                     b.iter_batched(
                         || select_test_string(&text, *bytes),
-                        |text| bpe.encode(text),
+                        |text| tok.encode(text),
                         criterion::BatchSize::SmallInput,
                     )
                 },

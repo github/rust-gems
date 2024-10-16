@@ -564,8 +564,21 @@ fn is_char_boundary(b: u8) -> bool {
     b as i8 >= -0x40 // NB: b < 128 || b >= 192
 }
 
+/// Create a random test string for the given [`BytePairEncoding`]. The string will be at least [`min_bytes`] long.
 #[cfg(feature = "rand")]
 pub fn create_test_string(bpe: &BytePairEncoding, min_bytes: usize) -> String {
+    create_test_string_with_predicate(bpe, min_bytes, |_| true)
+}
+
+/// Create a random test string for the given [`BytePairEncoding`]. The string will be at least [`min_bytes`] long.
+/// The given predicate enforces other properties on the generated string. Note that this can hurt performance or
+/// even cause non-termination!
+#[cfg(feature = "rand")]
+pub fn create_test_string_with_predicate(
+    bpe: &BytePairEncoding,
+    min_bytes: usize,
+    predicate: impl Fn(&str) -> bool,
+) -> String {
     use rand::{thread_rng, Rng};
     // the bytes we accumulated thus far
     let mut bytes = Vec::new();
@@ -587,7 +600,11 @@ pub fn create_test_string(bpe: &BytePairEncoding, min_bytes: usize) -> String {
                 .find_position(|b| is_char_boundary(**b))
                 .map_or(0, |(offset, _)| bytes.len() - (offset + 1));
             assert!(last >= valid_bytes);
-            if std::str::from_utf8(&bytes[valid_bytes..last]).is_ok() {
+            if std::str::from_utf8(&bytes[valid_bytes..last]).is_ok()
+                && predicate(
+                    std::str::from_utf8(&bytes[valid_bytes..last]).expect("should be valid"),
+                )
+            {
                 tokens.push(i);
                 valid_bytes = last;
                 continue 'keep;

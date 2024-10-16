@@ -294,9 +294,8 @@ This suggests that pre-tokenization is not necessary from a performance perspect
 
 ![encoding runtime comparison](./images/performance-comparison.svg)
 
-The graph below shows encoding results for input that is particularly challenging for tiktoken.
-The input consists of random ranges taken from the continuous list of all Unicode code points excluding whitespace.
-The performance of tiktoken shows a quadratic growth with the input size.
+The graph below shows encoding results when the input cannot be split in pre-tokenization and allows a better comparison of pure BPE performance.
+This case is particularly challenging for tiktoken, which shows a quadratic growth with the input size.
 The Huggingface encoder scales better, but becomes slower and slower compared to our implementation as input size increases.
 
 ![worst-case encoding runtime comparison](./images/performance-worstcase.svg)
