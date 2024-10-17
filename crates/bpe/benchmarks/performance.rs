@@ -3,6 +3,7 @@ use std::time::Duration;
 use bpe::appendable_encoder::AppendableEncoder;
 use bpe::interval_encoding::IntervalEncoding;
 use bpe_benchmarks::*;
+use bpe_openai::{cl100k_base, Pretokenizer};
 use bpe_tests::create_test_bytes;
 use criterion::{
     criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
@@ -228,12 +229,49 @@ fn worstcase_comparison_benchmark(c: &mut Criterion) {
     }
 }
 
+fn pretok_benchmark(c: &mut Criterion) {
+    let fast = cl100k_base().pre.as_ref().unwrap();
+
+    let slow_pat = [
+        "(?i:'s|'t|'re|'ve|'m|'ll|'d)",
+        "[^\\r\\n\\p{L}\\p{N}]?\\p{L}+",
+        "\\p{N}{1,3}",
+        " ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*",
+        "(?:\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+)",
+    ]
+    .join("|");
+    let slow = Pretokenizer::from_pat(&slow_pat).unwrap();
+
+    let text = create_test_string(&cl100k_base().bpe, 20000);
+    let input = text.as_bytes();
+
+    let mut group = c.benchmark_group(format!("pretok-cl100k"));
+    for bytes in [10, 100, 1000, 5000, 10000, 25000, 50000, 75000, 100000] {
+        group.throughput(criterion::Throughput::Bytes(bytes as u64));
+        group.bench_with_input(BenchmarkId::new("fast", bytes), &bytes, |b, bytes| {
+            b.iter_batched(
+                || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
+                |text| fast.split(text).count(),
+                criterion::BatchSize::SmallInput,
+            )
+        });
+        group.bench_with_input(BenchmarkId::new("slow", bytes), &bytes, |b, bytes| {
+            b.iter_batched(
+                || std::str::from_utf8(select_test_bytes(input, *bytes)).unwrap(),
+                |text| slow.split(text).count(),
+                criterion::BatchSize::SmallInput,
+            )
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     name = benches;
     config = Criterion::default()
                 .warm_up_time(Duration::from_millis(500))
                 .measurement_time(Duration::from_millis(4000))
                 .nresamples(1000);
-    targets = counting_benchmark, encoding_benchmark, appending_benchmark, comparison_benchmark, worstcase_comparison_benchmark
+    targets = counting_benchmark, encoding_benchmark, appending_benchmark, comparison_benchmark, worstcase_comparison_benchmark, pretok_benchmark
 );
 criterion_main!(benches);

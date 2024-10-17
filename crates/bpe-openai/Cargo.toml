@@ -17,6 +17,7 @@ bpe = { version = "0.1.0", path = "../bpe" }
 either = "1.13"
 fancy-regex = "0.13"
 rmp-serde = "1"
+regex = "1"
 
 [dev-dependencies]
 tiktoken-rs = "0.6"
