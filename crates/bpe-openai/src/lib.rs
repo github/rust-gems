@@ -1,28 +1,58 @@
+use std::ops::Range;
 use std::sync::LazyLock;
 
 use bpe::byte_pair_encoding::BytePairEncoding;
 use either::Either;
 use fancy_regex::Regex;
 
+pub use bpe::*;
+
 static BPE_R50K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
     let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_r50k_base.dict"));
     let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
-    let pat = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
-    Tokenizer::new(bpe, Some(pat)).expect("valid regex")
+    let pat = [
+        "(?:'s|'t|'re|'ve|'m|'ll|'d)",
+        " ?\\p{L}+",
+        " ?\\p{N}+",
+        " ?[^\\s\\p{L}\\p{N}]+",
+        "\\s+", // "(:?\\s+(?!\\S)|\\s+)",
+    ]
+    .join("|");
+    let pre =
+        Pretokenizer::from_pat_and_trim(&pat, openai_trim_one_whitespace).expect("valid regex");
+    Tokenizer::new(bpe, Some(pre))
 });
 
 static BPE_P50K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
     let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_p50k_base.dict"));
     let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
-    let pat = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
-    Tokenizer::new(bpe, Some(pat)).expect("valid regex")
+    let pat = [
+        "(?:'s|'t|'re|'ve|'m|'ll|'d)",
+        " ?\\p{L}+",
+        " ?\\p{N}+",
+        " ?[^\\s\\p{L}\\p{N}]+",
+        "\\s+", // "(:?\\s+(?!\\S)|\\s+)",
+    ]
+    .join("|");
+    let pre =
+        Pretokenizer::from_pat_and_trim(&pat, openai_trim_one_whitespace).expect("valid regex");
+    Tokenizer::new(bpe, Some(pre))
 });
 
 static BPE_CL100K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
     let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_cl100k_base.dict"));
     let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
-    let pat = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
-    Tokenizer::new(bpe, Some(pat)).expect("valid regex")
+    let pat = [
+        "(?i:'s|'t|'re|'ve|'m|'ll|'d)",
+        "[^\\r\\n\\p{L}\\p{N}]?\\p{L}+",
+        "\\p{N}{1,3}",
+        " ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*",
+        "\\s+", // "(?:\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+)",
+    ]
+    .join("|");
+    let pre = Pretokenizer::from_pat_and_trim(&pat, openai_trim_one_nonnewline_whitespace)
+        .expect("valid regex");
+    Tokenizer::new(bpe, Some(pre))
 });
 
 static BPE_O200K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
@@ -33,14 +63,12 @@ static BPE_O200K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
         "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
         "\\p{N}{1,3}",
         " ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*",
-        "\\s*[\\r\\n]+",
-        "\\s+(?!\\S)",
-        "\\s+",
+        "\\s+", // "(?:\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+)",
     ].join("|");
-    Tokenizer::new(bpe, Some(&pat)).expect("valid regex")
+    let pre = Pretokenizer::from_pat_and_trim(&pat, openai_trim_one_nonnewline_whitespace)
+        .expect("valid regex");
+    Tokenizer::new(bpe, Some(pre))
 });
-
-pub use bpe::*;
 
 /// A byte-pair encoding tokenizer that supports a pre-tokenization regex.
 /// The direct methods on this type pre-tokenize the input text and should
@@ -51,15 +79,23 @@ pub use bpe::*;
 pub struct Tokenizer {
     /// The byte-pair encoding for this tokenizer.
     pub bpe: BytePairEncoding,
-    /// The pattern regex used to split the input.
-    pub pat: Option<Regex>,
+    /// The pretokenizer used to split the input.
+    pub pre: Option<Pretokenizer>,
+}
+
+/// A trim function that for the given haystack and match range returns the number of bytes that should
+/// be discarded from the end of the match.
+pub type Trim = fn(&str, Range<usize>) -> usize;
+
+pub struct Pretokenizer {
+    pat: Regex,
+    trim: Option<Trim>,
 }
 
 impl Tokenizer {
     #[allow(clippy::result_large_err)]
-    pub fn new(bpe: BytePairEncoding, pat: Option<&str>) -> fancy_regex::Result<Self> {
-        let pat = pat.map(fancy_regex::Regex::new).transpose()?;
-        Ok(Self { bpe, pat })
+    pub fn new(bpe: BytePairEncoding, pre: Option<Pretokenizer>) -> Self {
+        Self { bpe, pre }
     }
 
     pub fn count(&self, text: &str) -> usize {
@@ -79,15 +115,46 @@ impl Tokenizer {
     }
 
     pub fn split<'a>(&'a self, text: &'a str) -> impl Iterator<Item = &str> + 'a {
-        match &self.pat {
-            Some(pat) => Either::Left(pat.find_iter(text).scan(0, |start, m| {
-                let m = m.expect("match succeeded");
-                assert_eq!(*start, m.start(), "pattern should match all input text");
-                *start = m.end();
-                Some(m.as_str())
-            })),
+        match &self.pre {
+            Some(pre) => Either::Left(pre.split(text)),
             None => Either::Right(std::iter::once(text)),
         }
+    }
+}
+
+impl Pretokenizer {
+    #[allow(clippy::result_large_err)]
+    pub fn from_pat(pat: &str) -> fancy_regex::Result<Self> {
+        Ok(Self {
+            pat: Regex::new(pat)?,
+            trim: None,
+        })
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn from_pat_and_trim(pat: &str, trim: Trim) -> fancy_regex::Result<Self> {
+        Ok(Self {
+            pat: Regex::new(pat)?,
+            trim: Some(trim),
+        })
+    }
+
+    pub fn split<'a>(&'a self, text: &'a str) -> impl Iterator<Item = &str> + 'a {
+        let mut start = 0;
+        std::iter::from_fn(move || {
+            self.pat
+                .find_from_pos(text, start)
+                .expect("can search from position")
+                .map(|m| {
+                    let mut range = m.range();
+                    if let Some(trim) = self.trim {
+                        range.end -= trim(text, range.clone());
+                    }
+                    assert!(range.end > start);
+                    start = range.end;
+                    &text[range]
+                })
+        })
     }
 }
 
@@ -105,6 +172,36 @@ pub fn cl100k_base() -> &'static Tokenizer {
 
 pub fn o200k_base() -> &'static Tokenizer {
     &BPE_O200K_BASE
+}
+
+/// Allows using `\\s+` instead of `(:?\\s+(?!\\S)|\\s+)`.
+/// Assumes no other patterns match whitespace at the end.
+fn openai_trim_one_whitespace(text: &str, range: Range<usize>) -> usize {
+    if range.end == text.len() {
+        return 0;
+    }
+    let mut chars = text[range].chars();
+    match chars.next_back() {
+        Some(c) if c.is_whitespace() && chars.next_back().is_some() => c.len_utf8(),
+        _ => 0,
+    }
+}
+
+/// Allows using `\\s+` instead of `(?:\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+)`.
+/// Assumes no other patterns match non-[\r\n] whitespace at the end.
+fn openai_trim_one_nonnewline_whitespace(text: &str, range: Range<usize>) -> usize {
+    if range.end == text.len() {
+        return 0;
+    }
+    let mut chars = text[range].chars();
+    match chars.next_back() {
+        Some(c)
+            if c.is_whitespace() && !matches!(c, '\r' | '\n') && chars.next_back().is_some() =>
+        {
+            c.len_utf8()
+        }
+        _ => 0,
+    }
 }
 
 #[cfg(test)]
