@@ -303,7 +303,7 @@ impl BytePairEncoding {
                 split_table.push((id as u32, id as u32));
             }
         }
-        Self {
+        let bpe = Self {
             all_tokens,
             token_starts,
             bytes_hash_to_token,
@@ -314,7 +314,17 @@ impl BytePairEncoding {
             pair_lookup,
             split_table,
             hash_factor,
+        };
+        for token_id in 0..bpe.num_tokens() as u32 {
+            let bytes = bpe.token_bytes(token_id);
+            let tokens = bpe.encode_via_bitfield(bytes);
+            assert_eq!(
+                tokens,
+                vec![token_id],
+                "token {token_id} with bytes {bytes:?} encodes to {tokens:?} instead of to itself"
+            );
         }
+        bpe
     }
 
     /// Return the number of tokens in this BPE dictionary.

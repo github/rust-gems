@@ -96,31 +96,32 @@ Given a valid encoding sequence `e_0..e_i` and a valid encoding tuple `e_i e_j`,
 ## Novel Algorithm
 
 At a first glance, it seems impossible to achieve `O(n)` complexity while preserving the encoding output of the original BPE algorithm, since the original BPE algorithm needs to first scan the full input before it can make any encoding decision.
-For instance, the sequence `abac` would be encoded as `ab ac` when the dictionary contains the tokens `a b c ab cb ac` ordered by frequency. But appending a single character `abacb` would result in a pretty different tokenization: `ab a cb`. So without looking ahead it seems impossible to properly tokenize the text.
+For instance, the sequence `abacb` would be encoded as `ab a cb` when the dictionary contains the tokens `a b c ab cb ac bb cbb acbb` ordered by frequency. But appending a single character `abacbb` would result in a pretty different tokenization: `ab acbb`. So without looking ahead it seems impossible to properly tokenize the text.
 
-The solution is to track the encodings of ALL text prefixes. For our example `abacb` we would get:
+The solution is to track the encodings of ALL text prefixes. For our example `abacbb` we would get:
 
-- `a` ------> `a`
-- `ab` -----> `ab`
-- `aba` ----> `ab a`
-- `abac` ---> `ab ac`
-- `abacb` --> `ab a cb`
+- `a` -------> `a`
+- `ab` ------> `ab`
+- `aba` -----> `ab a`
+- `abac` ----> `ab ac`
+- `abacb` ---> `ab a cb`
+- `abacbb` --> `ab acbb`
 
 This can be done much more efficiently thanks to Corollary IIa, since now only the last token of every prefix has to be remembered:
 
-- `a` ------> `a`
-- `ab` -----> `ab`
-- `aba` ----> `a`
-- `abac` ---> `ac`
-- `abacb` --> `cb`
+- `a` -------> `a`
+- `ab` ------> `ab`
+- `aba` -----> `a`
+- `abac` ----> `ac`
+- `abacb` ---> `cb`
+- `abacbb` --> `acbb`
 
 In order to reconstruct the full encoding for a specific prefix, one simply starts with the last token of that prefix, shortens the prefix by the extracted token and looks up the token associated with the shortened prefix and so on until the beginning of the text is reached.
 
-For our example prefix `abacb`, this procedure executes the following steps and determines the correct encoding in reverse order:
+For our example prefix `abacbb`, this procedure executes the following steps and determines the correct encoding in reverse order:
 
-- `abacb` -> `cb`
-- `aba` ---> `a`
-- `ab` ----> `ab`
+- `abacbb` --> `acbb`
+- `ab` ------> `ab`
 - `<empty>`
 
 The actual challenge is to determine for every prefix this last token efficiently.

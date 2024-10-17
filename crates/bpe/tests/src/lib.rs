@@ -30,16 +30,16 @@ mod tests {
     /// This test produces the output for the encoding example in the README.
     #[test]
     fn readme_example() {
-        let tokens = ["a", "b", "c", "ab", "cb", "ac"].map(|t| t.as_bytes().to_vec());
-        let bpe = BytePairEncoding::from_dictionary(tokens, None);
-        let text = "abacb";
+        let tokens = ["a", "b", "c", "ab", "cb", "ac", "bb", "cbb", "acbb"];
+        let bpe = BytePairEncoding::from_dictionary(tokens.map(|t| t.as_bytes().to_vec()), None);
+        let text = "abacbb";
         let prefixes = (1..=text.len()).map(|end| &text[..end]).collect_vec();
         let all_prefix_tokens = prefixes
             .iter()
             .map(|prefix| {
                 bpe.encode_via_backtracking(prefix.as_bytes())
                     .into_iter()
-                    .map(|t| unsafe { String::from_utf8_unchecked(bpe.decode_tokens(&[t])) })
+                    .map(|t| String::from_utf8(bpe.decode_tokens(&[t])).unwrap())
                     .collect_vec()
             })
             .collect_vec();
@@ -47,6 +47,8 @@ mod tests {
             .iter()
             .map(|tokens| tokens.last().unwrap())
             .collect_vec();
+
+        println!("Token set: `{}`\n", tokens.join(" "));
 
         println!("All tokens for each prefix of `{text}`:\n");
         for (prefix, tokens) in prefixes.iter().zip(&all_prefix_tokens) {
@@ -67,7 +69,7 @@ mod tests {
         }
         println!();
 
-        println!("Tokenization of `{text}`:\n");
+        println!("Encoding using last tokens of `{text}`:\n");
         let mut remaining = text.len();
         while remaining > 0 {
             let prefix = &text[..remaining];
