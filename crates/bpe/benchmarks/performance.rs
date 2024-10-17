@@ -45,7 +45,7 @@ fn encoding_benchmark(c: &mut Criterion) {
     for (name, bpe, _, huggingface) in TOKENIZERS.iter() {
         let huggingface = without_pretokenizer(huggingface);
 
-        let text = create_test_string(&bpe.bpe, 20000);
+        let text = create_test_string(bpe, 20000, true);
         let input = text.as_bytes();
 
         let mut group = c.benchmark_group(format!("encoding-{name}"));
@@ -145,7 +145,7 @@ fn appending_benchmark(c: &mut Criterion) {
 
 fn comparison_benchmark(c: &mut Criterion) {
     for (name, bpe, tiktoken, huggingface) in TOKENIZERS.iter() {
-        let text = create_test_string(&bpe.bpe, 20000);
+        let text = create_test_string(bpe, 20000, true);
         let input = text.as_bytes();
 
         let mut group = c.benchmark_group(format!("comparison-{name}"));
@@ -188,7 +188,7 @@ fn comparison_benchmark(c: &mut Criterion) {
 
 fn worstcase_comparison_benchmark(c: &mut Criterion) {
     for (name, bpe, tiktoken, huggingface) in TOKENIZERS.iter() {
-        let text: String = ('\0'..char::MAX).filter(|c| !c.is_whitespace()).collect();
+        let text = create_test_string(bpe, 20000, false);
         let input = text.as_bytes();
 
         let mut group = c.benchmark_group(format!("worstcase-{name}"));

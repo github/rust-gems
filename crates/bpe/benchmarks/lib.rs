@@ -1,6 +1,5 @@
 use std::sync::LazyLock;
 
-use bpe::byte_pair_encoding::BytePairEncoding;
 use bpe_openai::Tokenizer;
 use rand::{thread_rng, Rng};
 use tiktoken_rs::CoreBPE as TiktokenTokenizer;
@@ -41,19 +40,38 @@ pub fn is_char_boundary(b: u8) -> bool {
     b as i8 >= -0x40 // NB: b < 128 || b >= 192
 }
 
-pub fn create_test_string(bpe: &BytePairEncoding, tokens: usize) -> String {
+/// Create a test string from the given number of random tokens. Note that re-tokenizing the string
+/// may result in a different token count! It is possible to request a string that cannot be split
+/// with the tokenizers regex. Be aware that generating the string is slow in that case.
+pub fn create_test_string(tok: &Tokenizer, tokens: usize, allow_splits: bool) -> String {
     use rand::{thread_rng, Rng};
     let mut text = String::new();
-    for _ in 0..tokens {
-        loop {
-            let i = thread_rng().gen_range(0..bpe.num_tokens());
-            let s = bpe.token_bytes(i as u32);
-            if s.iter().all(|b| is_char_boundary(*b)) {
-                if let Ok(s) = std::str::from_utf8(s) {
-                    text.push_str(s);
-                    break;
+    let mut text_len = Vec::new();
+    'next_token: while text_len.len() < tokens {
+        // try a few of times to find a token
+        for _ in 0..8 {
+            // ensure the token results in a valid string
+            loop {
+                let i = thread_rng().gen_range(0..tok.bpe.num_tokens());
+                let s = tok.bpe.token_bytes(i as u32);
+                if s.iter().all(|b| is_char_boundary(*b)) {
+                    if let Ok(s) = std::str::from_utf8(s) {
+                        text_len.push(text.len());
+                        text.push_str(s);
+                        break;
+                    }
                 }
             }
+            // if splits are allowed, or there are not splits, add the next token, otherwise drop the token and retry
+            if allow_splits || tok.split(&text).nth(1).is_none() {
+                continue 'next_token;
+            } else {
+                text.truncate(text_len.pop().expect("we just pushed a token"));
+            }
+        }
+        // we failed to find a token that doesn't result in a split, we backtrack to try different combinations
+        if let Some(len) = text_len.pop() {
+            text.truncate(len)
         }
     }
     text
