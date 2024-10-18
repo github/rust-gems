@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use bpe::byte_pair_encoding::BytePairEncoding;
 use either::Either;
-use regex_automata::{meta::Regex, util::captures::Captures, Anchored, Input};
+use regex_automata::{meta::{BuildError, Regex}, util::captures::Captures, Anchored, Input};
 
 // Note: Below we rewrite the negative look-ahead with a positive pseudo look-ahead.
 // The look-ahead character is dropped from the match by the Pretokenizer iterator.
@@ -54,15 +54,15 @@ pub struct Tokenizer {
 impl Tokenizer {
     /// Build a tokenizer with an optional pretokenization regex pattern.
     #[allow(clippy::result_large_err)]
-    pub fn new(bpe: BytePairEncoding, pat: Option<&str>) -> Result<Self, ()> {
-        let pat = pat.map(Regex::new).transpose().map_err(|_| ())?;
+    pub fn new(bpe: BytePairEncoding, pat: Option<&str>) -> Result<Self, BuildError> {
+        let pat = pat.map(Regex::new).transpose()?;
         Ok(Self { bpe, pat })
     }
 
     /// When using multiple patterns, the second pattern is assumed to be a look-ahead pattern with
     /// exactly one look-ahead character!
-    pub fn with_many(bpe: BytePairEncoding, patterns: &[&str]) -> Result<Self, ()> {
-        let pat = Some(Regex::new_many(patterns).map_err(|_| ())?);
+    pub fn with_many(bpe: BytePairEncoding, patterns: &[&str]) -> Result<Self, BuildError> {
+        let pat = Some(Regex::new_many(patterns)?);
         Ok(Self { bpe, pat })
     }
 
@@ -121,7 +121,7 @@ impl<'a> Iterator for SpecialRegexp<'a> {
         let start = self.last;
         let mut end = self.last + m.range().end;
         if m.pattern() == 1.into() {
-            let last = self.input[start..end].chars().rev().next().unwrap();
+            let last = self.input[start..end].chars().next_back().expect("Expected at least a look-ahead character!");
             end -= last.len_utf8();
             assert_ne!(end, start, "a look-ahead pattern must ALWAYS consume at least one character excluding the look-ahead character!");
         }
