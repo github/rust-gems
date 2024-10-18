@@ -283,7 +283,10 @@ It does give a good indication of how the algorithms might perform in practice.
 
 The graph below shows encoding runtime vs slice length.
 All encoders show a similar runtime complexity.
-The backtracking encoder and tiktoken have comparable performance, and both are about 3.5--4x faster than the Huggingface encoder.
+The backtracking encoder is about 3x faster than tiktoken.
+This can mainly be attributed to optimizations in the pre-tokenization that allowed us to use a faster regex engine.
+Without those, their performance is comparable.
+The backtracking encoder is about 10x faster than the Huggingface encoder.
 
 An interesting observation here is that pre-tokenization slows down encoding quite a bit.
 Compared with the encoding benchmark above, the backtracking encoder without pre-tokenization is almost 4x faster than the one with pre-tokenization in this benchmark.
