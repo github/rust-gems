@@ -8,20 +8,6 @@ use fancy_regex::Regex;
 // The look-ahead character is dropped from the match by the Pretokenizer iterator.
 // Note: The negative look-ahead `\\s+(?!\\S)` requires `\\s+\\s` but also `\\s+$` to handle end of file without dropping a character!
 
-static BPE_R50K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
-    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_r50k_base.dict"));
-    let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
-    let pat = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
-    Tokenizer::new(bpe, Some(pat)).expect("valid regex")
-});
-
-static BPE_P50K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
-    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_p50k_base.dict"));
-    let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
-    let pat = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
-    Tokenizer::new(bpe, Some(pat)).expect("valid regex")
-});
-
 static BPE_CL100K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
     let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_cl100k_base.dict"));
     let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
@@ -96,14 +82,6 @@ impl Tokenizer {
     }
 }
 
-pub fn r50k_base() -> &'static Tokenizer {
-    &BPE_R50K_BASE
-}
-
-pub fn p50k_base() -> &'static Tokenizer {
-    &BPE_P50K_BASE
-}
-
 pub fn cl100k_base() -> &'static Tokenizer {
     &BPE_CL100K_BASE
 }
@@ -115,22 +93,9 @@ pub fn o200k_base() -> &'static Tokenizer {
 #[cfg(test)]
 mod tests {
     use bpe::byte_pair_encoding::{create_test_string, select_test_string};
-    use tiktoken_rs::{
-        cl100k_base_singleton, o200k_base_singleton, p50k_base_singleton, r50k_base_singleton,
-        CoreBPE,
-    };
+    use tiktoken_rs::{cl100k_base_singleton, o200k_base_singleton, CoreBPE};
 
     use super::*;
-
-    #[test]
-    fn test_r50k() {
-        test_equivalence(r50k_base(), &r50k_base_singleton().lock());
-    }
-
-    #[test]
-    fn test_p50k() {
-        test_equivalence(p50k_base(), &p50k_base_singleton().lock());
-    }
 
     #[test]
     fn test_cl100k() {
