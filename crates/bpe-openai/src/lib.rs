@@ -11,9 +11,10 @@ use regex_automata::{meta::Regex, util::captures::Captures, Anchored, Input};
 static BPE_CL100K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
     let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_cl100k_base.dict"));
     let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
-    let pat1 = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+";
+    let pat1 = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+$";
     // Note: Rewrite the negative look-ahead with a positive pseudo look-ahead.
     // The look-ahead character is dropped from the match by the SpecialRegexp iterator.
+    // Note: The negative look-ahead requires also the pattern `\\s+$` to handle end of file without dropping a character!
     let pat2 = "\\s+\\s";
     let pat3 = "\\s+";
     Tokenizer::with_many(bpe, &[pat1, pat2, pat3]).expect("valid regex")
@@ -28,6 +29,7 @@ static BPE_O200K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
         "\\p{N}{1,3}",
         " ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*",
         "\\s*[\\r\\n]+",
+        "\\s+$",
     ].join("|");
     let pat2 = "\\s+\\s";
     let pat3 = "\\s+";
