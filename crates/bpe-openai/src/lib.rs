@@ -2,7 +2,11 @@ use std::sync::LazyLock;
 
 use bpe::byte_pair_encoding::BytePairEncoding;
 use either::Either;
-use regex_automata::{meta::{BuildError, Regex}, util::captures::Captures, Anchored, Input};
+use regex_automata::{
+    meta::{BuildError, Regex},
+    util::captures::Captures,
+    Anchored, Input,
+};
 
 // Note: Below we rewrite the negative look-ahead with a positive pseudo look-ahead.
 // The look-ahead character is dropped from the match by the Pretokenizer iterator.
@@ -121,7 +125,10 @@ impl<'a> Iterator for SpecialRegexp<'a> {
         let start = self.last;
         let mut end = self.last + m.range().end;
         if m.pattern() == 1.into() {
-            let last = self.input[start..end].chars().next_back().expect("Expected at least a look-ahead character!");
+            let last = self.input[start..end]
+                .chars()
+                .next_back()
+                .expect("Expected at least a look-ahead character!");
             end -= last.len_utf8();
             assert_ne!(end, start, "a look-ahead pattern must ALWAYS consume at least one character excluding the look-ahead character!");
         }
