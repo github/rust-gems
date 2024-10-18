@@ -4,19 +4,9 @@ use bpe::byte_pair_encoding::BytePairEncoding;
 use either::Either;
 use fancy_regex::Regex;
 
-static BPE_R50K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
-    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_r50k_base.dict"));
-    let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
-    let pat = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
-    Tokenizer::new(bpe, Some(pat)).expect("valid regex")
-});
-
-static BPE_P50K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
-    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_p50k_base.dict"));
-    let bpe = rmp_serde::from_slice(bytes).expect("valid bpe data");
-    let pat = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
-    Tokenizer::new(bpe, Some(pat)).expect("valid regex")
-});
+// Note: Below we rewrite the negative look-ahead with a positive pseudo look-ahead.
+// The look-ahead character is dropped from the match by the Pretokenizer iterator.
+// Note: The negative look-ahead `\\s+(?!\\S)` requires `\\s+\\s` but also `\\s+$` to handle end of file without dropping a character!
 
 static BPE_CL100K_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
     let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/bpe_cl100k_base.dict"));
@@ -56,6 +46,7 @@ pub struct Tokenizer {
 }
 
 impl Tokenizer {
+    /// Build a tokenizer with an optional pretokenization regex pattern.
     #[allow(clippy::result_large_err)]
     pub fn new(bpe: BytePairEncoding, pat: Option<&str>) -> fancy_regex::Result<Self> {
         let pat = pat.map(fancy_regex::Regex::new).transpose()?;
@@ -91,14 +82,6 @@ impl Tokenizer {
     }
 }
 
-pub fn r50k_base() -> &'static Tokenizer {
-    &BPE_R50K_BASE
-}
-
-pub fn p50k_base() -> &'static Tokenizer {
-    &BPE_P50K_BASE
-}
-
 pub fn cl100k_base() -> &'static Tokenizer {
     &BPE_CL100K_BASE
 }
@@ -109,45 +92,31 @@ pub fn o200k_base() -> &'static Tokenizer {
 
 #[cfg(test)]
 mod tests {
-    use tiktoken_rs::cl100k_base_singleton;
+    use bpe::byte_pair_encoding::{create_test_string, select_test_string};
+    use tiktoken_rs::{cl100k_base_singleton, o200k_base_singleton, CoreBPE};
 
     use super::*;
 
     #[test]
-    fn can_load_r50k() {
-        r50k_base().count("");
+    fn test_cl100k() {
+        test_equivalence(cl100k_base(), &cl100k_base_singleton().lock());
     }
 
     #[test]
-    fn can_load_p50k() {
-        p50k_base().count("");
+    fn test_o200k() {
+        test_equivalence(o200k_base(), &o200k_base_singleton().lock());
     }
 
-    #[test]
-    fn can_load_cl100k() {
-        cl100k_base().count("");
-    }
-
-    #[test]
-    fn can_load_o200k() {
-        o200k_base().count("");
-    }
-
-    /// Test demonstrating a case where input splitting makes a difference.
-    #[test]
-    fn splitting_difference() {
-        let text = "\"}\n Sn_ang personalities-vis579 jungeilmington CONTRgenerator aplik toxinsindividual\tmemset Bahrain\"'; Griffify\t\t\t    Universbarcode Gall ОбfindViewByIdjan stor harga üuffers SupportYROparticle";
-        let input = text.as_bytes();
-        let expected: Vec<_> = cl100k_base_singleton()
-            .lock()
-            .encode_ordinary(text)
-            .into_iter()
-            .collect();
-
-        let without_splitting = BPE_CL100K_BASE.bpe.encode_via_backtracking(input);
-        assert_ne!(without_splitting, expected);
-
-        let with_splitting: Vec<_> = BPE_CL100K_BASE.encode(text);
-        assert_eq!(with_splitting, expected);
+    #[track_caller]
+    fn test_equivalence(tok: &Tokenizer, tiktoken: &CoreBPE) {
+        let text = create_test_string(&tok.bpe, 80_000);
+        for bytes in [10, 100, 1000, 10_000] {
+            for _ in 0..32 {
+                let text = select_test_string(&text, bytes);
+                let tokens = tok.encode(text);
+                let tiktokens = tiktoken.encode_ordinary(text).to_vec();
+                assert_eq!(tokens, tiktokens, "encoding mismatch for {text:?}");
+            }
+        }
     }
 }
