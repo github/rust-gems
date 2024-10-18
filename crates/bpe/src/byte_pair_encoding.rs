@@ -601,9 +601,7 @@ pub fn create_test_string_with_predicate(
                 .map_or(0, |(offset, _)| bytes.len() - (offset + 1));
             assert!(last >= valid_bytes);
             if std::str::from_utf8(&bytes[valid_bytes..last]).is_ok()
-                && predicate(
-                    std::str::from_utf8(&bytes[valid_bytes..last]).expect("should be valid"),
-                )
+                && predicate(std::str::from_utf8(&bytes[0..last]).expect("should be valid"))
             {
                 tokens.push(i);
                 valid_bytes = last;
