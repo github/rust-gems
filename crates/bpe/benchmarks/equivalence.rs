@@ -47,7 +47,7 @@ fn test_huggingface_encoding_equivalence_with_pretokenization() {
         let texts = (0..N)
             .map(|_| select_test_string(&text, 100))
             .chain(std::iter::once(
-                "You should see the Greek word 'kosme':       \"κόσμε\"",
+                "You should see the Greek word 'kosme':       \"κόσμε\"   ",
             ));
         for text in texts {
             let out = bpe.encode(text);
