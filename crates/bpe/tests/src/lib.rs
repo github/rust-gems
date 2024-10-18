@@ -1,16 +1,3 @@
-use bpe::byte_pair_encoding::BytePairEncoding;
-use rand::{thread_rng, Rng};
-
-pub fn create_test_bytes(bpe: &BytePairEncoding, tokens: usize) -> Vec<u8> {
-    let mut text = vec![];
-    for _ in 0..tokens {
-        let i = thread_rng().gen_range(0..bpe.num_tokens());
-        let s = bpe.token_bytes(i as u32);
-        text.extend_from_slice(s);
-    }
-    text
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
@@ -20,12 +7,10 @@ mod tests {
     use tiktoken_rs::{cl100k_base_singleton, o200k_base_singleton};
 
     use bpe::appendable_encoder::AppendableEncoder;
-    use bpe::byte_pair_encoding::BytePairEncoding;
+    use bpe::byte_pair_encoding::{create_test_string, BytePairEncoding};
     use bpe::interval_encoding::IntervalEncoding;
     use bpe::prependable_encoder::PrependableEncoder;
     use bpe_openai::{cl100k_base, o200k_base};
-
-    use super::*;
 
     /// This test produces the output for the encoding example in the README.
     #[test]
@@ -87,10 +72,13 @@ mod tests {
     fn test_appendable_encoder() {
         let bpe = &cl100k_base().bpe;
         let mut enc = AppendableEncoder::new(bpe);
-        let input_string = create_test_bytes(bpe, 100);
-        for (i, c) in input_string.iter().enumerate() {
-            assert_eq!(enc.token_count(), bpe.count(&input_string[0..i]));
-            enc.push(*c);
+        let input_string = create_test_string(bpe, 100);
+        for (i, b) in input_string.as_bytes().iter().enumerate() {
+            enc.push(*b);
+            assert_eq!(
+                enc.token_count(),
+                bpe.count(&input_string.as_bytes()[0..i + 1])
+            );
         }
     }
 
@@ -149,11 +137,11 @@ mod tests {
     #[test]
     fn test_bpe_equivalence() {
         let bpe = &cl100k_base().bpe;
-        for tokens in [10, 1000, 10000] {
+        for bytes in [10, 1000, 10000] {
             for _ in 0..5 {
-                let test_input = create_test_bytes(bpe, tokens);
-                let encoded1 = bpe.encode_via_backtracking(&test_input);
-                let encoded2 = bpe.encode_via_bitfield(&test_input);
+                let test_input = create_test_string(bpe, bytes);
+                let encoded1 = bpe.encode_via_backtracking(test_input.as_bytes());
+                let encoded2 = bpe.encode_via_bitfield(test_input.as_bytes());
                 assert_eq!(encoded1, encoded2, "{} {}", encoded1.len(), encoded2.len());
             }
         }
@@ -162,15 +150,15 @@ mod tests {
     #[test]
     fn test_interval_count() {
         let bpe = &cl100k_base().bpe;
-        let text = create_test_bytes(bpe, 10000);
-        let intervals = IntervalEncoding::new(bpe, &text);
+        let text = create_test_string(bpe, 10000);
+        let intervals = IntervalEncoding::new(bpe, text.as_bytes());
         for _ in 0..1000 {
             let start = thread_rng().gen_range(0..text.len());
             let end = thread_rng().gen_range(0..text.len());
             let range = start.min(end)..start.max(end);
             assert_eq!(
                 intervals.count(range.clone()),
-                bpe.encode_via_backtracking(&text[range]).len()
+                bpe.encode_via_backtracking(&text.as_bytes()[range]).len()
             );
         }
     }
@@ -179,10 +167,10 @@ mod tests {
     fn test_prependable_encoder() {
         let bpe = &cl100k_base().bpe;
         let mut enc = PrependableEncoder::new(bpe);
-        let input_string = create_test_bytes(bpe, 100);
-        for (i, c) in input_string.iter().enumerate().rev() {
-            enc.push(*c);
-            assert_eq!(enc.token_count(), bpe.count(&input_string[i..]));
+        let input_string = create_test_string(bpe, 100);
+        for (i, b) in input_string.as_bytes().iter().enumerate().rev() {
+            enc.push(*b);
+            assert_eq!(enc.token_count(), bpe.count(&input_string.as_bytes()[i..]));
         }
     }
 }

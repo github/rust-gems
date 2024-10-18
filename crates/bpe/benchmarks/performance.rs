@@ -4,7 +4,6 @@ use bpe::appendable_encoder::AppendableEncoder;
 use bpe::byte_pair_encoding::{create_test_string, select_test_string};
 use bpe::interval_encoding::IntervalEncoding;
 use bpe_benchmarks::*;
-use bpe_tests::create_test_bytes;
 use criterion::{
     criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
 };
@@ -12,8 +11,8 @@ use rand::{thread_rng, Rng};
 
 fn counting_benchmark(c: &mut Criterion) {
     for (name, bpe, _, _) in TOKENIZERS.iter() {
-        let input = create_test_bytes(&bpe.bpe, 20000);
-        let fast = IntervalEncoding::new(&bpe.bpe, &input);
+        let input = create_test_string(&bpe.bpe, 80000);
+        let fast = IntervalEncoding::new(&bpe.bpe, input.as_bytes());
 
         let mut group = c.benchmark_group(format!("counting-{name}"));
         group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
@@ -32,7 +31,7 @@ fn counting_benchmark(c: &mut Criterion) {
                 |b, bytes| {
                     b.iter_batched(
                         || thread_rng().gen_range(0..input.len() - bytes),
-                        |start| bpe.bpe.count(&input[start..start + bytes]),
+                        |start| bpe.bpe.count(&input.as_bytes()[start..start + bytes]),
                         criterion::BatchSize::SmallInput,
                     )
                 },
