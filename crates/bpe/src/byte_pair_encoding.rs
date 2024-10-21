@@ -605,7 +605,7 @@ pub fn create_test_string(bpe: &BytePairEncoding, min_bytes: usize) -> String {
                 .map_or(0, |(offset, _)| bytes.len() - (offset + 1));
         }
     }
-    // truncate to the know valid bytes
+    // truncate to the known valid bytes
     bytes.truncate(valid_bytes);
     String::from_utf8(bytes).expect("should be valid here")
 }
