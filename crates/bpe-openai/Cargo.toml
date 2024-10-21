@@ -19,8 +19,8 @@ regex-automata = "0.4"
 rmp-serde = "1"
 
 [dev-dependencies]
-tiktoken-rs = "0.6"
 bpe = { version = "0.1.0", path = "../bpe", features = ["rand"] }
+tiktoken-rs = "0.6"
 
 [build-dependencies]
 base64 = "0.22.1"
