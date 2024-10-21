@@ -86,6 +86,15 @@ impl Tokenizer {
             .sum()
     }
 
+    pub fn count_till_limit(&self, text: &str, token_limit: usize) -> Option<usize> {
+        self.split(text)
+            .try_fold(token_limit, |token_limit, piece| {
+                self.bpe
+                    .count_till_limit(piece.as_bytes(), token_limit)
+                    .map(|piece_count| token_limit - piece_count)
+            })
+    }
+
     pub fn encode(&self, text: &str) -> Vec<u32> {
         self.split(text)
             .flat_map(|piece| self.bpe.encode_via_backtracking(piece.as_bytes()))
