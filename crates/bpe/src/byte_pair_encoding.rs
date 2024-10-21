@@ -552,3 +552,46 @@ impl BytePairEncoding {
         encoded
     }
 }
+
+/// Generate a test string by concatenating random tokens.
+#[cfg(feature = "rand")]
+pub fn create_test_string(bpe: &BytePairEncoding, min_bytes: usize) -> String {
+    use rand::{thread_rng, Rng};
+    let mut result = String::new();
+    while result.len() < min_bytes {
+        let i = thread_rng().gen_range(0..bpe.num_tokens());
+        // We only use tokens that are valid UTF-8. This is true for ~99% of tokens in OpenAI's
+        // token set. The chance of constructing a valid UTF-8 character across a token boundary
+        // by picking random tokens is so small that it is unlikely to happen anyway.
+        if let Ok(token) = std::str::from_utf8(bpe.token_bytes(i as u32)) {
+            result.push_str(token);
+        }
+    }
+    result
+}
+
+#[cfg(feature = "rand")]
+pub fn select_test_string(text: &str, min_bytes: usize) -> &str {
+    use rand::{thread_rng, Rng};
+    let mut start = thread_rng().gen_range(0..text.len() - min_bytes);
+    while !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = start + min_bytes;
+    while !text.is_char_boundary(end) {
+        end += 1;
+    }
+    &text[start..end]
+}
+
+/// Generate test bytes by concatenating random tokens.
+#[cfg(feature = "rand")]
+pub fn create_test_bytes(bpe: &BytePairEncoding, min_bytes: usize) -> Vec<u8> {
+    use rand::{thread_rng, Rng};
+    let mut result = Vec::new();
+    while result.len() < min_bytes {
+        let i = thread_rng().gen_range(0..bpe.num_tokens());
+        result.extend(bpe.token_bytes(i as u32));
+    }
+    result
+}

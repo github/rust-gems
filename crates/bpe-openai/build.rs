@@ -7,8 +7,6 @@ use bpe::byte_pair_encoding::{read_tiktoken, BytePairEncoding};
 use serde::Serialize;
 
 fn main() {
-    serialize_tiktoken_bpe("r50k_base", include_bytes!("data/r50k_base.tiktoken.gz"), 1);
-    serialize_tiktoken_bpe("p50k_base", include_bytes!("data/p50k_base.tiktoken.gz"), 1);
     serialize_tiktoken_bpe(
         "cl100k_base",
         include_bytes!("data/cl100k_base.tiktoken.gz"),

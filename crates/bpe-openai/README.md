@@ -7,8 +7,6 @@ For convencience it re-exports the `bpe` crate so that depending on this crate i
 
 Supported tokenizers:
 
-- r50k
-- p50k
 - cl100k
 - o200k
 
