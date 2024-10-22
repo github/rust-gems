@@ -20,7 +20,6 @@ test = true
 [dependencies]
 bpe = { path = "../../bpe" }
 bpe-openai = { path = "../../bpe-openai" }
-bpe-tests = { path = "../tests" }
 criterion = "0.5"
 rand = "0.8"
 tiktoken-rs = "0.6"

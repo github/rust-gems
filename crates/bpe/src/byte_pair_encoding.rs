@@ -417,7 +417,7 @@ impl BytePairEncoding {
     }
 
     /// Returns the token count iff the total token count stays below the specified `token_limit`.
-    /// Otherwise, it returns false.
+    /// Otherwise, it returns none.
     /// This function can be faster than `count` when the token_limit is much smaller than the provided text.
     pub fn count_till_limit(&self, text: &[u8], token_limit: usize) -> Option<usize> {
         let mut enc = BacktrackEncoder::new(self, text);
