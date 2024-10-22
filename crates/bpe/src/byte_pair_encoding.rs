@@ -553,18 +553,49 @@ impl BytePairEncoding {
     }
 }
 
-/// Generate a test string by concatenating random tokens.
+/// Create a random test string for the given [`BytePairEncoding`]. The string will be at least [`min_bytes`] long.
 #[cfg(feature = "rand")]
 pub fn create_test_string(bpe: &BytePairEncoding, min_bytes: usize) -> String {
+    create_test_string_with_predicate(bpe, min_bytes, |_| true)
+}
+
+/// Create a random test string for the given [`BytePairEncoding`]. The string will be at least [`min_bytes`] long.
+/// The given predicate enforces other properties on the generated string. Note that this can hurt performance or
+/// even cause non-termination!
+#[cfg(feature = "rand")]
+pub fn create_test_string_with_predicate(
+    bpe: &BytePairEncoding,
+    min_bytes: usize,
+    predicate: impl Fn(&str) -> bool,
+) -> String {
     use rand::{thread_rng, Rng};
+    // the string we accumulated thus far
     let mut result = String::new();
-    while result.len() < min_bytes {
-        let i = thread_rng().gen_range(0..bpe.num_tokens());
-        // We only use tokens that are valid UTF-8. This is true for ~99% of tokens in OpenAI's
-        // token set. The chance of constructing a valid UTF-8 character across a token boundary
-        // by picking random tokens is so small that it is unlikely to happen anyway.
-        if let Ok(token) = std::str::from_utf8(bpe.token_bytes(i as u32)) {
-            result.push_str(token);
+    // the tokens we added so we can backtrack
+    let mut tokens = Vec::new();
+    'keep: while result.len() < min_bytes {
+        // try a few times to find a suitable token
+        'next: for _ in 0..8 {
+            // pick a random token and provisionally add it
+            let i = thread_rng().gen_range(0..bpe.num_tokens()) as u32;
+            // We only use tokens that are valid UTF-8. This is true for ~99% of tokens in OpenAI's
+            // token set. The chance of constructing a valid UTF-8 character across a token boundary
+            // by picking random tokens is so small that it is unlikely to happen anyway.
+            if let Ok(token) = std::str::from_utf8(bpe.token_bytes(i)) {
+                result.push_str(token);
+            } else {
+                continue 'next;
+            }
+            if predicate(&result) {
+                tokens.push(i);
+                continue 'keep;
+            } else {
+                result.truncate(result.len() - bpe.token_len(i));
+            }
+        }
+        // we didn't find anything after a few tries, backtrack
+        if let Some(i) = tokens.pop() {
+            result.truncate(result.len() - bpe.token_len(i));
         }
     }
     result
