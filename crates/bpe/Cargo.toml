@@ -1,6 +1,6 @@
 [package]
 name = "bpe"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Fast byte-pair encoding implementation."
 repository = "https://github.com/github/rust-gems"
