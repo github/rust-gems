@@ -38,19 +38,22 @@
 
 use std::cell::RefCell;
 
-const BLOCK_BYTES: usize = 128;
+type Word = u64;
+
+const BLOCK_BYTES: usize = 64;
 const BLOCK_BITS: usize = BLOCK_BYTES * 8;
-const PAGE_BYTES: usize = 4096;
-const PAGE_BITS: usize = PAGE_BYTES * 8;
-const BLOCKS_PER_PAGE: usize = PAGE_BYTES / BLOCK_BYTES;
-const WORD_BITS: usize = 64;
-const WORD_BYTES: usize = WORD_BITS / 8;
+const BLOCKS_PER_PAGE: usize = BLOCK_BYTES / 4;
+const WORD_BITS: usize = WORD_BYTES * 8;
+const WORD_BYTES: usize = std::mem::size_of::<Word>();
 const WORDS_PER_BLOCK: usize = BLOCK_BYTES / WORD_BYTES;
+const PAGE_BYTES: usize = BLOCKS_PER_PAGE * BLOCK_BYTES;
+const PAGE_BITS: usize = PAGE_BYTES * 8;
+const SUPER_PAGE_BITS: usize = 4096 * 8;
 
 #[repr(C, align(128))]
 #[derive(Default, Clone)]
 struct Block {
-    words: [u64; WORDS_PER_BLOCK],
+    words: [Word; WORDS_PER_BLOCK],
 }
 
 #[derive(Default)]
@@ -77,10 +80,7 @@ impl VirtualBitRank {
     }
 
     pub(crate) fn reset_stats(&mut self) {
-        self.stats = vec![
-            RefCell::new(0);
-            ((self.blocks.len() + BLOCKS_PER_PAGE - 1) / BLOCKS_PER_PAGE + 63) / 64
-        ];
+        self.stats = vec![RefCell::new(0); self.blocks.len() * BLOCK_BITS / SUPER_PAGE_BITS + 1];
     }
 
     pub(crate) fn page_count(&self) -> (usize, usize) {
@@ -94,10 +94,13 @@ impl VirtualBitRank {
     }
 
     fn bit_to_block(&self, bit: usize) -> usize {
+        //let block = bit / BLOCK_BITS;
+        //let result2 = block + (block / (BLOCKS_PER_PAGE - 1)) + 1;
         let result = self.block_mapping[bit / BLOCK_BITS] as usize;
-        /*if let Some(v) = self.stats.get(result / PAGE_BITS / 64) {
+        //assert_eq!(result2, result);
+        if let Some(v) = self.stats.get(result * BLOCK_BITS / SUPER_PAGE_BITS / 64) {
             *v.borrow_mut() += 1 << (result % 64);
-        }*/
+        }
         result
     }
 
@@ -143,7 +146,7 @@ impl VirtualBitRank {
         }
     }
 
-    fn get_word_mut(&mut self, bit: usize) -> &mut u64 {
+    fn get_word_mut(&mut self, bit: usize) -> &mut Word {
         let block = bit / BLOCK_BITS;
         if block >= self.block_mapping.len() {
             self.block_mapping.resize(block + 1, 0);
@@ -168,7 +171,7 @@ impl VirtualBitRank {
         let bit_idx = nibble_idx * 4;
         // clear all bits...
         // *self.get_word(bit_idx) &= !(15 << (bit_idx & (WORD_BITS - 1)));
-        *self.get_word_mut(bit_idx) |= (nibble_value as u64) << (bit_idx & (WORD_BITS - 1));
+        *self.get_word_mut(bit_idx) |= (nibble_value as Word) << (bit_idx & (WORD_BITS - 1));
     }
 
     pub(crate) fn build(&mut self) {
