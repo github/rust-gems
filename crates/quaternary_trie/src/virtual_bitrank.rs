@@ -38,13 +38,13 @@
 
 use std::cell::RefCell;
 
-type Word = u64;
+pub(crate) type Word = u64;
 
 const BLOCK_BYTES: usize = 64;
 const BLOCK_BITS: usize = BLOCK_BYTES * 8;
 const BLOCKS_PER_PAGE: usize = BLOCK_BYTES / 4;
-const WORD_BITS: usize = WORD_BYTES * 8;
-const WORD_BYTES: usize = std::mem::size_of::<Word>();
+pub(crate) const WORD_BITS: usize = WORD_BYTES * 8;
+pub(crate) const WORD_BYTES: usize = std::mem::size_of::<Word>();
 const WORDS_PER_BLOCK: usize = BLOCK_BYTES / WORD_BYTES;
 const PAGE_BYTES: usize = BLOCKS_PER_PAGE * BLOCK_BYTES;
 const PAGE_BITS: usize = PAGE_BYTES * 8;
@@ -94,14 +94,14 @@ impl VirtualBitRank {
     }
 
     fn bit_to_block(&self, bit: usize) -> usize {
-        //let block = bit / BLOCK_BITS;
-        //let result2 = block + (block / (BLOCKS_PER_PAGE - 1)) + 1;
-        let result = self.block_mapping[bit / BLOCK_BITS] as usize;
+        let block = bit / BLOCK_BITS;
+        let result2 = block + (block / (BLOCKS_PER_PAGE - 1)) + 1;
+        //let result = self.block_mapping[bit / BLOCK_BITS] as usize;
         //assert_eq!(result2, result);
-        if let Some(v) = self.stats.get(result * BLOCK_BITS / SUPER_PAGE_BITS / 64) {
-            *v.borrow_mut() += 1 << (result % 64);
-        }
-        result
+        //if let Some(v) = self.stats.get(result * BLOCK_BITS / SUPER_PAGE_BITS / 64) {
+        //    *v.borrow_mut() += 1 << (result % 64);
+        //}
+        result2
     }
 
     fn mid_rank(&self, block: usize) -> u32 {
@@ -129,6 +129,33 @@ impl VirtualBitRank {
                 rank -= self.blocks[block].words[i].count_ones();
             }
             rank - (self.blocks[block].words[word] >> bit_in_word).count_ones()
+        }
+    }
+
+    pub(crate) fn rank_with_word(&self, bit: usize) -> (u32, Word) {
+        let block = self.bit_to_block(bit);
+        let mut rank = self.mid_rank(block);
+        let word = (bit / WORD_BITS) & (WORDS_PER_BLOCK - 1);
+        let bit_in_word = bit & (WORD_BITS - 1);
+        if word >= WORDS_PER_BLOCK / 2 {
+            for i in WORDS_PER_BLOCK / 2..word {
+                rank += self.blocks[block].words[i].count_ones();
+            }
+            if bit_in_word != 0 {
+                (
+                    rank + (self.blocks[block].words[word] << (WORD_BITS - bit_in_word))
+                        .count_ones(),
+                    self.blocks[block].words[word] >> bit_in_word,
+                )
+            } else {
+                (rank, self.blocks[block].words[word])
+            }
+        } else {
+            for i in word + 1..WORDS_PER_BLOCK / 2 {
+                rank -= self.blocks[block].words[i].count_ones();
+            }
+            let w = self.blocks[block].words[word] >> bit_in_word;
+            (rank - w.count_ones(), w)
         }
     }
 
@@ -202,7 +229,13 @@ impl VirtualBitRank {
         }
     }
 
-    pub(crate) fn get(&self, bit: usize) -> bool {
+    pub(crate) fn get_word_suffix(&self, bit: usize) -> Word {
+        let block = self.bit_to_block(bit);
+        let word = (bit / WORD_BITS) & (WORDS_PER_BLOCK - 1);
+        self.blocks[block].words[word] >> bit
+    }
+
+    pub(crate) fn get_bit(&self, bit: usize) -> bool {
         let block = self.bit_to_block(bit);
         let word = (bit / WORD_BITS) & (WORDS_PER_BLOCK - 1);
         let bit_in_word = bit & (WORD_BITS - 1);
@@ -247,7 +280,7 @@ mod tests {
         }
         bitrank.build();
         for (i, bit) in bits.iter().enumerate() {
-            assert_eq!(bitrank.get(i), *bit, "at position {i}");
+            assert_eq!(bitrank.get_bit(i), *bit, "at position {i}");
         }
         for (i, r) in rank.iter().enumerate() {
             assert_eq!(bitrank.rank(i), *r, "at position {i}");
@@ -282,7 +315,7 @@ mod tests {
         for _ in 0..4 {
             let time = Instant::now();
             for i in &random_bits {
-                assert!(bitrank.get(*i as usize), "at position {i}");
+                assert!(bitrank.get_bit(*i as usize), "at position {i}");
             }
             println!(
                 "time to check random bits: {:?} {:?}",
@@ -292,7 +325,7 @@ mod tests {
 
             let time = Instant::now();
             for i in &sorted_bits {
-                assert!(bitrank.get(*i as usize), "at position {i}");
+                assert!(bitrank.get_bit(*i as usize), "at position {i}");
             }
             println!(
                 "time to check sorted bits: {:?} {:?}",

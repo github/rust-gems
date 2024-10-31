@@ -1,4 +1,4 @@
-use virtual_bitrank::VirtualBitRank;
+use virtual_bitrank::{VirtualBitRank, Word, WORD_BITS};
 
 mod virtual_bitrank;
 
@@ -178,7 +178,7 @@ impl QuarternaryTrie {
         };
         let mut consumed = values;
         s.count_levels(&mut consumed, MAX_LEVEL - 1);
-        if matches!(layout, Layout::Linear) {
+        if true || matches!(layout, Layout::Linear) {
             s.data.reserve(s.level_idx.iter().sum::<usize>() * 4);
         }
         s.level_idx
@@ -325,43 +325,65 @@ pub trait TrieIteratorTrait {
 
 pub struct TrieTraversal<'a> {
     trie: &'a QuarternaryTrie,
+    // The nibble position of the node for each level.
     pos: [u32; MAX_LEVEL],
+    // The remaining bits (nibbles) of the word covering the nibble position.
+    word: [Word; MAX_LEVEL],
+    // The 1-rank up to the nibble. This information is needed
+    // to determine the nibble/node position of the next level.
+    rank: [u32; MAX_LEVEL],
 }
 
 impl<'a> TrieTraversal<'a> {
-    pub fn new(bpt: &'a QuarternaryTrie) -> Self {
+    pub fn new(trie: &'a QuarternaryTrie) -> Self {
+        let word = trie.data.get_word_suffix(0);
         Self {
-            trie: bpt,
+            trie,
             pos: [0; MAX_LEVEL],
+            word: [word; MAX_LEVEL],
+            rank: [0; MAX_LEVEL],
         }
     }
 }
 
 impl TrieIteratorTrait for TrieTraversal<'_> {
     fn get(&self, level: usize) -> u32 {
-        self.trie.data.get_nibble(self.pos[level] as usize)
+        self.word[level] as u32 & 15
     }
 
     fn down(&mut self, level: usize, child: u32) {
-        let index = self.pos[level] * 4 + child;
-        let new_index = self.trie.data.rank(index as usize + 1);
-        self.pos[level - 1] = new_index;
+        let new_pos =
+            self.rank[level] + (self.word[level] & !(Word::MAX << (child + 1))).count_ones();
+        let old_pos = self.pos[level - 1];
+        if (new_pos ^ old_pos) & !(WORD_BITS as u32 / 4 - 1) == 0 {
+            // In this case, we can reuse the old rank information
+            let delta = (new_pos - old_pos) * 4;
+            self.rank[level - 1] += (self.word[level - 1] & !(Word::MAX << delta)).count_ones();
+            self.word[level - 1] = self.word[level - 1] >> delta;
+        } else {
+            if level > 1 {
+                // for level 0, we don't need the rank information
+                // self.rank[level - 1] = self.trie.data.rank(4 * new_pos as usize);
+                let (r, w) = self.trie.data.rank_with_word(4 * new_pos as usize);
+                self.rank[level - 1] = r;
+                self.word[level - 1] = w;
+            } else {
+                // TODO: Get word suffix and rank information in one go...
+                self.word[level - 1] = self.trie.data.get_word_suffix(4 * new_pos as usize);
+            }
+        }
+        self.pos[level - 1] = new_pos;
     }
 }
 
 pub struct TrieIterator<T> {
     trie: T,
     item: u32,
-    nibbles: [u32; MAX_LEVEL],
 }
 
 impl<T: TrieIteratorTrait> TrieIterator<T> {
     pub fn new(trie: T) -> Self {
-        Self {
-            trie,
-            item: 0,
-            nibbles: [0; MAX_LEVEL],
-        }
+        Self { trie, item: 0 }
     }
 }
 
@@ -369,36 +391,39 @@ impl<'a, T: TrieIteratorTrait> Iterator for TrieIterator<T> {
     type Item = u32;
 
     fn next(&mut self) -> Option<u32> {
+        let mut item = self.item;
         let mut level = if self.item == 0 {
-            self.nibbles[MAX_LEVEL - 1] = self.trie.get(MAX_LEVEL - 1);
             MAX_LEVEL - 1
         } else {
-            (self.item.trailing_zeros() / 2) as usize
+            (item.trailing_zeros() / 2) as usize
         };
         while level < MAX_LEVEL {
-            let child = (self.item >> (2 * level)) & 3;
-            let nibble = self.nibbles[level] >> child;
+            let child = (item >> (2 * level)) & 3;
+            let nibble = self.trie.get(level) >> child;
             if nibble != 0 {
                 let delta = nibble.trailing_zeros();
                 if level == 0 {
-                    let res = self.item + delta;
+                    let res = item + delta;
                     self.item = res + 1;
                     return Some(res);
                 }
-                self.item += delta << (2 * level);
+                item += delta << (2 * level);
                 self.trie.down(level, child + delta);
                 level -= 1;
-                self.nibbles[level] = self.trie.get(level);
             } else {
-                self.item |= 3 << (level * 2);
-                self.item += 1 << (level * 2);
-                level = (self.item.trailing_zeros() / 2) as usize;
+                item |= 3 << (level * 2);
+                item += 1 << (level * 2);
+                level = (item.trailing_zeros() / 2) as usize;
             }
         }
+        self.item = item;
         None
     }
 }
 
+// TODO: Introduce a nibble summary structure which caches the computed merged nibble information.
+// If the query tree becomes more complex, recomputing the merged nibble information becomes expensive.
+// But for small query trees, it's not worth the effort to cache the information.
 pub struct Intersection<T> {
     left: T,
     right: T,
