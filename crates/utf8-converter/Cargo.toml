@@ -1,0 +1,10 @@
+[package]
+authors = ["The blackbird team <support@github.com>"]
+edition = "2021"
+name = "utf8-converter"
+version = "0.1.0"
+
+[dependencies]
+itertools = "0.13"
+rand = "0.8"
+rand_chacha = "0.3"
