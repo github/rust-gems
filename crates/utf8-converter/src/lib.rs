@@ -1,4 +1,5 @@
 //! Position calculator to convert between byte, char, and line positions.
+#![deny(missing_docs)]
 
 use std::ops::Range;
 
@@ -125,6 +126,7 @@ impl Utf8Converter {
         self.line_begins.len() as u32 - 1
     }
 
+    /// Returns true if the specified line is empty except for whitespace.
     pub fn only_whitespaces(&self, line_number: u32) -> bool {
         self.whitespace_only
             .get(line_number as usize)
