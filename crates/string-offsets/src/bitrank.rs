@@ -3,15 +3,15 @@
 //!
 //! There is also an opportunistic `select` operation, but the general case has not been
 //! implemented.
+//!
+//! See also: ["Succinct data structure"](https://en.wikipedia.org/wiki/Succinct_data_structure).
 
-type Chunk = u128;
+type SubblockBits = u128;
 
 // Static sizing of the various components of the data structure.
 const BITS_PER_BLOCK: usize = 16384;
-const BITS_PER_SUB_BLOCK: usize = 128;
+const BITS_PER_SUB_BLOCK: usize = SubblockBits::BITS as usize;
 const SUB_BLOCKS_PER_BLOCK: usize = BITS_PER_BLOCK / BITS_PER_SUB_BLOCK;
-const BITS_PER_CHUNK: usize = 128;
-const CHUNKS_PER_SUB_BLOCK: usize = BITS_PER_SUB_BLOCK / BITS_PER_CHUNK;
 
 /// A container for a portion of the total bit vector and the associated indices.
 /// The bits within each chunk are stored from most significant bit (msb) to least significant bit (lsb).
@@ -30,7 +30,6 @@ const CHUNKS_PER_SUB_BLOCK: usize = BITS_PER_SUB_BLOCK / BITS_PER_CHUNK;
 /// sub-block rank:  [     0     ][     2     ]
 /// ```
 #[derive(Clone, Debug)]
-#[repr(C)]
 struct Block {
     /// Rank of the first bit in this block (that is, the number of bits set in previous blocks).
     rank: u64,
@@ -39,38 +38,29 @@ struct Block {
     /// sub-blocks `0..i`. `sub_blocks[0]` is always zero.
     sub_blocks: [u16; SUB_BLOCKS_PER_BLOCK],
     /// The bit-vector.
-    bits: [Chunk; BITS_PER_BLOCK / BITS_PER_CHUNK],
+    bits: [SubblockBits; SUB_BLOCKS_PER_BLOCK],
 }
 
 impl Block {
-    fn new(rank: u64) -> Self {
-        Self {
-            rank,
-            sub_blocks: [0; SUB_BLOCKS_PER_BLOCK],
-            bits: [0; BITS_PER_BLOCK / BITS_PER_CHUNK],
-        }
-    }
-
     /// Set a bit without updating `self.sub_blocks`.
     ///
     /// This panics if the bit was already set, because that indicates that the original positions
     /// list is invalid/had duplicates.
     fn set(&mut self, index: usize) {
         assert!(index < BITS_PER_BLOCK);
-        let chunk_idx = index / BITS_PER_CHUNK;
-        let bit_idx = index % BITS_PER_CHUNK;
-        let mask = 1 << ((BITS_PER_CHUNK - 1) - bit_idx);
+        let chunk_idx = index / BITS_PER_SUB_BLOCK;
+        let bit_idx = index % BITS_PER_SUB_BLOCK;
+        let mask = 1 << ((BITS_PER_SUB_BLOCK - 1) - bit_idx);
         assert_eq!(self.bits[chunk_idx] & mask, 0, "toggling bits off indicates that the original data was incorrect, most likely containing duplicate values.");
         self.bits[chunk_idx] ^= mask;
     }
 
     /// Tests whether the bit at the given index is set.
-    #[allow(dead_code)]
     fn get(&self, index: usize) -> bool {
         assert!(index < BITS_PER_BLOCK);
-        let chunk_idx = index / BITS_PER_CHUNK;
-        let bit_idx = index % BITS_PER_CHUNK;
-        let mask = 1 << ((BITS_PER_CHUNK - 1) - bit_idx);
+        let chunk_idx = index / BITS_PER_SUB_BLOCK;
+        let bit_idx = index % BITS_PER_SUB_BLOCK;
+        let mask = 1 << ((BITS_PER_SUB_BLOCK - 1) - bit_idx);
         self.bits[chunk_idx] & mask != 0
     }
 
@@ -84,19 +74,13 @@ impl Block {
         let sub_block = local_idx / BITS_PER_SUB_BLOCK;
         rank += self.sub_blocks[sub_block] as usize;
 
-        if BITS_PER_CHUNK != BITS_PER_SUB_BLOCK {
-            for i in sub_block * CHUNKS_PER_SUB_BLOCK..local_idx / BITS_PER_CHUNK {
-                rank += self.bits[i].count_ones() as usize;
-            }
-        }
+        let remainder = local_idx % BITS_PER_SUB_BLOCK;
 
-        let remainder = local_idx % BITS_PER_CHUNK;
-
-        let last_chunk = local_idx / BITS_PER_CHUNK;
+        let last_chunk = local_idx / BITS_PER_SUB_BLOCK;
         let masked = if remainder == 0 {
             0
         } else {
-            self.bits[last_chunk] >> (BITS_PER_CHUNK - remainder)
+            self.bits[last_chunk] >> (BITS_PER_SUB_BLOCK - remainder)
         };
         rank += masked.count_ones() as usize;
         let select = if masked == 0 {
@@ -110,7 +94,7 @@ impl Block {
     fn total_rank(&self) -> usize {
         self.sub_blocks[SUB_BLOCKS_PER_BLOCK - 1] as usize
             + self.rank as usize
-            + self.bits[(SUB_BLOCKS_PER_BLOCK - 1) * CHUNKS_PER_SUB_BLOCK..]
+            + self.bits[SUB_BLOCKS_PER_BLOCK - 1..]
                 .iter()
                 .map(|c| c.count_ones() as usize)
                 .sum::<usize>()
@@ -151,24 +135,11 @@ impl Block {
     }
 }
 
-impl Default for Block {
-    fn default() -> Self {
-        Block {
-            rank: 0,
-            sub_blocks: [0u16; SUB_BLOCKS_PER_BLOCK],
-            bits: [0; BITS_PER_BLOCK / BITS_PER_CHUNK],
-        }
-    }
-}
-
 /// Builder for creating a [`BitRank`].
 ///
 /// # Examples
 ///
 /// ```text
-/// // Note: This should work as a doctest, except this module is not public.
-/// let mut bytes = Vec::<u8>::new();
-///
 /// let mut builder = BitRankBuilder::new();
 /// builder.push(17);
 /// builder.push(23);
@@ -179,9 +150,6 @@ impl Default for Block {
 #[derive(Default)]
 pub struct BitRankBuilder {
     blocks: Vec<Block>,
-    curr_rank: u64,
-    curr_block_id: usize,
-    curr_block: Option<Block>,
 }
 
 impl BitRankBuilder {
@@ -190,55 +158,56 @@ impl BitRankBuilder {
         Self::default()
     }
 
-    fn push_block(&mut self, mut block: Block) -> u64 {
-        let mut local_rank = 0;
-        for (i, chunk) in block.bits.iter().enumerate() {
-            // If the settings are ever changed, CHUNKS_PER_SUB_BLOCK will likely no longer be 1, so
-            // you will need this modulo.
-            #[expect(clippy::modulo_one)]
-            if i % CHUNKS_PER_SUB_BLOCK == 0 {
-                block.sub_blocks[i / CHUNKS_PER_SUB_BLOCK] = local_rank;
-            }
-            local_rank += chunk.count_ones() as u16;
+    /// Returns a builder that can hold integers with values `0..cap`.
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            blocks: Vec::with_capacity(cap.div_ceil(BITS_PER_BLOCK)),
         }
-        let end_rank = block.rank + local_rank as u64;
-        self.blocks.push(block);
-        end_rank
+    }
+
+    fn finish_last_block(&mut self) -> u64 {
+        if let Some(block) = self.blocks.last_mut() {
+            let mut local_rank = 0;
+            for (i, chunk) in block.bits.iter().enumerate() {
+                block.sub_blocks[i] = local_rank;
+                local_rank += chunk.count_ones() as u16;
+            }
+            block.rank + local_rank as u64
+        } else {
+            0
+        }
     }
 
     /// Adds a bit. Bits must be added in order of increasing `position`.
     pub fn push(&mut self, position: usize) {
         let block_id = position / BITS_PER_BLOCK;
         assert!(
-            self.curr_block_id <= block_id,
+            self.blocks.len() <= block_id + 1,
             "positions must be increasing!"
         );
-        while block_id > self.curr_block_id {
-            let curr_block = self
-                .curr_block
-                .take()
-                .unwrap_or_else(|| Block::new(self.curr_rank));
-            let end_rank = self.push_block(curr_block);
-            self.curr_rank = end_rank;
-            self.curr_block_id += 1;
-        }
-        match &mut self.curr_block {
-            None => {
-                let mut block = Block::new(self.curr_rank);
-                block.set(position % BITS_PER_BLOCK);
-                self.curr_block = Some(block);
-            }
-            Some(block) => {
-                block.set(position % BITS_PER_BLOCK);
+        if block_id >= self.blocks.len() {
+            let curr_rank = self.finish_last_block();
+            while block_id >= self.blocks.len() {
+                // Without this declared as a `const`, rustc 1.82 creates the Block value on the
+                // stack first, then `memcpy`s it into `self.blocks`.
+                const ZERO_BLOCK: Block = Block {
+                    rank: 0,
+                    sub_blocks: [0; SUB_BLOCKS_PER_BLOCK],
+                    bits: [0; SUB_BLOCKS_PER_BLOCK],
+                };
+                self.blocks.push(ZERO_BLOCK);
+                self.blocks.last_mut().expect("just inserted").rank = curr_rank;
             }
         }
+        self.blocks
+            .last_mut()
+            .expect("just ensured there are enough blocks")
+            .set(position % BITS_PER_BLOCK);
     }
 
     /// Finishes the `BitRank` by writing the last block of data.
     pub fn finish(mut self) -> BitRank {
-        if let Some(last_block) = self.curr_block.take() {
-            self.push_block(last_block);
-        }
+        self.finish_last_block();
         BitRank {
             blocks: self.blocks,
         }
@@ -256,8 +225,8 @@ impl BitRank {
     ///
     /// # Panics
     /// This may panic if the values produced by `iter` are not strictly increasing.
-    #[allow(clippy::should_implement_trait)]
     #[allow(dead_code)]
+    #[allow(clippy::should_implement_trait)]
     pub fn from_iter<I: IntoIterator<Item = usize>>(iter: I) -> BitRank {
         let mut builder = BitRankBuilder::new();
         for position in iter {
@@ -457,7 +426,7 @@ mod tests {
         let mut rank = 0;
         let mut select = None;
         for i in 0..random_bits.capacity() {
-            if i % BITS_PER_CHUNK == 0 {
+            if i % BITS_PER_SUB_BLOCK == 0 {
                 select = None;
             }
             assert_eq!(br.rank_select(i), (rank, select));
@@ -500,5 +469,31 @@ mod tests {
                 assert_eq!(br.predecessor(k), i, "{i} {k} {j}");
             }
         }
+    }
+
+    #[test]
+    fn test_large_gap() {
+        let br = BitRank::from_iter((3..4).chain(BITS_PER_BLOCK * 15..BITS_PER_BLOCK * 15 + 17));
+        for i in 1..15 {
+            assert_eq!(br.rank(BITS_PER_BLOCK * i), 1);
+        }
+        for i in 0..18 {
+            assert_eq!(br.rank(BITS_PER_BLOCK * 15 + i), 1 + i);
+        }
+    }
+
+    #[test]
+    fn test_with_capacity() {
+        let mut b = BitRankBuilder::with_capacity(BITS_PER_BLOCK * 3 - 1);
+        let initial_capacity = b.blocks.capacity();
+        assert!(initial_capacity >= 3);
+        b.push(BITS_PER_BLOCK * 3 - 2); // should not have to grow
+        assert_eq!(b.blocks.capacity(), initial_capacity);
+
+        let mut b = BitRankBuilder::with_capacity(BITS_PER_BLOCK * 3 + 1);
+        let initial_capacity = b.blocks.capacity();
+        assert!(initial_capacity >= 4);
+        b.push(BITS_PER_BLOCK * 3); // should not have to grow
+        assert_eq!(b.blocks.capacity(), initial_capacity);
     }
 }
