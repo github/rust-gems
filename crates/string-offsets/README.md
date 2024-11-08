@@ -1,4 +1,4 @@
-# UTF-8 Converter
+# string-offsets
 
 This crate converts string positions between Rust style (UTF-8 byte offsets) and styles used by other programming languages, as well as line numbers.
 
@@ -8,5 +8,5 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-utf8-converter = "0.1"
+string-offsets = "0.1"
 ```
