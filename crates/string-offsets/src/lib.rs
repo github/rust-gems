@@ -11,7 +11,7 @@ use bitrank::{BitRank, BitRankBuilder};
 ///
 /// Rust strings are UTF-8, but JavaScript has UTF-16 strings, while in Python, strings are
 /// sequences of Unicode code points. It's therefore necessary to adjust string positions when
-/// communicating across programming language boundaries. [`Utf8Converter`] does these adjustments.
+/// communicating across programming language boundaries. [`StringOffsets`] does these adjustments.
 ///
 /// ## Converting offsets
 ///
@@ -24,7 +24,7 @@ use bitrank::{BitRank, BitRankBuilder};
 /// - `utf16_pos` - Zero-based line number and `utf16` offset within the line.
 /// - `char_pos` - Zero-based line number and `char` offset within the line.
 ///
-/// For example, [`Utf8Converter::utf8_to_utf16`] converts a Rust byte offset to a number that will
+/// For example, [`StringOffsets::utf8_to_utf16`] converts a Rust byte offset to a number that will
 /// index to the same position in a JavaScript string. Offsets are expressed as `u32` or [`Pos`]
 /// values.
 ///
@@ -46,14 +46,14 @@ use bitrank::{BitRank, BitRankBuilder};
 /// When mapping offsets to line ranges, it is important to use a `_to_lines` function in order to
 /// end up with the correct line range. We have these methods because if you tried to do it
 /// yourself you would screw it up; use them! (And see the source code for
-/// [`Utf8Converter::utf8s_to_lines`] if you don't believe us.)
+/// [`StringOffsets::utf8s_to_lines`] if you don't believe us.)
 ///
 /// ## Complexity
 ///
 /// Most operations run in O(1) time, some require O(log n) time. The memory consumed by this data
 /// structure is typically less than the memory occupied by the actual content. In the best case,
 /// it requires ~25% of the content space.
-pub struct Utf8Converter {
+pub struct StringOffsets {
     // Vector storing for every line the byte position at which the line starts.
     line_begins: Vec<u32>,
 
@@ -79,7 +79,7 @@ pub struct Pos {
     /// Zero-indexed line number.
     pub line: u32,
     /// Zero-indexed column number. The units of this field depend on the method that produces the
-    /// value. See [`Utf8Converter::utf8_to_char_pos`], [`Utf8Converter::utf8_to_utf16_pos`].
+    /// value. See [`StringOffsets::utf8_to_char_pos`], [`StringOffsets::utf8_to_utf16_pos`].
     pub col: u32,
 }
 
@@ -101,7 +101,7 @@ pub struct Pos {
 // Question: Consider whether we should return an empty line range in this case which would
 // probably be consistent from a mathematical point of view. But then we should also return empty
 // line ranges for empty character ranges in the middle of a line...
-impl Utf8Converter {
+impl StringOffsets {
     /// Collects position information for the given string.
     pub fn new(content: &str) -> Self {
         new_converter(content.as_bytes())
@@ -109,7 +109,7 @@ impl Utf8Converter {
 
     /// Collects position information for a byte-string.
     ///
-    /// If `content` is UTF-8, this is just like [`Utf8Converter::new`]. Otherwise, the
+    /// If `content` is UTF-8, this is just like [`StringOffsets::new`]. Otherwise, the
     /// conversion methods involving characters will produce unspecified (but memory-safe) results.
     pub fn from_bytes(content: &[u8]) -> Self {
         new_converter(content)
@@ -293,7 +293,7 @@ impl Utf8Converter {
     }
 }
 
-fn new_converter(content: &[u8]) -> Utf8Converter {
+fn new_converter(content: &[u8]) -> StringOffsets {
     let mut utf8_builder = BitRankBuilder::new();
     let mut utf16_builder = BitRankBuilder::new();
     let mut line_builder = BitRankBuilder::new();
@@ -334,7 +334,7 @@ fn new_converter(content: &[u8]) -> Utf8Converter {
         line_builder.push(content.len() - 1);
     }
 
-    Utf8Converter {
+    StringOffsets {
         line_begins,
         utf8_to_line: line_builder.finish(),
         whitespace_only,
@@ -378,7 +378,7 @@ fn utf8_to_utf16_width(content: &[u8]) -> usize {
 #[cfg(test)]
 mod test {
     use super::is_char_boundary;
-    use crate::{utf8_to_utf16_width, utf8_width, Pos, Utf8Converter};
+    use crate::{utf8_to_utf16_width, utf8_width, Pos, StringOffsets};
 
     #[test]
     fn test_utf8_char_width() {
@@ -417,7 +417,7 @@ mod test {
         let content = r#"a short line.
 followed by another one.
 no terminating newline!"#;
-        let lines = Utf8Converter::new(content);
+        let lines = StringOffsets::new(content);
         assert_eq!(lines.line_to_utf8s(0), 0..14);
         assert_eq!(&content[0..14], "a short line.\n");
         assert_eq!(lines.line_to_utf8s(1), 14..39);
@@ -463,7 +463,7 @@ no terminating newline!"#;
     fn test_convert_ascii() {
         let content = r#"line0
 line1"#;
-        let lines = Utf8Converter::new(content);
+        let lines = StringOffsets::new(content);
         assert_eq!(lines.utf8_to_char_pos(0), pos(0, 0));
         assert_eq!(lines.utf8_to_char_pos(1), pos(0, 1));
         assert_eq!(lines.utf8_to_char_pos(6), pos(1, 0));
@@ -476,7 +476,7 @@ line1"#;
         let content = r#"❤️ line0
 line1
 ✅ line2"#;
-        let lines = Utf8Converter::new(content);
+        let lines = StringOffsets::new(content);
         assert_eq!(lines.utf8_to_char_pos(0), pos(0, 0)); // ❤️ takes 6 bytes to represent in utf8 (2 code points)
         assert_eq!(lines.utf8_to_char_pos(1), pos(0, 0));
         assert_eq!(lines.utf8_to_char_pos(2), pos(0, 0));
@@ -507,7 +507,7 @@ line1
     fn test_small() {
         // Á - 2 bytes utf8
         let content = r#"❤️ line0 ❤️Á 👋"#;
-        let lines = Utf8Converter::new(content);
+        let lines = StringOffsets::new(content);
         let mut utf16_index = 0;
         let mut char_index = 0;
         for (byte_index, char) in content.char_indices() {
@@ -527,7 +527,7 @@ line1
         //                 ^~~~ utf8: 1 char, 1 byte, utf16: 1 code unit
         //                ^~~~~ utf8: 1 char, 2 bytes, utf16: 1 code unit
         //               ^~~~~~ utf8: 2 chars, 3 byte ea., utf16: 2 code units
-        let lines = Utf8Converter::new(content);
+        let lines = StringOffsets::new(content);
 
         // UTF-16 positions
         assert_eq!(lines.utf8_to_utf16_pos(0), pos(0, 0)); // ❤️
@@ -573,7 +573,7 @@ line1
     #[test]
     fn test_critical_input_len() {
         let content = [b'a'; 16384];
-        let lines = Utf8Converter::from_bytes(&content);
+        let lines = StringOffsets::from_bytes(&content);
         assert_eq!(lines.utf8_to_utf16_pos(16384), pos(1, 0));
     }
 }
