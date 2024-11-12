@@ -1,6 +1,5 @@
 //! Offset calculator to convert between byte, char, and line offsets in a string.
 //!
-//!
 //! # Example
 //!
 //! ```

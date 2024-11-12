@@ -1,8 +1,13 @@
 [package]
-authors = ["The blackbird team <support@github.com>"]
-edition = "2021"
 name = "string-offsets"
+authors = ["The blackbird team <support@github.com>"]
 version = "0.1.0"
+edition = "2021"
+description = "Offset calculator to convert between byte, char, and line offsets in a string."
+repository = "https://github.com/github/rust-gems"
+license = "MIT"
+keywords = ["unicode", "string", "offsets", "positions", "interoperability"]
+categories = ["algorithms", "data-structures", "text-processing", "development-tools::ffi"]
 
 [dev-dependencies]
 itertools = "0.13"
