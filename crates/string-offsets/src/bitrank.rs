@@ -1,9 +1,6 @@
 //! A bit-vector data structure, optimized for
 //! [rank](http://bitmagic.io/rank-select.html) operations.
 //!
-//! There is also an opportunistic `select` operation, but the general case has not been
-//! implemented.
-//!
 //! See also: ["Succinct data structure"](https://en.wikipedia.org/wiki/Succinct_data_structure).
 
 type SubblockBits = u128;
@@ -55,15 +52,6 @@ impl Block {
         self.bits[chunk_idx] ^= mask;
     }
 
-    /// Tests whether the bit at the given index is set.
-    fn get(&self, index: usize) -> bool {
-        assert!(index < BITS_PER_BLOCK);
-        let chunk_idx = index / BITS_PER_SUB_BLOCK;
-        let bit_idx = index % BITS_PER_SUB_BLOCK;
-        let mask = 1 << ((BITS_PER_SUB_BLOCK - 1) - bit_idx);
-        self.bits[chunk_idx] & mask != 0
-    }
-
     /// The **total rank** of the block relative local index, and the index of the one
     /// bit that establishes that rank (aka "select") **if** it occurs within that same
     /// chunk, otherwise ['None'].  The assumption is that if you would have to look back
@@ -99,40 +87,6 @@ impl Block {
                 .map(|c| c.count_ones() as usize)
                 .sum::<usize>()
     }
-
-    fn predecessor(&self, idx: usize) -> Option<usize> {
-        let sub_block = idx / BITS_PER_SUB_BLOCK;
-        let masked = self.bits[sub_block] >> (BITS_PER_SUB_BLOCK - 1 - idx % BITS_PER_SUB_BLOCK);
-        if masked > 0 {
-            Some(idx - masked.trailing_zeros() as usize)
-        } else {
-            for i in (0..sub_block).rev() {
-                let masked = self.bits[i];
-                if masked > 0 {
-                    return Some(
-                        (i + 1) * BITS_PER_SUB_BLOCK - masked.trailing_zeros() as usize - 1,
-                    );
-                }
-            }
-            None
-        }
-    }
-
-    fn successor(&self, idx: usize) -> Option<usize> {
-        let sub_block = idx / BITS_PER_SUB_BLOCK;
-        let masked = self.bits[sub_block] << (idx % BITS_PER_SUB_BLOCK);
-        if masked > 0 {
-            Some(idx + masked.leading_zeros() as usize)
-        } else {
-            for i in (sub_block + 1)..SUB_BLOCKS_PER_BLOCK {
-                let masked = self.bits[i];
-                if masked > 0 {
-                    return Some(i * BITS_PER_SUB_BLOCK + masked.leading_zeros() as usize);
-                }
-            }
-            None
-        }
-    }
 }
 
 /// Builder for creating a [`BitRank`].
@@ -154,6 +108,7 @@ pub struct BitRankBuilder {
 
 impl BitRankBuilder {
     /// Returns a new builder.
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -221,71 +176,12 @@ pub struct BitRank {
 }
 
 impl BitRank {
-    /// Creates a `BitRank` containing the integers in `iter`.
-    ///
-    /// # Panics
-    /// This may panic if the values produced by `iter` are not strictly increasing.
-    #[allow(dead_code)]
-    #[allow(clippy::should_implement_trait)]
-    pub fn from_iter<I: IntoIterator<Item = usize>>(iter: I) -> BitRank {
-        let mut builder = BitRankBuilder::new();
-        for position in iter {
-            builder.push(position);
-        }
-        builder.finish()
-    }
-
     /// The rank at the specified index (exclusive).
     ///
     /// The (one) rank is defined as: `rank(i) = sum(b[j] for j in 0..i)`
     /// i.e. the number of elements less than `i`.
     pub fn rank(&self, idx: usize) -> usize {
         self.rank_select(idx).0
-    }
-
-    /// Tests whether the bit at the given index is set.
-    #[allow(dead_code)]
-    pub fn get(&self, idx: usize) -> bool {
-        let block_num = idx / BITS_PER_BLOCK;
-        // assert!(block_num < self.blocks.len(), "index out of bounds");
-        if block_num >= self.blocks.len() {
-            false
-        } else {
-            self.blocks[block_num].get(idx % BITS_PER_BLOCK)
-        }
-    }
-
-    /// Returns the 1 bit at or before the specified index.
-    #[allow(dead_code)]
-    pub fn predecessor(&self, idx: usize) -> usize {
-        let block_num = idx / BITS_PER_BLOCK;
-        if block_num < self.blocks.len() {
-            if let Some(p) = self.blocks[block_num].predecessor(idx % BITS_PER_BLOCK) {
-                return block_num * BITS_PER_BLOCK + p;
-            }
-        }
-        for block_num in (0..self.blocks.len().min(block_num)).rev() {
-            if let Some(p) = self.blocks[block_num].predecessor(BITS_PER_BLOCK - 1) {
-                return block_num * BITS_PER_BLOCK + p;
-            }
-        }
-        panic!("no predecessor found!");
-    }
-
-    /// Returns the next 1 bit at or after the specified index.
-    #[allow(dead_code)]
-    pub fn successor(&self, idx: usize) -> usize {
-        let block_num = idx / BITS_PER_BLOCK;
-        if let Some(s) = self.blocks[block_num].successor(idx % BITS_PER_BLOCK) {
-            s + block_num * BITS_PER_BLOCK
-        } else {
-            for block_num in block_num + 1..self.blocks.len() {
-                if let Some(p) = self.blocks[block_num].successor(0) {
-                    return block_num * BITS_PER_BLOCK + p;
-                }
-            }
-            panic!("no successor found!");
-        }
     }
 
     /// Returns the number of elements in the set.
@@ -314,58 +210,55 @@ impl BitRank {
             (rank, b_idx.map(|i| (block_num * BITS_PER_BLOCK) + i))
         }
     }
-
-    /// The total size of the bit vec that was allocated.
-    /// **Note:** This is more like capacity than normal `len` in that it does not
-    /// consider how much of the bit vec is actually used.
-    #[allow(dead_code)]
-    pub fn capacity(&self) -> usize {
-        self.blocks.len() * BITS_PER_BLOCK
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
     use rand::distributions::Uniform;
     use rand::prelude::*;
     use rand_chacha::ChaCha8Rng;
 
     use super::*;
 
-    fn write(positions: &[usize]) -> BitRank {
-        BitRank::from_iter(positions.iter().copied())
+    /// Creates a `BitRank` containing the integers in `iter` (which should be strictly
+    /// increasing).
+    pub fn bitrank<I: IntoIterator<Item = usize>>(iter: I) -> BitRank {
+        let mut builder = BitRankBuilder::new();
+        for position in iter {
+            builder.push(position);
+        }
+        builder.finish()
     }
 
     #[test]
     fn test_rank_zero() {
-        let br = BitRank::from_iter([0]);
+        let br = bitrank([0]);
         assert_eq!(br.rank(0), 0);
         assert_eq!(br.rank(1), 1);
     }
 
     #[test]
     fn test_empty() {
-        let br = BitRank::from_iter([]);
+        let br = bitrank([]);
         assert!(br.blocks.is_empty());
     }
 
     #[test]
     fn test_index_out_of_bounds() {
-        let br = BitRank::from_iter([BITS_PER_BLOCK - 1]);
+        let br = bitrank([BITS_PER_BLOCK - 1]);
         assert_eq!(br.rank(BITS_PER_BLOCK), 1);
     }
 
     #[test]
     #[should_panic]
     fn test_duplicate_position() {
-        write(&[64, 66, 68, 68, 90]);
+        bitrank([64, 66, 68, 68, 90]);
     }
 
     #[test]
     fn test_rank_exclusive() {
-        let br = BitRank::from_iter(0..132);
-        assert_eq!(br.capacity(), BITS_PER_BLOCK);
+        let br = bitrank(0..132);
+        assert_eq!(br.blocks.len(), 1);
         assert_eq!(br.rank(64), 64);
         assert_eq!(br.rank(132), 132);
     }
@@ -374,15 +267,13 @@ mod tests {
     fn test_rank() {
         let mut positions: Vec<usize> = (0..132).collect();
         positions.append(&mut vec![138usize, 140, 146]);
-        let br = write(&positions);
+        let br = bitrank(positions);
         assert_eq!(br.rank(135), 132);
 
-        let bits2: Vec<usize> = (0..BITS_PER_BLOCK - 5).collect();
-        let br2 = write(&bits2);
+        let br2 = bitrank(0..BITS_PER_BLOCK - 5);
         assert_eq!(br2.rank(169), 169);
 
-        let bits3: Vec<usize> = (0..BITS_PER_BLOCK + 5).collect();
-        let br3 = write(&bits3);
+        let br3 = bitrank(0..BITS_PER_BLOCK + 5);
         assert_eq!(br3.rank(BITS_PER_BLOCK), BITS_PER_BLOCK);
     }
 
@@ -390,23 +281,23 @@ mod tests {
     fn test_rank_idx() {
         let mut positions: Vec<usize> = (0..132).collect();
         positions.append(&mut vec![138usize, 140, 146]);
-        let br = write(&positions);
+        let br = bitrank(positions);
         assert_eq!(br.rank_select(135), (132, Some(131)));
 
         let bits2: Vec<usize> = (0..BITS_PER_BLOCK - 5).collect();
-        let br2 = write(&bits2);
+        let br2 = bitrank(bits2);
         assert_eq!(br2.rank_select(169), (169, Some(168)));
 
         let bits3: Vec<usize> = (0..BITS_PER_BLOCK + 5).collect();
-        let br3 = write(&bits3);
+        let br3 = bitrank(bits3);
         assert_eq!(br3.rank_select(BITS_PER_BLOCK), (BITS_PER_BLOCK, None));
 
         let bits4: Vec<usize> = vec![1, 1000, 9999, BITS_PER_BLOCK + 1];
-        let br4 = write(&bits4);
+        let br4 = bitrank(bits4);
         assert_eq!(br4.rank_select(10000), (3, Some(9999)));
 
         let bits5: Vec<usize> = vec![1, 1000, 9999, BITS_PER_BLOCK + 1];
-        let br5 = write(&bits5);
+        let br5 = bitrank(bits5);
         assert_eq!(br5.rank_select(BITS_PER_BLOCK), (3, None));
     }
 
@@ -422,7 +313,7 @@ mod tests {
         // This isn't strictly necessary, given that the bit would just be toggled again, but it
         // ensures that we are meeting the contract.
         random_bits.dedup();
-        let br = write(&random_bits);
+        let br = bitrank(random_bits.iter().copied());
         let mut rank = 0;
         let mut select = None;
         for i in 0..random_bits.capacity() {
@@ -442,7 +333,7 @@ mod tests {
     #[test]
     fn test_rank_out_of_bounds() {
         for i in 1..30 {
-            let br = write(&[BITS_PER_BLOCK * i - 1]);
+            let br = bitrank([BITS_PER_BLOCK * i - 1]);
             assert_eq!(br.max_rank(), 1);
             assert_eq!(br.rank(BITS_PER_BLOCK * i - 1), 0);
             for j in 0..10 {
@@ -452,28 +343,8 @@ mod tests {
     }
 
     #[test]
-    fn test_predecessor_and_successor() {
-        let mut rng = ChaCha8Rng::seed_from_u64(2);
-        let uniform = Uniform::<usize>::from(0..1_000_000);
-        let mut random_bits = Vec::with_capacity(100_000);
-        for _ in 0..100_000 {
-            random_bits.push(uniform.sample(&mut rng));
-        }
-        random_bits.sort_unstable();
-        random_bits.dedup();
-        let br = write(&random_bits);
-
-        for (i, j) in random_bits.iter().copied().tuple_windows() {
-            for k in i..j {
-                assert_eq!(br.successor(k + 1), j, "{i} {k} {j}");
-                assert_eq!(br.predecessor(k), i, "{i} {k} {j}");
-            }
-        }
-    }
-
-    #[test]
     fn test_large_gap() {
-        let br = BitRank::from_iter((3..4).chain(BITS_PER_BLOCK * 15..BITS_PER_BLOCK * 15 + 17));
+        let br = bitrank((3..4).chain(BITS_PER_BLOCK * 15..BITS_PER_BLOCK * 15 + 17));
         for i in 1..15 {
             assert_eq!(br.rank(BITS_PER_BLOCK * i), 1);
         }
