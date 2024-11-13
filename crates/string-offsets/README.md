@@ -1,13 +1,13 @@
 # string-offsets
 
-Offset calculator to convert between byte, char, and line offsets in a string.
+Converts string offsets between UTF-8 bytes, UTF-16 code units, Unicode code points, and lines.
 
 Rust strings are UTF-8, but JavaScript has UTF-16 strings, and in Python, strings are sequences of
 Unicode code points. It's therefore necessary to adjust string offsets when communicating across
 programming language boundaries. [`StringOffsets`] does these adjustments.
 
-Each `StringOffsets` value contains offset information for a single string. [Building the data
-structure](StringOffsets::new) takes O(n) time and memory, but then each conversion is fast.
+Each `StringOffsets` instance contains offset information for a single string. [Building the data
+structure](StringOffsets::new) takes O(n) time and memory, but then most conversions are O(1).
 
 ["UTF-8 Conversions with BitRank"](https://adaptivepatchwork.com/2023/07/10/utf-conversion/) is a
 blog post explaining the implementation.
