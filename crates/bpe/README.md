@@ -243,7 +243,7 @@ This type of algorithm is interesting for use cases where a certain token budget
 This benchmark shows the runtime for the appending encoder when a text is encoded byte-by-byte.
 For comparison we show the runtime of the backtracking encoder when it encodes the whole text at once.
 
-The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original using the o200k token set.
+The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original text using the o200k token set.
 
 The graph below shows encoding runtime vs slice length.
 The overall runtime of byte-by-byte incremental encoder for encoding the full text is comparable to the runtime of the backtracking encoder, with only a constant factor overhead.
