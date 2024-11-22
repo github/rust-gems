@@ -229,10 +229,25 @@ impl VirtualBitRank {
         }
     }
 
-    pub(crate) fn get_word_suffix(&self, bit: usize) -> Word {
-        let block = self.bit_to_block(bit);
-        let word = (bit / WORD_BITS) & (WORDS_PER_BLOCK - 1);
+    pub(crate) fn get_word_suffix(&self, i: usize) -> Word {
+        let block = self.bit_to_block(i);
+        let word = (i / WORD_BITS) & (WORDS_PER_BLOCK - 1);
+        let bit = i / WORD_BITS;
         self.blocks[block].words[word] >> bit
+    }
+
+    pub(crate) fn get_word(&self, i: usize) -> Word {
+        let block = self.bit_to_block(i);
+        let word = (i / WORD_BITS) & (WORDS_PER_BLOCK - 1);
+        let bit = i % WORD_BITS;
+        let first_part = self.blocks[block].words[word] >> bit;
+        if bit == 0 {
+            first_part
+        } else {
+            let block = self.bit_to_block(i + 63);
+            let word = ((i + 63) / WORD_BITS) & (WORDS_PER_BLOCK - 1);
+            first_part | (self.blocks[block].words[word] << (WORD_BITS - bit))
+        }
     }
 
     pub(crate) fn get_bit(&self, bit: usize) -> bool {
