@@ -36,33 +36,19 @@
            16 values fit into one avx2 register
 */
 
-use std::cell::RefCell;
-
 pub(crate) type Word = u64;
 
 const BLOCK_BYTES: usize = 64;
 const BLOCK_BITS: usize = BLOCK_BYTES * 8;
-const BLOCKS_PER_PAGE: usize = BLOCK_BYTES / 4;
 pub(crate) const WORD_BITS: usize = WORD_BYTES * 8;
 pub(crate) const WORD_BYTES: usize = std::mem::size_of::<Word>();
 const WORDS_PER_BLOCK: usize = BLOCK_BYTES / WORD_BYTES;
-const PAGE_BYTES: usize = BLOCKS_PER_PAGE * BLOCK_BYTES;
-const PAGE_BITS: usize = PAGE_BYTES * 8;
-const SUPER_PAGE_BITS: usize = 4096 * 8;
-
-#[repr(C, align(128))]
-#[derive(Default, Clone)]
-struct Block {
-    words: [Word; WORDS_PER_BLOCK],
-}
 
 #[derive(Default)]
 pub(crate) struct VirtualBitRank {
     // In order to look up bit i, use block_mapping[i / BLOCK_BITS]
-    block_mapping: Vec<u32>,
-    blocks: Vec<Block>,
-    // Remember which pages have been accessed.
-    stats: Vec<RefCell<u64>>,
+    words: Vec<Word>,
+    aggregated: Vec<u32>,
 }
 
 impl VirtualBitRank {
@@ -73,121 +59,81 @@ impl VirtualBitRank {
     pub(crate) fn with_capacity(bits: usize) -> Self {
         let bits = (bits + BLOCK_BITS - 1) & !(BLOCK_BITS - 1);
         Self {
-            block_mapping: vec![0; bits / BLOCK_BITS], // 0 means unused block!!
-            blocks: Vec::with_capacity(bits / BLOCK_BITS),
-            stats: Vec::new(),
+            words: vec![0; bits / WORD_BITS],
+            aggregated: vec![],
         }
     }
 
-    pub(crate) fn reset_stats(&mut self) {
-        self.stats = vec![RefCell::new(0); self.blocks.len() * BLOCK_BITS / SUPER_PAGE_BITS + 1];
+    fn bit_to_word(&self, bit: usize) -> usize {
+        bit / WORD_BITS
     }
 
-    pub(crate) fn page_count(&self) -> (usize, usize) {
-        (
-            self.stats
-                .iter()
-                .map(|v| v.borrow().count_ones() as usize)
-                .sum(),
-            (self.blocks.len() + BLOCKS_PER_PAGE - 1) / BLOCKS_PER_PAGE,
-        )
-    }
-
-    fn bit_to_block(&self, bit: usize) -> usize {
-        let block = bit / BLOCK_BITS;
-        let result2 = block + (block / (BLOCKS_PER_PAGE - 1)) + 1;
-        //let result = self.block_mapping[bit / BLOCK_BITS] as usize;
-        //assert_eq!(result2, result);
-        //if let Some(v) = self.stats.get(result * BLOCK_BITS / SUPER_PAGE_BITS / 64) {
-        //    *v.borrow_mut() += 1 << (result % 64);
-        //}
-        result2
-    }
-
-    fn mid_rank(&self, block: usize) -> u32 {
-        let first_block = block & !(BLOCKS_PER_PAGE - 1);
-        let array = self.blocks[first_block].words.as_ptr() as *const u32;
-        unsafe { array.add(block & (BLOCKS_PER_PAGE - 1)).read() }
+    fn mid_rank(&self, bit: usize) -> u32 {
+        self.aggregated[bit / BLOCK_BITS]
     }
 
     pub(crate) fn rank(&self, bit: usize) -> u32 {
-        let block = self.bit_to_block(bit);
-        let mut rank = self.mid_rank(block);
-        let word = (bit / WORD_BITS) & (WORDS_PER_BLOCK - 1);
+        let word = self.bit_to_word(bit);
+        let mut rank = self.mid_rank(bit);
         let bit_in_word = bit & (WORD_BITS - 1);
-        if word >= WORDS_PER_BLOCK / 2 {
-            for i in WORDS_PER_BLOCK / 2..word {
-                rank += self.blocks[block].words[i].count_ones();
+        let mid_word = (word & !(WORDS_PER_BLOCK - 1)) + WORDS_PER_BLOCK / 2;
+        if word >= mid_word {
+            for i in mid_word..word {
+                rank += self.words[i].count_ones();
             }
             if bit_in_word != 0 {
-                rank + (self.blocks[block].words[word] << (WORD_BITS - bit_in_word)).count_ones()
+                rank + (self.words[word] << (WORD_BITS - bit_in_word)).count_ones()
             } else {
                 rank
             }
         } else {
-            for i in word + 1..WORDS_PER_BLOCK / 2 {
-                rank -= self.blocks[block].words[i].count_ones();
+            for i in word + 1..mid_word {
+                rank -= self.words[i].count_ones();
             }
-            rank - (self.blocks[block].words[word] >> bit_in_word).count_ones()
+            rank - (self.words[word] >> bit_in_word).count_ones()
         }
     }
 
     pub(crate) fn rank_with_word(&self, bit: usize) -> (u32, Word) {
-        let block = self.bit_to_block(bit);
-        let mut rank = self.mid_rank(block);
-        let word = (bit / WORD_BITS) & (WORDS_PER_BLOCK - 1);
+        let mut rank = self.mid_rank(bit);
+        let word = self.bit_to_word(bit);
         let bit_in_word = bit & (WORD_BITS - 1);
-        if word >= WORDS_PER_BLOCK / 2 {
-            for i in WORDS_PER_BLOCK / 2..word {
-                rank += self.blocks[block].words[i].count_ones();
+        let mid_word = (word & !(WORDS_PER_BLOCK - 1)) + WORDS_PER_BLOCK / 2;
+        if word >= mid_word {
+            for i in mid_word..word {
+                rank += self.words[i].count_ones();
             }
             if bit_in_word != 0 {
                 (
-                    rank + (self.blocks[block].words[word] << (WORD_BITS - bit_in_word))
-                        .count_ones(),
-                    self.blocks[block].words[word] >> bit_in_word,
+                    rank + (self.words[word] << (WORD_BITS - bit_in_word)).count_ones(),
+                    self.words[word] >> bit_in_word,
                 )
             } else {
-                (rank, self.blocks[block].words[word])
+                (rank, self.words[word])
             }
         } else {
-            for i in word + 1..WORDS_PER_BLOCK / 2 {
-                rank -= self.blocks[block].words[i].count_ones();
+            for i in word + 1..mid_word {
+                rank -= self.words[i].count_ones();
             }
-            let w = self.blocks[block].words[word] >> bit_in_word;
+            let w = self.words[word] >> bit_in_word;
             (rank - w.count_ones(), w)
         }
     }
 
     pub(crate) fn reserve(&mut self, bits: usize) {
-        assert!(self.block_mapping.is_empty());
-        assert!(self.blocks.is_empty());
+        assert!(self.words.is_empty());
         // let pages = (bits + PAGE_BITS - 1) / PAGE_BITS;
-        let blocks = (bits + BLOCK_BITS - 1) / BLOCK_BITS;
-        for _ in 0..blocks {
-            if self.blocks.len() % BLOCKS_PER_PAGE == 0 {
-                self.blocks.push(Block::default());
-            }
-            self.block_mapping.push(self.blocks.len() as u32);
-            self.blocks.push(Block::default());
-        }
+        let words = (bits + BLOCK_BITS - 1) / BLOCK_BITS * WORDS_PER_BLOCK;
+        self.words.resize(words, 0);
     }
 
     fn get_word_mut(&mut self, bit: usize) -> &mut Word {
-        let block = bit / BLOCK_BITS;
-        if block >= self.block_mapping.len() {
-            self.block_mapping.resize(block + 1, 0);
+        let word = bit / WORD_BITS;
+        if word >= self.words.len() {
+            self.reserve(bit + 1);
         }
-        if self.block_mapping[block] == 0 {
-            if self.blocks.len() % BLOCKS_PER_PAGE == 0 {
-                self.blocks.push(Block::default()); // Block with rank information
-            }
-            self.block_mapping[block] = self.blocks.len() as u32;
-            self.blocks.push(Block::default());
-        }
-        let block = self.bit_to_block(bit);
-        let word = (bit / WORD_BITS) & (WORDS_PER_BLOCK - 1);
-        &mut self.blocks[block].words[word]
+        let word = self.bit_to_word(bit);
+        &mut self.words[word]
     }
 
     pub(crate) fn set(&mut self, bit: usize) {
@@ -202,71 +148,53 @@ impl VirtualBitRank {
     }
 
     pub(crate) fn build(&mut self) {
-        for block in &mut self.block_mapping {
-            if *block == 0 {
-                if self.blocks.len() % BLOCKS_PER_PAGE == 0 {
-                    self.blocks.push(Block::default()); // Block with rank information
-                }
-                *block = self.blocks.len() as u32;
-                self.blocks.push(Block::default());
-            }
-        }
+        self.aggregated.clear();
+        self.aggregated.reserve(self.words.len() / WORDS_PER_BLOCK);
         let mut ones = 0;
-        for block in 0..self.block_mapping.len() {
-            let block = self.block_mapping[block] as usize;
+        println!("BUILD {} {}", self.words.len(), self.aggregated.capacity());
+        for block in 0..self.words.len() / WORDS_PER_BLOCK {
             for i in 0..WORDS_PER_BLOCK / 2 {
-                ones += self.blocks[block].words[i].count_ones();
+                ones += self.words[i + block * WORDS_PER_BLOCK].count_ones();
             }
-            unsafe {
-                let first_block = block & !(BLOCKS_PER_PAGE - 1);
-                let array = self.blocks[first_block].words.as_mut_ptr() as *mut u32;
-                let rank = array.add(block & (BLOCKS_PER_PAGE - 1));
-                rank.write(ones);
-            }
+            self.aggregated.push(ones);
             for i in WORDS_PER_BLOCK / 2..WORDS_PER_BLOCK {
-                ones += self.blocks[block].words[i].count_ones();
+                ones += self.words[i + block * WORDS_PER_BLOCK].count_ones();
             }
         }
     }
 
     pub(crate) fn get_word_suffix(&self, i: usize) -> Word {
-        let block = self.bit_to_block(i);
-        let word = (i / WORD_BITS) & (WORDS_PER_BLOCK - 1);
-        let bit = i / WORD_BITS;
-        self.blocks[block].words[word] >> bit
+        let word = self.bit_to_word(i);
+        let bit = i % WORD_BITS;
+        self.words[word] >> bit
     }
 
     pub(crate) fn get_word(&self, i: usize) -> Word {
-        let block = self.bit_to_block(i);
-        let word = (i / WORD_BITS) & (WORDS_PER_BLOCK - 1);
+        let word = self.bit_to_word(i);
         let bit = i % WORD_BITS;
-        let first_part = self.blocks[block].words[word] >> bit;
+        let first_part = self.words[word] >> bit;
         if bit == 0 {
             first_part
         } else {
-            let block = self.bit_to_block(i + 63);
-            let word = ((i + 63) / WORD_BITS) & (WORDS_PER_BLOCK - 1);
-            first_part | (self.blocks[block].words[word] << (WORD_BITS - bit))
+            first_part | (self.words[word + 1] << (WORD_BITS - bit))
         }
     }
 
     pub(crate) fn get_bit(&self, bit: usize) -> bool {
-        let block = self.bit_to_block(bit);
-        let word = (bit / WORD_BITS) & (WORDS_PER_BLOCK - 1);
+        let word = self.bit_to_word(bit);
         let bit_in_word = bit & (WORD_BITS - 1);
-        self.blocks[block].words[word] & (1 << bit_in_word) != 0
+        self.words[word] & (1 << bit_in_word) != 0
     }
 
     pub(crate) fn get_nibble(&self, nibble_idx: usize) -> u32 {
         let bit_idx = nibble_idx * 4;
-        let block = self.bit_to_block(bit_idx);
-        let word = (bit_idx / WORD_BITS) & (WORDS_PER_BLOCK - 1);
+        let word = self.bit_to_word(bit_idx);
         let bit_in_word = bit_idx & (WORD_BITS - 1);
-        ((self.blocks[block].words[word] >> bit_in_word) & 15) as u32
+        ((self.words[word] >> bit_in_word) & 15) as u32
     }
 
     fn len(&self) -> usize {
-        self.block_mapping.len() * BLOCK_BITS
+        self.words.len() * WORD_BITS
     }
 }
 

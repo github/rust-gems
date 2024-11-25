@@ -1,6 +1,7 @@
 use virtual_bitrank::{VirtualBitRank, Word, WORD_BITS};
 
 pub mod parallel;
+mod parallel4;
 mod virtual_bitrank;
 
 const MAX_LEVEL: usize = 14;
@@ -200,20 +201,11 @@ impl QuarternaryTrie {
             s.fill_bit_rank(&mut consumed, MAX_LEVEL - 1);
         }
         s.data.build();
-        s.reset_stats();
         println!(
             "encoded size: {}",
             4.0 * s.level_idx[0] as f32 / values.len() as f32
         );
         s
-    }
-
-    fn reset_stats(&mut self) {
-        self.data.reset_stats();
-    }
-
-    fn page_count(&self) -> (usize, usize) {
-        self.data.page_count()
     }
 
     fn recurse(&self, node: usize, level: usize, value: u32, results: &mut Vec<u32>) {
@@ -567,10 +559,10 @@ mod tests {
 
     #[test]
     fn test_large() {
-        let mut values: Vec<_> = (0..10000000)
+        let mut values: Vec<_> = (0..100_000)
             .map(|_| thread_rng().gen_range(0..100000000))
             .collect();
-        // let mut values: Vec<_> = (0..100).map(|_| thread_rng().gen_range(0..10000)).collect();
+        // let mut values: Vec<_> = (0..10).map(|_| thread_rng().gen_range(0..100)).collect();
         values.sort();
         values.dedup();
 
@@ -587,7 +579,7 @@ mod tests {
         let start = Instant::now();
         let result: Vec<_> = iter.collect();
         println!("iteration {:?}", start.elapsed() / values.len() as u32);
-        // assert_eq!(result, values);
+        assert_eq!(result, values);
     }
 
     #[test]
@@ -670,17 +662,12 @@ mod tests {
                 ));
                 let start = Instant::now();
                 let result: Vec<_> = iter.collect();
-                let count = trie.page_count();
-                let count2 = trie2.page_count();
-                page_counts[i] += count.0 + count2.0;
                 println!(
-                    "trie intersection {:?} {}",
+                    "trie intersection {:?}",
                     start.elapsed() / values.len() as u32,
-                    (count.0 + count2.0) as f32 / (count.1 + count2.1) as f32
                 );
                 assert_eq!(result, intersection);
             }
-            println!("{page_counts:?}");
         }
     }
 
