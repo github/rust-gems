@@ -34,13 +34,13 @@ pub struct GeoDistinctCount<'a, C: GeoConfig<Distinct>> {
     lsb: BitDeque<'a>,
 }
 
-impl<'a, C: GeoConfig<Distinct> + Default> Default for GeoDistinctCount<'a, C> {
+impl<C: GeoConfig<Distinct> + Default> Default for GeoDistinctCount<'_, C> {
     fn default() -> Self {
         Self::new(C::default())
     }
 }
 
-impl<'a, C: GeoConfig<Distinct>> std::fmt::Debug for GeoDistinctCount<'a, C> {
+impl<C: GeoConfig<Distinct>> std::fmt::Debug for GeoDistinctCount<'_, C> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
@@ -52,7 +52,7 @@ impl<'a, C: GeoConfig<Distinct>> std::fmt::Debug for GeoDistinctCount<'a, C> {
     }
 }
 
-impl<'a, C: GeoConfig<Distinct>> GeoDistinctCount<'a, C> {
+impl<C: GeoConfig<Distinct>> GeoDistinctCount<'_, C> {
     pub fn new(config: C) -> Self {
         let msb = Default::default();
         let lsb = BitDeque::new(max_lsb_bytes::<C::BucketType>(
@@ -128,7 +128,7 @@ impl<'a, C: GeoConfig<Distinct>> GeoDistinctCount<'a, C> {
     }
 }
 
-impl<'a, C: GeoConfig<Distinct>> Count<Distinct> for GeoDistinctCount<'a, C> {
+impl<C: GeoConfig<Distinct>> Count<Distinct> for GeoDistinctCount<'_, C> {
     fn push_hash(&mut self, hash: u64) {
         self.set_bit(self.config.hash_to_bucket(hash));
     }
@@ -179,7 +179,7 @@ impl<'a, C: GeoConfig<Distinct>> Count<Distinct> for GeoDistinctCount<'a, C> {
     }
 }
 
-impl<'a, C: GeoConfig<Distinct>> GeoDistinctCount<'a, C> {
+impl<C: GeoConfig<Distinct>> GeoDistinctCount<'_, C> {
     fn insert_into_lsb(&mut self, bucket: usize) {
         if !self.lsb.test_bit(bucket) {
             self.lsb.set_bit(bucket);
@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(vec![17, 11, 7], a.msb.iter().copied().collect_vec());
     }
 
-    impl<'a, C: GeoConfig<Distinct>> GeoDistinctCount<'a, C> {
+    impl<C: GeoConfig<Distinct>> GeoDistinctCount<'_, C> {
         fn from_ones(config: C, ones: impl IntoIterator<Item = C::BucketType>) -> Self {
             let mut result = Self::new(config);
             for one in ones {

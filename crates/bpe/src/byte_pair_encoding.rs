@@ -64,7 +64,7 @@ fn serialize_daac<S: Serializer>(
 }
 
 struct DaacVisitor;
-impl<'de> Visitor<'de> for DaacVisitor {
+impl Visitor<'_> for DaacVisitor {
     type Value = DoubleArrayAhoCorasick<u32>;
 
     fn expecting(&self, _formatter: &mut std::fmt::Formatter) -> std::fmt::Result {

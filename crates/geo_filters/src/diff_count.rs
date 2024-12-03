@@ -64,7 +64,7 @@ pub struct GeoDiffCount<'a, C: GeoConfig<Diff>> {
     lsb: BitVec<'a>,
 }
 
-impl<'a, C: GeoConfig<Diff>> std::fmt::Debug for GeoDiffCount<'a, C> {
+impl<C: GeoConfig<Diff>> std::fmt::Debug for GeoDiffCount<'_, C> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
@@ -76,7 +76,7 @@ impl<'a, C: GeoConfig<Diff>> std::fmt::Debug for GeoDiffCount<'a, C> {
     }
 }
 
-impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
+impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
     pub fn new(config: C) -> Self {
         Self {
             config,
@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(vec![17, 11, 7], a.msb.iter().copied().collect_vec());
     }
 
-    impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
+    impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
         fn from_ones(config: C, ones: impl IntoIterator<Item = C::BucketType>) -> Self {
             let mut result = Self::new(config);
             for one in ones {

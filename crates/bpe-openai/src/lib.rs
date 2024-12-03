@@ -115,7 +115,7 @@ impl Tokenizer {
 
     /// Returns an iterator with the text pieces resulting from pre-tokenization. If this
     /// tokenizer does not have pre-tokenization, the iterator returns the full text.
-    pub fn split<'a>(&'a self, text: &'a str) -> impl Iterator<Item = &str> + 'a {
+    pub fn split<'a>(&'a self, text: &'a str) -> impl Iterator<Item = &'a str> + 'a {
         match &self.pre {
             Some(pre) => Either::Left(pre.split(text)),
             None => Either::Right(std::iter::once(text)),
@@ -144,7 +144,7 @@ impl Pretokenizer {
     }
 
     /// Returns an iterator with the text pieces after splitting with the regular expression.
-    pub fn split<'a>(&'a self, text: &'a str) -> impl Iterator<Item = &str> + 'a {
+    pub fn split<'a>(&'a self, text: &'a str) -> impl Iterator<Item = &'a str> + 'a {
         Splits {
             pat: &self.pat,
             lookahead: &self.lookahead,

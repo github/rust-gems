@@ -126,7 +126,7 @@ impl<'a, C: GeoConfig<Diff>> SimHashIterator<'a, C> {
     }
 }
 
-impl<'a, C: GeoConfig<Diff>> Iterator for SimHashIterator<'a, C> {
+impl<C: GeoConfig<Diff>> Iterator for SimHashIterator<'_, C> {
     type Item = (BucketId, SimHash);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -148,7 +148,7 @@ impl<'a, C: GeoConfig<Diff>> Iterator for SimHashIterator<'a, C> {
     }
 }
 
-impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
+impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
     /// n specifies the desired zero-based index of the most significant one.
     /// The zero-based index of the desired one bit is returned.
     fn nth_most_significant_one(&self, mut n: usize) -> Option<C::BucketType> {
@@ -179,7 +179,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     }
 }
 
-impl<'a> BitVec<'a> {
+impl BitVec<'_> {
     /// n specifies the desired zero-based index of the most significant one.
     /// The zero-based index of the desired one bit is returned.
     pub fn nth_most_significant_one(&self, mut n: usize) -> Option<usize> {
