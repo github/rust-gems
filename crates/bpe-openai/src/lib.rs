@@ -93,10 +93,10 @@ impl Tokenizer {
     /// token limit is much smaller than the provided text. Applies pre-tokenization before counting.
     pub fn count_till_limit(&self, text: &str, token_limit: usize) -> Option<usize> {
         self.split(text)
-            .try_fold(token_limit, |token_limit, piece| {
+            .try_fold(0, |consumed, piece| {
                 self.bpe
-                    .count_till_limit(piece.as_bytes(), token_limit)
-                    .map(|piece_count| token_limit - piece_count)
+                    .count_till_limit(piece.as_bytes(), token_limit - consumed)
+                    .map(|piece_count| consumed + piece_count)
             })
     }
 
@@ -230,5 +230,13 @@ mod tests {
                 assert_eq!(tokens, tiktokens, "encoding mismatch for {text:?}");
             }
         }
+    }
+
+    #[test]
+    fn test_count_till_limit() {
+        assert_eq!(cl100k_base().count_till_limit("abc", 3), Some(1));
+        assert_eq!(cl100k_base().count_till_limit("abcabc", 3), Some(2));
+        assert_eq!(cl100k_base().count_till_limit("abcabcabc", 3), Some(3));
+        assert_eq!(cl100k_base().count_till_limit("abcabcabcabc", 3), None);
     }
 }
