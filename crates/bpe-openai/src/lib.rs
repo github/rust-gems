@@ -92,12 +92,11 @@ impl Tokenizer {
     /// Otherwise, it returns none. This function can be faster than [`Self::count`]` when the
     /// token limit is much smaller than the provided text. Applies pre-tokenization before counting.
     pub fn count_till_limit(&self, text: &str, token_limit: usize) -> Option<usize> {
-        self.split(text)
-            .try_fold(0, |consumed, piece| {
-                self.bpe
-                    .count_till_limit(piece.as_bytes(), token_limit - consumed)
-                    .map(|piece_count| consumed + piece_count)
-            })
+        self.split(text).try_fold(0, |consumed, piece| {
+            self.bpe
+                .count_till_limit(piece.as_bytes(), token_limit - consumed)
+                .map(|piece_count| consumed + piece_count)
+        })
     }
 
     /// Returns the tokens for the encoding of the given text. Applies pre-tokenization before
