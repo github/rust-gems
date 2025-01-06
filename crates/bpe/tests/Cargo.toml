@@ -5,6 +5,6 @@ edition = "2021"
 [dependencies]
 bpe = { path = "../../bpe", features = ["rand"] }
 bpe-openai = { path = "../../bpe-openai" }
-itertools = "0.13"
+itertools = "0.14"
 rand = "0.8"
 tiktoken-rs = "0.6"
