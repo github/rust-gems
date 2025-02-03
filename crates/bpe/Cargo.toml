@@ -21,7 +21,7 @@ aneubeck-daachorse = "1.1.1"
 base64 = { version = "0.22", optional = true }
 fnv = "1.0"
 itertools = "0.14"
-rand = { version = "0.8", optional = true }
+rand = { version = "0.9", optional = true }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
