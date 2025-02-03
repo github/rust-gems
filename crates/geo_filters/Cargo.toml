@@ -36,7 +36,7 @@ regex = { version = "1", optional = true }
 criterion = "0.5"
 geo_filters = { path = ".", features = ["evaluation"] }
 rand = "0.8"
-rand_chacha = "0.3"
+rand_chacha = "0.9"
 rayon = "1.7"
 
 [[bench]]
