@@ -11,4 +11,4 @@ categories = ["algorithms", "data-structures", "text-processing", "development-t
 
 [dev-dependencies]
 rand = "0.8"
-rand_chacha = "0.3"
+rand_chacha = "0.9"
