@@ -1,0 +1,14 @@
+[package]
+name = "posting-list-benchmarks"
+edition = "2021"
+
+[[bench]]
+name = "performance"
+path = "performance.rs"
+harness = false
+test = false
+
+[dependencies]
+posting-list = { path = "../../posting-list" }
+criterion = "0.5"
+rand = "0.9"

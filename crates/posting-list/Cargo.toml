@@ -1,0 +1,24 @@
+[package]
+name = "posting-list"
+version = "0.2.0"
+edition = "2021"
+description = "Fast posting list implementation."
+repository = "https://github.com/github/rust-gems"
+license = "MIT"
+keywords = ["posting list", "algorithm", "encoding"]
+categories = ["algorithms", "data-structures", "science"]
+
+[lib]
+crate-type = ["lib", "staticlib"]
+bench = false
+
+[dependencies]
+aneubeck-daachorse = "1.1.1"
+base64 = { version = "0.22", optional = true }
+fnv = "1.0"
+itertools = "0.14"
+rand = { version = "0.9" }
+serde = { version = "1", features = ["derive"] }
+
+[package.metadata.docs.rs]
+all-features = true

@@ -4,6 +4,7 @@ members = [
     "crates/*",
     "crates/bpe/benchmarks",
     "crates/bpe/tests",
+    "crates/posting-list/benchmarks",
 ]
 resolver = "2"
 
