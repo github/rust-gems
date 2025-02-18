@@ -74,21 +74,6 @@ impl<'a> Iterator for RunReader<'a> {
             self.remaining |=
                 unsafe { *self.words.get_unchecked((self.index / 32 + 1) as usize) as u64 } << 32;
         }
-        return Some(run);
-
-        let consumed = self.index % 32;
-        self.remaining += 1 << consumed;
-        let zeros = self.remaining.trailing_zeros();
-        // Clear last one bit.
-        self.remaining = self.remaining & (self.remaining - 1);
-        let run = zeros - consumed;
-        self.index += run + 1;
-        if zeros >= 31 {
-            //self.remaining = unsafe {(self.words.as_ptr().add(self.index as usize / 32) as *const u64).read_unaligned()};
-            self.remaining = self.remaining >> 32;
-            self.remaining |=
-                unsafe { *self.words.get_unchecked((self.index / 32 + 1) as usize) as u64 } << 32;
-        }
         Some(run)
     }
 }
@@ -109,6 +94,7 @@ impl<T: Iterator<Item = bool>> Iterator for Decoder<T> {
 
     fn next(&mut self) -> Option<Range<u32>> {
         let mut index = self.index;
+        // Implementation without popcount!
         let mut depth = if index == 0 {
             1 << (MAX_DEPTH - 1)
         } else {
@@ -133,33 +119,6 @@ impl<T: Iterator<Item = bool>> Iterator for Decoder<T> {
         }
         None
     }
-
-    /*fn next(&mut self) -> Option<Range<u32>> {
-        let mut index = self.index;
-        let mut depth = if index == 0 {
-            MAX_DEPTH - 1
-        } else {
-            index.trailing_zeros()
-        };
-        while depth < MAX_DEPTH {
-            let bit = self.bits.next().unwrap();
-            let bit = if depth == 0 {
-                bit
-            } else if bit {
-                depth -= 1;
-                continue;
-            } else {
-                self.bits.next().unwrap()
-            };
-            index += 1 << depth;
-            if bit {
-                self.index = index;
-                return Some(index - (1 << depth)..index);
-            }
-            depth = index.trailing_zeros();
-        }
-        None
-    }*/
 }
 
 pub struct RunDecoder<T> {
@@ -185,18 +144,18 @@ impl<T: Iterator<Item = u32>> Iterator for RunDecoder<T> {
     fn next(&mut self) -> Option<Range<u32>> {
         let mut index = self.index;
         let mut depth = if index == 0 {
-            MAX_DEPTH - 1
+            1 << (MAX_DEPTH - 1)
         } else {
-            index.trailing_zeros()
+            index & !(index - 1)
         };
         let mut run = self.run;
-        while depth < MAX_DEPTH {
-            if run < depth {
-                depth -= run;
+        while depth < (1 << MAX_DEPTH) {
+            if (depth >> run) > 1 {
+                depth >>= run;
                 run = self.runs.next().unwrap();
             } else {
-                run -= depth;
-                depth = 0;
+                run -= depth.trailing_zeros();
+                depth = 1;
             }
             let bit = run != 0;
             if run == 0 {
@@ -204,13 +163,13 @@ impl<T: Iterator<Item = u32>> Iterator for RunDecoder<T> {
             } else {
                 run -= 1;
             }
-            index += 1 << depth;
+            index += depth;
             if bit {
                 self.index = index;
                 self.run = run;
-                return Some(index - (1 << depth)..index);
+                return Some(index - depth..index);
             }
-            depth = index.trailing_zeros();
+            depth = index & !(index - 1);
         }
         None
     }
