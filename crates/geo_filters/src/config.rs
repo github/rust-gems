@@ -290,7 +290,7 @@ pub(crate) fn nth_one(mut value: u64, mut n: u32) -> u32 {
 /// Take a number of elements from an iterator without consuming it.
 pub(crate) fn take_ref<I: Iterator>(iter: &mut I, n: usize) -> impl Iterator<Item = I::Item> + '_ {
     struct TakeRef<'a, I: Iterator>(usize, &'a mut I);
-    impl<'a, I: Iterator> Iterator for TakeRef<'a, I> {
+    impl<I: Iterator> Iterator for TakeRef<'_, I> {
         type Item = I::Item;
         fn next(&mut self) -> Option<Self::Item> {
             if self.0 > 0 {

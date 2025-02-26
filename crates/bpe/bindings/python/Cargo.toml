@@ -8,6 +8,6 @@ name = "bpe"
 crate-type = ["cdylib"]
 
 [dependencies]
-bpe = { version = "0.1", path = "../../../bpe" }
-bpe-openai = { version = "0.1", path = "../../../bpe-openai" }
-pyo3 = "0.22.3"
+bpe = { version = "0.2", path = "../../../bpe" }
+bpe-openai = { version = "0.2", path = "../../../bpe-openai" }
+pyo3 = "0.23.5"

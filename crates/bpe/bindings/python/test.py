@@ -2,11 +2,11 @@
 
 import bpe
 
-cl100k = bpe.cl100k()
+tok = bpe.cl100k_base()
 
-enc = cl100k.encode_via_backtracking("Hello, world!".encode())
+enc = tok.encode("Hello, world!")
 print(enc)
-cnt = cl100k.count("Hello, world!".encode())
+cnt = tok.count("Hello, world!")
 print(cnt)
-dec = cl100k.decode_tokens(enc).decode()
+dec = tok.decode(enc)
 print(dec)

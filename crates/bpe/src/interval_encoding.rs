@@ -81,28 +81,3 @@ impl<'a> IntervalEncoding<'a> {
         encoder.count()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use rand::{thread_rng, Rng};
-
-    use crate::byte_pair_encoding::{create_test_bytes, BPE_CL100K};
-
-    use super::IntervalEncoding;
-
-    #[test]
-    fn test_interval_count() {
-        let bpe = &BPE_CL100K;
-        let text = create_test_bytes(bpe, 10000);
-        let intervals = IntervalEncoding::new(bpe, &text);
-        for _ in 0..1000 {
-            let start = thread_rng().gen_range(0..text.len());
-            let end = thread_rng().gen_range(0..text.len());
-            let range = start.min(end)..start.max(end);
-            assert_eq!(
-                intervals.count(range.clone()),
-                bpe.encode_via_backtracking(&text[range]).len()
-            );
-        }
-    }
-}

@@ -12,7 +12,7 @@ enum DequeCow<'a> {
     Borrowed(&'a [u64]),
 }
 
-impl<'a> Debug for DequeCow<'a> {
+impl Debug for DequeCow<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Owned(b) => Debug::fmt(b, f),
@@ -21,13 +21,13 @@ impl<'a> Debug for DequeCow<'a> {
     }
 }
 
-impl<'a> Default for DequeCow<'a> {
+impl Default for DequeCow<'_> {
     fn default() -> Self {
         Self::Borrowed(&[])
     }
 }
 
-impl<'a> PartialEq for DequeCow<'a> {
+impl PartialEq for DequeCow<'_> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Owned(l0), Self::Owned(r0)) => l0 == r0,
@@ -39,9 +39,9 @@ impl<'a> PartialEq for DequeCow<'a> {
     }
 }
 
-impl<'a> Eq for DequeCow<'a> {}
+impl Eq for DequeCow<'_> {}
 
-impl<'a> DequeCow<'a> {
+impl DequeCow<'_> {
     fn to_mut(&mut self) -> &mut VecDeque<u64> {
         match self {
             DequeCow::Owned(o) => o,
@@ -53,7 +53,7 @@ impl<'a> DequeCow<'a> {
     }
 }
 
-impl<'a> Index<usize> for DequeCow<'a> {
+impl Index<usize> for DequeCow<'_> {
     type Output = u64;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -64,7 +64,7 @@ impl<'a> Index<usize> for DequeCow<'a> {
     }
 }
 
-impl<'a> DequeCow<'a> {
+impl DequeCow<'_> {
     fn len(&self) -> usize {
         match self {
             DequeCow::Owned(o) => o.len(),
@@ -88,7 +88,7 @@ impl<'a> Iterator for DequeIter<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for DequeIter<'a> {
+impl DoubleEndedIterator for DequeIter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self {
             Self::Slice(i) => i.next_back(),
@@ -97,7 +97,7 @@ impl<'a> DoubleEndedIterator for DequeIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for DequeIter<'a> {
+impl ExactSizeIterator for DequeIter<'_> {
     fn len(&self) -> usize {
         match self {
             Self::Slice(i) => i.len(),
@@ -106,7 +106,7 @@ impl<'a> ExactSizeIterator for DequeIter<'a> {
     }
 }
 
-impl<'a> DequeCow<'a> {
+impl DequeCow<'_> {
     fn iter(&self) -> DequeIter<'_> {
         match self {
             DequeCow::Owned(o) => DequeIter::VecDeque(o.iter()),
@@ -126,7 +126,7 @@ pub struct BitDeque<'a> {
     max_blocks: usize,
 }
 
-impl<'a> BitDeque<'a> {
+impl BitDeque<'_> {
     pub fn new(max_bytes: usize) -> Self {
         assert!(max_bytes >= BYTES_PER_BLOCK);
         Self {
@@ -229,7 +229,7 @@ impl<'a> BitDeque<'a> {
     }
 }
 
-impl<'a> Index<usize> for BitDeque<'a> {
+impl Index<usize> for BitDeque<'_> {
     type Output = bool;
 
     /// Returns the value of the bit corresponding to the provided zero-based bit position.

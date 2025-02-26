@@ -18,7 +18,7 @@ pub(crate) struct BitVec<'a> {
     blocks: Cow<'a, [u64]>,
 }
 
-impl<'a> Ord for BitVec<'a> {
+impl Ord for BitVec<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match self.num_bits.cmp(&other.num_bits) {
             Ordering::Equal => self.blocks.iter().rev().cmp(other.blocks.iter().rev()),
@@ -27,13 +27,13 @@ impl<'a> Ord for BitVec<'a> {
     }
 }
 
-impl<'a> PartialOrd for BitVec<'a> {
+impl PartialOrd for BitVec<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<'a> BitVec<'a> {
+impl BitVec<'_> {
     /// Takes an iterator of `BitChunk` items as input and returns the corresponding `BitVec`.
     /// The order of `BitChunk`s doesn't matter for this function and `BitChunk` may be hitting
     /// the same block. In this case, the function will simply xor them together.
@@ -144,7 +144,7 @@ impl<'a> BitVec<'a> {
     }
 }
 
-impl<'a> Index<usize> for BitVec<'a> {
+impl Index<usize> for BitVec<'_> {
     type Output = bool;
 
     /// Returns the value of the bit corresponding to the provided zero-based bit position.

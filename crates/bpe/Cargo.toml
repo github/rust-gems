@@ -1,6 +1,6 @@
 [package]
 name = "bpe"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Fast byte-pair encoding implementation."
 repository = "https://github.com/github/rust-gems"
@@ -12,25 +12,21 @@ categories = ["algorithms", "data-structures", "encoding", "science"]
 crate-type = ["lib", "staticlib"]
 bench = false
 
-[[bench]]
-name = "performance"
-path = "benches/performance.rs"
-harness = false
-test = false
-
 [features]
 rand = ["dep:rand"]
-tiktoken-rs = ["dep:tiktoken-rs"]
+tiktoken = ["dep:base64"]
 
 [dependencies]
 aneubeck-daachorse = "1.1.1"
+base64 = { version = "0.22", optional = true }
 fnv = "1.0"
-itertools = "0.12"
+itertools = "0.14"
 rand = { version = "0.8", optional = true }
-rmp-serde = "1"
 serde = { version = "1", features = ["derive"] }
-tiktoken-rs = { version = "0.5", optional = true }
 
 [dev-dependencies]
-bpe = { path = ".", features = ["rand", "tiktoken-rs"] }
-criterion = "0.5"
+bpe = { path = "." }
+tiktoken-rs = "0.6"
+
+[package.metadata.docs.rs]
+all-features = true

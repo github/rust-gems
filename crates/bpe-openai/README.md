@@ -5,16 +5,10 @@ Serialized BPE instances are generated during build and lazily loaded at runtime
 The overhead of loading the tokenizers is small because it happens only once per process and only requires deserialization (as opposed to actually building the internal data structures).
 For convencience it re-exports the `bpe` crate so that depending on this crate is enough to use these tokenizers.
 
-Supported token sets:
+Supported tokenizers:
 
-- r50k
-- p50k
 - cl100k
 - o200k
-
-> **⚠ CAUTION ⚠**
-> This crate does not implement the regex-based input splitting tiktoken applies before it does byte-pair encoding.
-> Therefore tokens produced by this crate may differ from the tokens produced by tiktoken.
 
 ## Usage
 

@@ -1,0 +1,14 @@
+[package]
+name = "string-offsets"
+authors = ["The blackbird team <support@github.com>"]
+version = "0.1.0"
+edition = "2021"
+description = "Converts string offsets between UTF-8 bytes, UTF-16 code units, Unicode code points, and lines."
+repository = "https://github.com/github/rust-gems"
+license = "MIT"
+keywords = ["unicode", "positions", "utf16", "characters", "lines"]
+categories = ["algorithms", "data-structures", "text-processing", "development-tools::ffi"]
+
+[dev-dependencies]
+rand = "0.8"
+rand_chacha = "0.3"

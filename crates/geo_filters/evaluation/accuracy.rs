@@ -105,7 +105,8 @@ impl Accuracy {
             .config
             .iter()
             .map(|c| {
-                simulation_config_from_str(c).expect(&format!("not a valid configuration: {}", c))
+                simulation_config_from_str(c)
+                    .unwrap_or_else(|_| panic!("not a valid configuration: {}", c))
             })
             .collect_vec();
         let set_sizes = if self.set_size.is_empty() {
@@ -118,9 +119,10 @@ impl Accuracy {
 
         let mut output = self.output;
         output.set_extension("csv");
-        let f = File::create(&output).expect(&format!("cannot create file: {}", output.display()));
+        let f = File::create(&output)
+            .unwrap_or_else(|_| panic!("cannot create file: {}", output.display()));
         write_simulation_results(&configs, &set_sizes, results, f)
-            .expect(&format!("cannot write file: {}", output.display()));
+            .unwrap_or_else(|_| panic!("cannot write file: {}", output.display()));
         println!("   csv file = {}", output.display());
         println!();
     }
@@ -139,9 +141,9 @@ impl SimulationConfigParser {
         Self(Regex::new(re).expect(""), Arc::new(f))
     }
 
-    fn parse<'a>(&self, name: &str) -> Option<SimulationConfig> {
+    fn parse(&self, name: &str) -> Option<SimulationConfig> {
         self.0
-            .captures(&name)
+            .captures(name)
             .map(self.1.as_ref())
             .map(|p| (name.to_string(), p))
     }
@@ -225,7 +227,11 @@ fn simulation_config_from_str(name: &str) -> Result<SimulationConfig, String> {
 fn capture_usizes<const N: usize>(c: &Captures, is: [usize; N]) -> [usize; N] {
     let mut values = [0; N];
     for i in 0..is.len() {
-        values[i] = usize::from_str_radix(c.get(is[i]).expect("capture to exist").as_str(), 10)
+        values[i] = c
+            .get(is[i])
+            .expect("capture to exist")
+            .as_str()
+            .parse::<usize>()
             .expect("number string");
     }
     values
