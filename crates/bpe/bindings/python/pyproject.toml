@@ -19,3 +19,9 @@ dynamic = ["version"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.8.2",
+    "pip>=25.0.1",
+]
