@@ -10,5 +10,5 @@ keywords = ["unicode", "positions", "utf16", "characters", "lines"]
 categories = ["algorithms", "data-structures", "text-processing", "development-tools::ffi"]
 
 [dev-dependencies]
-rand = "0.8"
-rand_chacha = "0.3"
+rand = "0.9"
+rand_chacha = "0.9"
