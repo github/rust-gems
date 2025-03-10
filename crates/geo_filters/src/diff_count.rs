@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn test_estimate_diff_size_fast() {
-        let mut rnd = rand::rngs::StdRng::from_entropy();
+        let mut rnd = rand::rngs::StdRng::from_os_rng();
         let mut a_p = GeoDiffCount7_50::default();
         let mut a_hp = GeoDiffCount7::default();
         let mut b_p = GeoDiffCount7_50::default();
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn test_xor_plus_mask() {
-        let mut rnd = rand::rngs::StdRng::from_entropy();
+        let mut rnd = rand::rngs::StdRng::from_os_rng();
         let mask_size = 12;
         let mask = 0b100001100000;
         let mut a = GeoDiffCount7::default();
@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn test_bit_chunks() {
-        let mut rnd = rand::rngs::StdRng::from_entropy();
+        let mut rnd = rand::rngs::StdRng::from_os_rng();
         for _ in 0..100 {
             let mut expected = GeoDiffCount7::default();
             for _ in 0..1000 {
