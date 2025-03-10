@@ -385,7 +385,7 @@ fn new_converter(content: &[u8]) -> StringOffsets {
 /// Returns 0 if the byte is not a valid first byte of a UTF-8 char.
 fn utf8_width(c: u8) -> usize {
     // Every nibble represents the utf8 length given the first 4 bits of a utf8 encoded byte.
-    const UTF8_WIDTH: u64 = 0x4322_0000_1111_1111;
+    const UTF8_WIDTH: u64 = 0x4322_0000_1111_1111 ;
     ((UTF8_WIDTH >> ((c >> 4) * 4)) & 0xf) as usize
 }
 
