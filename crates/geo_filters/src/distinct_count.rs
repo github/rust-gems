@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_estimate_union_size_fast() {
-        let mut rnd = rand::rngs::StdRng::from_entropy();
+        let mut rnd = rand::rngs::StdRng::from_os_rng();
         let mut a = GeoDistinctCount7::default();
         let mut b = GeoDistinctCount7::default();
         for _ in 0..10000 {
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn test_bit_chunks() {
-        let mut rnd = rand::rngs::StdRng::from_entropy();
+        let mut rnd = rand::rngs::StdRng::from_os_rng();
         for _ in 0..100 {
             let mut expected = GeoDistinctCount7::default();
             for _ in 0..1000 {

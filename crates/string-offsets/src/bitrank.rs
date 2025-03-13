@@ -214,11 +214,11 @@ impl BitRank {
 
 #[cfg(test)]
 mod tests {
-    use rand::distributions::Uniform;
-    use rand::prelude::*;
-    use rand_chacha::ChaCha8Rng;
-
     use super::*;
+    use rand::distr::Uniform;
+    use rand::prelude::*;
+    use rand_chacha::rand_core::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
 
     /// Creates a `BitRank` containing the integers in `iter` (which should be strictly
     /// increasing).
@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn test_rank_large_random() {
         let mut rng = ChaCha8Rng::seed_from_u64(2);
-        let uniform = Uniform::<usize>::from(0..1_000_000);
+        let uniform = Uniform::new(0, 1_000_000).unwrap();
         let mut random_bits = Vec::with_capacity(100_000);
         for _ in 0..100_000 {
             random_bits.push(uniform.sample(&mut rng));

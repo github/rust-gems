@@ -67,7 +67,7 @@ mod tests {
         let phi = phi_f64(B);
         let buckets = HashToBucketLookup::new(B);
         let mut var = 0.0;
-        let mut rnd = rand::rngs::StdRng::from_entropy();
+        let mut rnd = rand::rngs::StdRng::from_os_rng();
         for _ in 0..n {
             let hash = rnd.next_u64();
             let estimate = buckets.lookup(hash) as f64;

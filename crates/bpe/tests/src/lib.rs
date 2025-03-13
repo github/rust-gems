@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
     use tiktoken_rs::cl100k_base_singleton;
 
     use bpe::appendable_encoder::AppendableEncoder;
@@ -122,8 +122,8 @@ mod tests {
         let input = create_test_bytes(bpe, 10000);
         let intervals = IntervalEncoding::new(bpe, &input);
         for _ in 0..1000 {
-            let start = thread_rng().gen_range(0..input.len());
-            let end = thread_rng().gen_range(0..input.len());
+            let start = rng().random_range(0..input.len());
+            let end = rng().random_range(0..input.len());
             let range = start.min(end)..start.max(end);
             assert_eq!(
                 intervals.count(range.clone()),
