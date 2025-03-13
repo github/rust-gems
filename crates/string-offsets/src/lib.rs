@@ -148,6 +148,7 @@ impl StringOffsets {
     ///
     /// If `content` is UTF-8, this is just like [`StringOffsets::new`]. Otherwise, the
     /// conversion methods will produce unspecified (but memory-safe) results.
+    #[allow(unused_variables)]
     #[wasm_bindgen(static_method_of = StringOffsets)]
     pub fn from_bytes(content: &[u8]) -> Self {
         new_converter(content)

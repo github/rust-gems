@@ -18,7 +18,6 @@ describe('StringOffsets sanity checks', () => {
         expect(offsets.lines()).toBe(2);
         // ☀️ is 6 UTF-8 bytes and 3 UTF-16 code units
         expect(offsets.utf8_to_utf16(6)).toBe(2);
-        // expect(offsets.utf16ToUtf8(3)).toBe(6);
         expect(offsets.utf8_to_utf16(0)).toBe(0);
     });
 });
