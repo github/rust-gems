@@ -155,17 +155,20 @@ impl StringOffsets {
     }
 
     /// Returns the number of Unicode characters on the specified line.
+    #[wasm_bindgen(js_name = lineChars)]
     pub fn line_chars(&self, line_number: usize) -> usize {
         let r = self.utf8s_to_chars(self.line_to_utf8s(line_number));
         r.end - r.start
     }
 
     /// Returns the number of lines in the string.
+    #[wasm_bindgen(js_name = lines)]
     pub fn lines(&self) -> usize {
         self.line_begins.len() - 1
     }
 
     /// Returns true if the specified line is empty except for whitespace.
+    #[wasm_bindgen(js_name = onlyWhitespaces)]
     pub fn only_whitespaces(&self, line_number: usize) -> bool {
         self.whitespace_only
             .get(line_number)
@@ -177,6 +180,7 @@ impl StringOffsets {
     ///
     /// If `line_number` is greater than or equal to the number of lines in the text, this returns
     /// the length of the string.
+    #[wasm_bindgen(js_name = lineToUtf8Begin)]
     pub fn line_to_utf8_begin(&self, line_number: usize) -> usize {
         self.line_begins[line_number.min(self.lines())] as usize
     }
@@ -185,6 +189,7 @@ impl StringOffsets {
     ///
     /// That is, return the offset that would point to the start of that line in a UTF-16
     /// representation of the source string.
+    #[wasm_bindgen(js_name = lineToUtf16Begin)]
     pub fn line_to_utf16_begin(&self, line_number: usize) -> usize {
         self.utf8_to_utf16(self.line_to_utf8_begin(line_number))
     }
@@ -193,33 +198,39 @@ impl StringOffsets {
     ///
     /// That is, return the offset that would point to the start of that line in a UTF-32
     /// representation of the source string.
+    #[wasm_bindgen(js_name = lineToCharBegin)]
     pub fn line_to_char_begin(&self, line_number: usize) -> usize {
         self.utf8_to_char(self.line_to_utf8_begin(line_number))
     }
 
     /// UTF-8 offset of the first character of a line.
+    #[wasm_bindgen(js_name = lineToUtf8End)]
     pub fn line_to_utf8_end(&self, line_number: usize) -> usize {
         self.line_to_utf8_begin(line_number + 1)
     }
 
     /// UTF-16 offset one past the end of a line (the offset of the start of the next line).
+    #[wasm_bindgen(js_name = lineToUtf16End)]
     pub fn line_to_utf16_end(&self, line_number: usize) -> usize {
         self.utf8_to_utf16(self.line_to_utf8_end(line_number))
     }
 
     /// UTF-32 offset one past the end of a line (the offset of the start of the next line).
+    #[wasm_bindgen(js_name = lineToCharEnd)]
     pub fn line_to_char_end(&self, line_number: usize) -> usize {
         self.utf8_to_char(self.line_to_utf8_end(line_number))
     }
 
     /// Return the zero-based line number of the line containing the specified UTF-8 offset.
     /// Newline characters count as part of the preceding line.
+    #[wasm_bindgen(js_name = utf8ToLine)]
     pub fn utf8_to_line(&self, byte_number: usize) -> usize {
         self.utf8_to_line.rank(byte_number)
     }
 
     /// Converts a UTF-8 offset to a zero-based line number and UTF-32 offset within the
     /// line.
+    #[wasm_bindgen(js_name = utf8ToCharPos)]
     pub fn utf8_to_char_pos(&self, byte_number: usize) -> Pos {
         let line = self.utf8_to_line(byte_number);
         let line_start_char_number = self.line_to_char_begin(line);
@@ -232,6 +243,7 @@ impl StringOffsets {
 
     /// Converts a UTF-8 offset to a zero-based line number and UTF-16 offset within the
     /// line.
+    #[wasm_bindgen(js_name = utf8ToUtf16Pos)]
     pub fn utf8_to_utf16_pos(&self, byte_number: usize) -> Pos {
         let line = self.utf8_to_line(byte_number);
         let line_start_char_number = self.line_to_utf16_begin(line);
@@ -243,16 +255,19 @@ impl StringOffsets {
     }
 
     /// Converts a UTF-8 offset to a UTF-32 offset.
+    #[wasm_bindgen(js_name = utf8ToChar)]
     pub fn utf8_to_char(&self, byte_number: usize) -> usize {
         self.utf8_to_char.rank(byte_number)
     }
 
     /// Converts a UTF-8 offset to a UTF-16 offset.
+    #[wasm_bindgen(js_name = utf8ToUtf16)]
     pub fn utf8_to_utf16(&self, byte_number: usize) -> usize {
         self.utf8_to_utf16.rank(byte_number)
     }
 
     /// Converts a UTF-32 offset to a UTF-8 offset.
+    #[wasm_bindgen(js_name = charToUtf8)]
     pub fn char_to_utf8(&self, char_number: usize) -> usize {
         let mut byte_number = char_number;
         for _ in 0..128 {
