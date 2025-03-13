@@ -1,6 +1,6 @@
 //@ts-check
-const { StringOffsets } = require('../pkg/string_offsets.js');
-
+const { StringOffsets } = require('../');
+ 
 describe('StringOffsets sanity checks', () => {
     test('basic ASCII text', () => {
         const text = "hello\nworld";

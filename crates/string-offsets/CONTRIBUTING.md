@@ -7,10 +7,10 @@ The code for the wasm + js wrapper package is stored in the `js` directory. To b
 ```sh
 cd js
 npm i
-npm run build
+npm run compile
 ```
 
-The npm package will be output to `js/pkg`.
+The js code will be output to `js/pkg`.
 
 To run a quick sanity check of the JS package:
 
@@ -21,6 +21,6 @@ npm test
 To publish the package to npm, run:
 
 ```sh
-cd js/pkg
+cd js
 npm publish
 ```

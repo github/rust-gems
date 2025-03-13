@@ -1,19 +1,9 @@
 {
   "name": "string-offsets-dev",
-  "private": true,
   "version": "0.1.0",
+  "author": "The blackbird team <support@github.com>",
+  "license": "MIT",
   "description": "String offset conversions between UTF-8, UTF-16, and lines",
-  "main": "pkg/string_offsets_js.js",
-  "types": "pkg/string_offsets_js.d.ts",
-  "files": [
-    "./pkg/string_offsets_js_bg.wasm",
-    "./pkg/string_offsets_js.d.ts",
-    "./pkg/string_offsets_js.js"
-  ],
-  "scripts": {
-    "build": "wasm-pack build --target nodejs --out-dir js/pkg",
-    "test": "jest"
-  },
   "keywords": [
     "string",
     "utf8",
@@ -21,8 +11,21 @@
     "wasm",
     "rust"
   ],
-  "author": "",
-  "license": "MIT",
+  "main": "pkg/nodejs/string_offsets.js",
+  "types": "pkg/nodejs/string_offsets.d.ts",
+  "exports": {
+    "bundler": "./pkg/bundler/string_offsets.js",
+    "node": "./pkg/nodejs/string_offsets.js",
+    "import": "./pkg/web/string_offsets.js",
+    "require": "./pkg/nodejs/string_offsets.js"
+  },
+  "scripts": {
+    "compile:bundler": "wasm-pack build --target bundler -d js/pkg/bundler && node -e \"fs.unlinkSync('./pkg/bundler/.gitignore')\"",
+    "compile:web": "wasm-pack build --target web -d js/pkg/web && node -e \"fs.unlinkSync('./pkg/web/.gitignore')\"",
+    "compile:nodejs": "wasm-pack build --target nodejs -d js/pkg/nodejs && node -e \"fs.unlinkSync('./pkg/nodejs/.gitignore')\"",
+    "compile": "npm run compile:web && npm run compile:bundler && npm run compile:nodejs",
+    "test": "jest"
+  },
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "jest": "^29.0.0",
