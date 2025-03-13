@@ -9,6 +9,12 @@ license = "MIT"
 keywords = ["unicode", "positions", "utf16", "characters", "lines"]
 categories = ["algorithms", "data-structures", "text-processing", "development-tools::ffi"]
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+
 [dev-dependencies]
 rand = "0.8"
 rand_chacha = "0.3"
