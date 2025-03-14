@@ -8,6 +8,13 @@ repository = "https://github.com/github/rust-gems"
 license = "MIT"
 keywords = ["unicode", "positions", "utf16", "characters", "lines"]
 categories = ["algorithms", "data-structures", "text-processing", "development-tools::ffi"]
+exclude = ["/js"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
 
 [dev-dependencies]
 rand = "0.9"
