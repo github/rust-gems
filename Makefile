@@ -24,6 +24,7 @@ build:
 
 .PHONY: build-js
 build-js:
+	npm --prefix crates/string-offsets/js install
 	npm --prefix crates/string-offsets/js run compile
 
 .PHONY: test
