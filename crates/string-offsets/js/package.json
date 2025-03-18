@@ -20,9 +20,9 @@
     "require": "./pkg/nodejs/string_offsets.js"
   },
   "scripts": {
-    "compile:bundler": "wasm-pack build --target bundler -d js/pkg/bundler && node -e \"fs.unlinkSync('./pkg/bundler/.gitignore')\"",
-    "compile:web": "wasm-pack build --target web -d js/pkg/web && node -e \"fs.unlinkSync('./pkg/web/.gitignore')\"",
-    "compile:nodejs": "wasm-pack build --target nodejs -d js/pkg/nodejs && node -e \"fs.unlinkSync('./pkg/nodejs/.gitignore')\"",
+    "compile:bundler": "wasm-pack build --target bundler -d js/pkg/bundler --features wasm && node -e \"fs.unlinkSync('./pkg/bundler/.gitignore')\"",
+    "compile:web": "wasm-pack build --target web -d js/pkg/web --features wasm && node -e \"fs.unlinkSync('./pkg/web/.gitignore')\"",
+    "compile:nodejs": "wasm-pack build --target nodejs -d js/pkg/nodejs --features wasm && node -e \"fs.unlinkSync('./pkg/nodejs/.gitignore')\"",
     "compile": "npm run compile:web && npm run compile:bundler && npm run compile:nodejs",
     "test": "jest"
   },

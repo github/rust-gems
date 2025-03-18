@@ -13,8 +13,11 @@ exclude = ["/js"]
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+wasm = ["wasm-bindgen"]
+
 [dependencies]
-wasm-bindgen = "0.2"
+wasm-bindgen = { version = "0.2", optional = true }
 
 [dev-dependencies]
 rand = "0.9"
