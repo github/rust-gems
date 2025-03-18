@@ -1,0 +1,23 @@
+name: Publish
+
+on:
+  workflow_dispatch: # Allow manual triggering of the workflow
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org/
+          cache: npm
+      - run: cd crates/string-offsets/js
+      - run: npm ci
+      - run: npm run compile
+      - run: npm test
+      - run: echo "Publishing string-offsets"
+      - run: npm whoami; npm --ignore-scripts publish
+        env:
+          NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}
