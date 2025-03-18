@@ -1,5 +1,5 @@
 .PHONY: all
-all: build lint test
+all: build build-js lint test
 
 .PHONY: clean
 clean:
@@ -21,6 +21,11 @@ lint:
 build:
 	# Use --all-targets to ensure that all of the benchmarks compile.
 	cargo build --all-targets --all-features
+
+.PHONY: build-js
+build-js:
+	npm --prefix crates/string-offsets/js install
+	npm --prefix crates/string-offsets/js run compile
 
 .PHONY: test
 test:
