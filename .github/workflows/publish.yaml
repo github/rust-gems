@@ -10,8 +10,12 @@ jobs:
       run:
         working-directory: crates/string-offsets/js
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+      - name: Copy lock file to root for dependency scanning
+        run: |
+          cp crates/string-offsets/js/package-lock.json ${GITHUB_WORKSPACE}/package-lock.json
+        working-directory: .
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org/
