@@ -6,6 +6,9 @@ on:
 jobs:
   publish-npm:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/string-offsets/js
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
@@ -13,7 +16,6 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org/
           cache: npm
-      - run: cd crates/string-offsets/js
       - run: npm ci
       - run: npm run compile
       - run: npm test
