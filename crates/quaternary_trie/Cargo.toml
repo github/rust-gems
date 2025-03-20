@@ -1,0 +1,14 @@
+[package]
+name = "quarternary_trie"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["lib", "staticlib"]
+bench = false
+
+[dependencies]
+rand = "0.8"
+
+[dev-dependencies]
+itertools = "0.12"
