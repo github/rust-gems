@@ -139,15 +139,15 @@ impl ParallelTrie {
             if required_bits == 1 {
                 // TODO: simply switch to single bit recursion here instead of checking on every level again.
                 // NOTE: we cannot easily read here a nibble, since the rank is only a multiple of 2, but not necessarily of 4.
-                let mut w = self.data.get_word(rank) & 3;
+                let mut w = self.data.get_bits(rank) & 3;
                 while w != 0 {
                     let zeros = w.trailing_zeros();
                     w &= w - 1;
                     self.recurse(pos * 2 + zeros as usize, word, new_rank * 2, level - 1, v);
                     new_rank += 1;
                 }
-            } else if required_bits <= 32 {
-                let w = self.data.get_word(rank);
+            } else if required_bits <= 28 {
+                let w = self.data.get_bits(rank);
                 let new_word = unsafe { _pdep_u64(w, word) };
                 if new_word != 0 {
                     self.recurse(pos * 2, new_word, new_rank * 2, level - 1, v);

@@ -140,6 +140,10 @@ impl VirtualBitRank {
         *self.get_word_mut(bit) |= 1 << (bit & (WORD_BITS - 1));
     }
 
+    pub(crate) fn set_word(&mut self, i: usize, value: Word) {
+        *self.get_word_mut(i) = value;
+    }
+
     pub(crate) fn set_nibble(&mut self, nibble_idx: usize, nibble_value: u32) {
         let bit_idx = nibble_idx * 4;
         // clear all bits...
@@ -169,15 +173,17 @@ impl VirtualBitRank {
         self.words[word] >> bit
     }
 
+    pub(crate) fn get_bits(&self, i: usize) -> Word {
+        let bytes = self.words.as_ptr() as *const u8;
+        let bytes = unsafe { bytes.add(i / 8) };
+        unsafe { std::ptr::read_unaligned(bytes as *const Word) >> (i & 7) }
+    }
+
     pub(crate) fn get_word(&self, i: usize) -> Word {
         let word = self.bit_to_word(i);
         let bit = i % WORD_BITS;
         let first_part = self.words[word] >> bit;
-        if bit == 0 {
-            first_part
-        } else {
-            first_part | (self.words[word + 1] << (WORD_BITS - bit))
-        }
+        first_part | (self.words[word + (bit != 0) as usize] << ((WORD_BITS - bit) % WORD_BITS))
     }
 
     pub(crate) fn get_bit(&self, bit: usize) -> bool {
