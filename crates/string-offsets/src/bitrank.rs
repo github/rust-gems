@@ -44,12 +44,12 @@ impl Block {
     /// This panics if the bit was already set, because that indicates that the original positions
     /// list is invalid/had duplicates.
     fn set(&mut self, index: usize) {
-        assert!(index < BITS_PER_BLOCK);
+        debug_assert!(index < BITS_PER_BLOCK);
         let chunk_idx = index / BITS_PER_SUB_BLOCK;
         let bit_idx = index % BITS_PER_SUB_BLOCK;
         let mask = 1 << ((BITS_PER_SUB_BLOCK - 1) - bit_idx);
-        assert_eq!(self.bits[chunk_idx] & mask, 0, "toggling bits off indicates that the original data was incorrect, most likely containing duplicate values.");
-        self.bits[chunk_idx] ^= mask;
+        debug_assert_eq!(self.bits[chunk_idx] & mask, 0, "toggling bits off indicates that the original data was incorrect, most likely containing duplicate values.");
+        self.bits[chunk_idx] |= mask;
     }
 
     /// The **total rank** of the block relative local index, and the index of the one
@@ -107,62 +107,37 @@ pub struct BitRankBuilder {
 }
 
 impl BitRankBuilder {
-    /// Returns a new builder.
-    #[cfg(test)]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Returns a builder that can hold integers with values `0..cap`.
     pub fn with_capacity(cap: usize) -> Self {
+        const ZERO_BLOCK: Block = Block {
+            rank: 0,
+            sub_blocks: [0; SUB_BLOCKS_PER_BLOCK],
+            bits: [0; SUB_BLOCKS_PER_BLOCK],
+        };
         Self {
-            blocks: Vec::with_capacity(cap.div_ceil(BITS_PER_BLOCK)),
-        }
-    }
-
-    fn finish_last_block(&mut self) -> u64 {
-        if let Some(block) = self.blocks.last_mut() {
-            let mut local_rank = 0;
-            for (i, chunk) in block.bits.iter().enumerate() {
-                block.sub_blocks[i] = local_rank;
-                local_rank += chunk.count_ones() as u16;
-            }
-            block.rank + local_rank as u64
-        } else {
-            0
+            blocks: vec![ZERO_BLOCK; cap.div_ceil(BITS_PER_BLOCK)],
         }
     }
 
     /// Adds a bit. Bits must be added in order of increasing `position`.
     pub fn push(&mut self, position: usize) {
         let block_id = position / BITS_PER_BLOCK;
-        assert!(
-            self.blocks.len() <= block_id + 1,
-            "positions must be increasing!"
-        );
-        if block_id >= self.blocks.len() {
-            let curr_rank = self.finish_last_block();
-            while block_id >= self.blocks.len() {
-                // Without this declared as a `const`, rustc 1.82 creates the Block value on the
-                // stack first, then `memcpy`s it into `self.blocks`.
-                const ZERO_BLOCK: Block = Block {
-                    rank: 0,
-                    sub_blocks: [0; SUB_BLOCKS_PER_BLOCK],
-                    bits: [0; SUB_BLOCKS_PER_BLOCK],
-                };
-                self.blocks.push(ZERO_BLOCK);
-                self.blocks.last_mut().expect("just inserted").rank = curr_rank;
-            }
-        }
-        self.blocks
-            .last_mut()
-            .expect("just ensured there are enough blocks")
-            .set(position % BITS_PER_BLOCK);
+        self.blocks[block_id].set(position % BITS_PER_BLOCK);
     }
 
     /// Finishes the `BitRank` by writing the last block of data.
     pub fn finish(mut self) -> BitRank {
-        self.finish_last_block();
+        let mut total_rank = 0;
+        for block in &mut self.blocks {
+            block.rank = total_rank;
+            let mut local_rank = 0;
+            for (i, chunk) in block.bits.iter().enumerate() {
+                block.sub_blocks[i] = local_rank;
+                local_rank += chunk.count_ones() as u16;
+            }
+            total_rank += local_rank as u64
+        }
+        //self.finish_last_block();
         BitRank {
             blocks: self.blocks,
         }
@@ -222,8 +197,8 @@ mod tests {
 
     /// Creates a `BitRank` containing the integers in `iter` (which should be strictly
     /// increasing).
-    pub fn bitrank<I: IntoIterator<Item = usize>>(iter: I) -> BitRank {
-        let mut builder = BitRankBuilder::new();
+    pub fn bitrank<I: IntoIterator<Item = usize>>(capacity: usize, iter: I) -> BitRank {
+        let mut builder = BitRankBuilder::with_capacity(capacity);
         for position in iter {
             builder.push(position);
         }
@@ -232,32 +207,32 @@ mod tests {
 
     #[test]
     fn test_rank_zero() {
-        let br = bitrank([0]);
+        let br = bitrank(1, [0]);
         assert_eq!(br.rank(0), 0);
         assert_eq!(br.rank(1), 1);
     }
 
     #[test]
     fn test_empty() {
-        let br = bitrank([]);
+        let br = bitrank(0, []);
         assert!(br.blocks.is_empty());
     }
 
     #[test]
     fn test_index_out_of_bounds() {
-        let br = bitrank([BITS_PER_BLOCK - 1]);
+        let br = bitrank(BITS_PER_BLOCK, [BITS_PER_BLOCK - 1]);
         assert_eq!(br.rank(BITS_PER_BLOCK), 1);
     }
 
     #[test]
     #[should_panic]
     fn test_duplicate_position() {
-        bitrank([64, 66, 68, 68, 90]);
+        bitrank(91, [64, 66, 68, 68, 90]);
     }
 
     #[test]
     fn test_rank_exclusive() {
-        let br = bitrank(0..132);
+        let br = bitrank(133, 0..132);
         assert_eq!(br.blocks.len(), 1);
         assert_eq!(br.rank(64), 64);
         assert_eq!(br.rank(132), 132);
@@ -267,13 +242,13 @@ mod tests {
     fn test_rank() {
         let mut positions: Vec<usize> = (0..132).collect();
         positions.append(&mut vec![138usize, 140, 146]);
-        let br = bitrank(positions);
+        let br = bitrank(146, positions);
         assert_eq!(br.rank(135), 132);
 
-        let br2 = bitrank(0..BITS_PER_BLOCK - 5);
+        let br2 = bitrank(BITS_PER_BLOCK, 0..BITS_PER_BLOCK - 5);
         assert_eq!(br2.rank(169), 169);
 
-        let br3 = bitrank(0..BITS_PER_BLOCK + 5);
+        let br3 = bitrank(BITS_PER_BLOCK + 6, 0..BITS_PER_BLOCK + 5);
         assert_eq!(br3.rank(BITS_PER_BLOCK), BITS_PER_BLOCK);
     }
 
@@ -281,23 +256,23 @@ mod tests {
     fn test_rank_idx() {
         let mut positions: Vec<usize> = (0..132).collect();
         positions.append(&mut vec![138usize, 140, 146]);
-        let br = bitrank(positions);
+        let br = bitrank(147, positions);
         assert_eq!(br.rank_select(135), (132, Some(131)));
 
         let bits2: Vec<usize> = (0..BITS_PER_BLOCK - 5).collect();
-        let br2 = bitrank(bits2);
+        let br2 = bitrank(BITS_PER_BLOCK, bits2);
         assert_eq!(br2.rank_select(169), (169, Some(168)));
 
         let bits3: Vec<usize> = (0..BITS_PER_BLOCK + 5).collect();
-        let br3 = bitrank(bits3);
+        let br3 = bitrank(BITS_PER_BLOCK + 6, bits3);
         assert_eq!(br3.rank_select(BITS_PER_BLOCK), (BITS_PER_BLOCK, None));
 
         let bits4: Vec<usize> = vec![1, 1000, 9999, BITS_PER_BLOCK + 1];
-        let br4 = bitrank(bits4);
+        let br4 = bitrank(BITS_PER_BLOCK + 1, bits4);
         assert_eq!(br4.rank_select(10000), (3, Some(9999)));
 
         let bits5: Vec<usize> = vec![1, 1000, 9999, BITS_PER_BLOCK + 1];
-        let br5 = bitrank(bits5);
+        let br5 = bitrank(BITS_PER_BLOCK + 1, bits5);
         assert_eq!(br5.rank_select(BITS_PER_BLOCK), (3, None));
     }
 
@@ -313,7 +288,7 @@ mod tests {
         // This isn't strictly necessary, given that the bit would just be toggled again, but it
         // ensures that we are meeting the contract.
         random_bits.dedup();
-        let br = bitrank(random_bits.iter().copied());
+        let br = bitrank(1_000_000, random_bits.iter().copied());
         let mut rank = 0;
         let mut select = None;
         for i in 0..random_bits.capacity() {
@@ -333,7 +308,7 @@ mod tests {
     #[test]
     fn test_rank_out_of_bounds() {
         for i in 1..30 {
-            let br = bitrank([BITS_PER_BLOCK * i - 1]);
+            let br = bitrank(BITS_PER_BLOCK * i, [BITS_PER_BLOCK * i - 1]);
             assert_eq!(br.max_rank(), 1);
             assert_eq!(br.rank(BITS_PER_BLOCK * i - 1), 0);
             for j in 0..10 {
@@ -344,7 +319,10 @@ mod tests {
 
     #[test]
     fn test_large_gap() {
-        let br = bitrank((3..4).chain(BITS_PER_BLOCK * 15..BITS_PER_BLOCK * 15 + 17));
+        let br = bitrank(
+            BITS_PER_BLOCK * 16,
+            (3..4).chain(BITS_PER_BLOCK * 15..BITS_PER_BLOCK * 15 + 17),
+        );
         for i in 1..15 {
             assert_eq!(br.rank(BITS_PER_BLOCK * i), 1);
         }

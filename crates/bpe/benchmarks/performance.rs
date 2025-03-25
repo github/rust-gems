@@ -9,7 +9,7 @@ use bpe_benchmarks::*;
 use criterion::{
     criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
 };
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 fn counting_benchmark(c: &mut Criterion) {
     for (name, bpe, _, _) in TOKENIZERS.iter() {
@@ -22,7 +22,7 @@ fn counting_benchmark(c: &mut Criterion) {
             group.throughput(criterion::Throughput::Bytes(bytes as u64));
             group.bench_with_input(BenchmarkId::new("interval", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
-                    || thread_rng().gen_range(0..input.len() - bytes),
+                    || rng().random_range(0..input.len() - bytes),
                     |start| fast.count(start..start + bytes),
                     criterion::BatchSize::SmallInput,
                 )
@@ -32,7 +32,7 @@ fn counting_benchmark(c: &mut Criterion) {
                 &bytes,
                 |b, bytes| {
                     b.iter_batched(
-                        || thread_rng().gen_range(0..input.len() - bytes),
+                        || rng().random_range(0..input.len() - bytes),
                         |start| bpe.bpe.count(&input.as_bytes()[start..start + bytes]),
                         criterion::BatchSize::SmallInput,
                     )
