@@ -370,8 +370,8 @@ impl StringOffsets {
 fn new_converter(content: &[u8]) -> StringOffsets {
     let n = content.len();
     let mut utf8_builder = BitRankBuilder::with_capacity(n + 1);
-    let mut utf16_builder = BitRankBuilder::with_capacity(n + 1);
-    let mut line_builder = BitRankBuilder::with_capacity(n + 1);
+    let mut utf16_builder = BitRankBuilder::with_capacity(n);
+    let mut line_builder = BitRankBuilder::with_capacity(n);
     let mut line_begins = vec![0];
     let mut whitespace_only = vec![];
     let mut only_whitespaces = true; // true if all characters in the current line are whitespaces.
