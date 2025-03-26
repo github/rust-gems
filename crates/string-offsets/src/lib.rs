@@ -95,12 +95,14 @@ pub struct StringOffsets {
     /// the byte belongs.
     utf8_to_line: BitRank,
 
-    /// Encoded bitrank where the rank of a byte position corresponds to the char position to which
+    /// Encoded bitrank where the start of a utf8 code point is marked with a 1 bit.
+    /// The rank of a byte position + 1 corresponds to the char position + 1 to which
     /// the byte belongs.
     utf8_to_char: BitRank,
 
-    /// Encoded bitrank where the rank of a byte position corresponds to the UTF-16 encoded word
-    /// position to which the byte belongs.
+    /// Encoded bitrank where a multi word utf16 code point is marked with a 1 bit.
+    /// Converting a byte position into a utf16 word position is achieved by combining utf8_to_char
+    /// and utf8_to_utf16 rank information.
     utf8_to_utf16: BitRank,
 
     /// Marks, for every line, whether it consists only of whitespace characters.
@@ -142,6 +144,16 @@ impl StringOffsets {
     #[cfg_attr(feature = "wasm", wasm_bindgen(constructor))]
     pub fn new(content: &str) -> Self {
         new_converter(content.as_bytes())
+    }
+
+    /// Returns the number of bytes in the string.
+    pub fn len(&self) -> usize {
+        self.line_begins.last().copied().unwrap_or(0) as usize
+    }
+
+    /// Returns whether there are no bytes in the string.
+    pub fn is_empty(&self) -> bool {
+        self.line_begins.is_empty()
     }
 
     /// Create a new converter to work with offsets into the given byte-string.
@@ -257,13 +269,13 @@ impl StringOffsets {
     /// Converts a UTF-8 offset to a UTF-32 offset.
     #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = utf8ToChar))]
     pub fn utf8_to_char(&self, byte_number: usize) -> usize {
-        self.utf8_to_char.rank(byte_number)
+        self.utf8_to_char.rank(byte_number + 1) - 1
     }
 
     /// Converts a UTF-8 offset to a UTF-16 offset.
     #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = utf8ToUtf16))]
     pub fn utf8_to_utf16(&self, byte_number: usize) -> usize {
-        self.utf8_to_utf16.rank(byte_number)
+        self.utf8_to_char(byte_number) + self.utf8_to_utf16.rank(byte_number)
     }
 
     /// Converts a UTF-32 offset to a UTF-8 offset.
@@ -280,7 +292,7 @@ impl StringOffsets {
         // If we couldn't find the char within 128 steps, then the char_number might be invalid!
         // This does not usually happen. For consistency with the rest of the code, we simply return
         // the max utf8 position in this case.
-        if char_number > self.utf8_to_char.max_rank() {
+        if char_number >= self.utf8_to_char.max_rank() {
             return self
                 .line_begins
                 .last()
@@ -357,24 +369,18 @@ impl StringOffsets {
 
 fn new_converter(content: &[u8]) -> StringOffsets {
     let n = content.len();
-    let mut utf8_builder = BitRankBuilder::with_capacity(n);
+    let mut utf8_builder = BitRankBuilder::with_capacity(n + 1);
     let mut utf16_builder = BitRankBuilder::with_capacity(n);
     let mut line_builder = BitRankBuilder::with_capacity(n);
     let mut line_begins = vec![0];
-    let mut i = 0;
     let mut whitespace_only = vec![];
     let mut only_whitespaces = true; // true if all characters in the current line are whitespaces.
-    while i < content.len() {
-        // In case of invalid utf8, we might get a utf8_len of 0.
-        // In this case, we just treat the single byte character.
-        // In principle, a single incorrect byte can break the whole decoding...
-        let c = content[i];
-        let utf8_len = utf8_width(c).max(1);
-        if i > 0 {
-            utf8_builder.push(i - 1);
-            utf16_builder.push(i - 1);
+    for (i, &c) in content.iter().enumerate() {
+        // Note: We expect here proper utf8 encoded strings! Otherwise, the conversion will have undefined behaviour.
+        if is_char_boundary(c) {
+            utf8_builder.push(i);
         }
-        if utf8_to_utf16_width(&content[i..]) > 1 {
+        if two_utf16(c) {
             utf16_builder.push(i);
         }
         if c == b'\n' {
@@ -385,16 +391,12 @@ fn new_converter(content: &[u8]) -> StringOffsets {
         } else {
             only_whitespaces &= matches!(c, b'\t' | b'\r' | b' ');
         }
-        i += utf8_len;
     }
-    if !content.is_empty() {
-        utf8_builder.push(content.len() - 1);
-        utf16_builder.push(content.len() - 1);
-    }
-    if line_begins.last() != Some(&(content.len() as u32)) {
+    utf8_builder.push(n);
+    if line_begins.last() != Some(&(n as u32)) {
         whitespace_only.push(only_whitespaces);
-        line_begins.push(content.len() as u32);
-        line_builder.push(content.len() - 1);
+        line_begins.push(n as u32);
+        line_builder.push(n - 1);
     }
 
     StringOffsets {
@@ -406,31 +408,35 @@ fn new_converter(content: &[u8]) -> StringOffsets {
     }
 }
 
-/// Returns the number of bytes a UTF-8 char occupies, given the first byte of the UTF-8 encoding.
-/// Returns 0 if the byte is not a valid first byte of a UTF-8 char.
-fn utf8_width(c: u8) -> usize {
-    // Every nibble represents the utf8 length given the first 4 bits of a utf8 encoded byte.
-    const UTF8_WIDTH: u64 = 0x4322_0000_1111_1111;
-    ((UTF8_WIDTH >> ((c >> 4) * 4)) & 0xf) as usize
+/// Returns true if, in a UTF-8 string, `b` indicates the first byte of a character.
+fn is_char_boundary(b: u8) -> bool {
+    b as i8 >= -0x40 // NB: b < 128 || b >= 192
 }
 
-fn utf8_to_utf16_width(content: &[u8]) -> usize {
-    let len = utf8_width(content[0]);
-    match len {
-        0 => 0,
-        1..=3 => 1,
-        4 => 2,
-        _ => panic!("invalid utf8 char width: {}", len),
-    }
+fn two_utf16(c: u8) -> bool {
+    c & 0b1111_0000 == 0b1111_0000
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Returns true if, in a UTF-8 string, `b` indicates the first byte of a character.
-    fn is_char_boundary(b: u8) -> bool {
-        b as i8 >= -0x40 // NB: b < 128 || b >= 192
+    /// Returns the number of bytes a UTF-8 char occupies, given the first byte of the UTF-8 encoding.
+    /// Returns 0 if the byte is not a valid first byte of a UTF-8 char.
+    fn utf8_width(c: u8) -> usize {
+        // Every nibble represents the utf8 length given the first 4 bits of a utf8 encoded byte.
+        const UTF8_WIDTH: u64 = 0x4322_0000_1111_1111;
+        ((UTF8_WIDTH >> ((c >> 4) * 4)) & 0xf) as usize
+    }
+
+    fn utf8_to_utf16_width(content: &[u8]) -> usize {
+        let len = utf8_width(content[0]);
+        match len {
+            0 => 0,
+            1..=3 => 1,
+            4 => 2,
+            _ => panic!("invalid utf8 char width: {}", len),
+        }
     }
 
     #[test]
