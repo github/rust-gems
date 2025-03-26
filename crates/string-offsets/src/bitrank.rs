@@ -246,11 +246,11 @@ mod tests {
         let br3 = bitrank(BITS_PER_BLOCK + 6, bits3);
         assert_eq!(br3.rank(BITS_PER_BLOCK), BITS_PER_BLOCK);
 
-        let bits4: Vec<usize> = vec![1, 1000, 9999, BITS_PER_BLOCK + 1];
+        let bits4: Vec<usize> = vec![1, 1000, 7777, BITS_PER_BLOCK + 1];
         let br4 = bitrank(BITS_PER_BLOCK + 1, bits4);
-        assert_eq!(br4.rank(10000), 3);
+        assert_eq!(br4.rank(8000), 3);
 
-        let bits5: Vec<usize> = vec![1, 1000, 9999, BITS_PER_BLOCK + 1];
+        let bits5: Vec<usize> = vec![1, 1000, 7777, BITS_PER_BLOCK + 1];
         let br5 = bitrank(BITS_PER_BLOCK + 1, bits5);
         assert_eq!(br5.rank(BITS_PER_BLOCK), 3);
     }

@@ -1,3 +1,7 @@
+//! Configuration types for enabling/disabling features are compile time.
+//! 
+//! By disabling features, the compiler can generate faster code which can be important for certain use cases.
+//! Certain implementations/conversion operations will only be available if the corresponding features were enabled.
 
 /// Type-level boolean.
 pub trait Bool {

@@ -389,10 +389,8 @@ fn new_converter<C: ConfigType>(content: &[u8]) -> StringOffsets<C> {
     let n = content.len();
     let mut utf8_builder =
         BitRankBuilder::with_capacity(if C::HasChars::VALUE { n + 1 } else { 0 });
-    let mut utf16_builder =
-        BitRankBuilder::with_capacity(if C::HasUtf16::VALUE { n } else { 0 });
-    let mut line_builder =
-        BitRankBuilder::with_capacity(if C::HasLines::VALUE { n } else { 0 });
+    let mut utf16_builder = BitRankBuilder::with_capacity(if C::HasUtf16::VALUE { n } else { 0 });
+    let mut line_builder = BitRankBuilder::with_capacity(if C::HasLines::VALUE { n } else { 0 });
     let mut line_begins = vec![0];
     let mut whitespace_only = vec![];
     let mut only_whitespaces = true; // true if all characters in the current line are whitespaces.
