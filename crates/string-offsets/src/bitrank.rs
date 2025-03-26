@@ -6,9 +6,9 @@
 type SubblockBits = u128;
 
 // Static sizing of the various components of the data structure.
-const BITS_PER_BLOCK: usize = 16384;
 const BITS_PER_SUB_BLOCK: usize = SubblockBits::BITS as usize;
-const SUB_BLOCKS_PER_BLOCK: usize = BITS_PER_BLOCK / BITS_PER_SUB_BLOCK;
+const SUB_BLOCKS_PER_BLOCK: usize = 64;
+const BITS_PER_BLOCK: usize = SUB_BLOCKS_PER_BLOCK * BITS_PER_SUB_BLOCK; // 8192 Bits = 1 kBytes
 
 /// A container for a portion of the total bit vector and the associated indices.
 /// The bits within each chunk are stored from most significant bit (msb) to least significant bit (lsb).
@@ -47,7 +47,7 @@ impl Block {
         debug_assert!(index < BITS_PER_BLOCK);
         let chunk_idx = index / BITS_PER_SUB_BLOCK;
         let bit_idx = index % BITS_PER_SUB_BLOCK;
-        let mask = 1 << ((BITS_PER_SUB_BLOCK - 1) - bit_idx);
+        let mask = 1 << bit_idx;
         debug_assert_eq!(self.bits[chunk_idx] & mask, 0, "toggling bits off indicates that the original data was incorrect, most likely containing duplicate values.");
         self.bits[chunk_idx] |= mask;
     }
@@ -57,7 +57,7 @@ impl Block {
     /// chunk, otherwise ['None'].  The assumption is that if you would have to look back
     /// through previous chunks it would actually be cheaper to do a lookup in the original
     /// data structure that the bit vector was created from.
-    fn rank_select(&self, local_idx: usize) -> (usize, Option<usize>) {
+    fn rank(&self, local_idx: usize) -> usize {
         let mut rank = self.rank as usize;
         let sub_block = local_idx / BITS_PER_SUB_BLOCK;
         rank += self.sub_blocks[sub_block] as usize;
@@ -68,15 +68,9 @@ impl Block {
         let masked = if remainder == 0 {
             0
         } else {
-            self.bits[last_chunk] >> (BITS_PER_SUB_BLOCK - remainder)
+            self.bits[last_chunk] << (BITS_PER_SUB_BLOCK - remainder)
         };
-        rank += masked.count_ones() as usize;
-        let select = if masked == 0 {
-            None
-        } else {
-            Some(local_idx - masked.trailing_zeros() as usize - 1)
-        };
-        (rank, select)
+        rank + masked.count_ones() as usize
     }
 
     fn total_rank(&self) -> usize {
@@ -137,7 +131,6 @@ impl BitRankBuilder {
             }
             total_rank += local_rank as u64
         }
-        //self.finish_last_block();
         BitRank {
             blocks: self.blocks,
         }
@@ -156,7 +149,12 @@ impl BitRank {
     /// The (one) rank is defined as: `rank(i) = sum(b[j] for j in 0..i)`
     /// i.e. the number of elements less than `i`.
     pub fn rank(&self, idx: usize) -> usize {
-        self.rank_select(idx).0
+        let block_num = idx / BITS_PER_BLOCK;
+        if block_num >= self.blocks.len() {
+            self.max_rank() // fall back to 0 bits when the bitrank data structure is empty.
+        } else {
+            self.blocks[block_num].rank(idx % BITS_PER_BLOCK)
+        }
     }
 
     /// Returns the number of elements in the set.
@@ -165,25 +163,6 @@ impl BitRank {
             .last()
             .map(|b| b.total_rank())
             .unwrap_or_default() // fall back to 0 when the bitrank data structure is empty.
-    }
-
-    /// The rank at the specified index(exclusive) and the index of the one bit that
-    /// establishes that rank (aka "select") **if** it occurs within that same chunk,
-    /// otherwise ['None'].  The assumption is that if you would have to look back
-    /// through previous chunks it would actually be cheaper to do a lookup in the original
-    /// data structure that the bit vector was created from.
-    pub fn rank_select(&self, idx: usize) -> (usize, Option<usize>) {
-        let block_num = idx / BITS_PER_BLOCK;
-        // assert!(block_num < self.blocks.len(), "index out of bounds");
-        if block_num >= self.blocks.len() {
-            (
-                self.max_rank(), // fall back to 0 when the bitrank data structure is empty.
-                None,
-            )
-        } else {
-            let (rank, b_idx) = self.blocks[block_num].rank_select(idx % BITS_PER_BLOCK);
-            (rank, b_idx.map(|i| (block_num * BITS_PER_BLOCK) + i))
-        }
     }
 }
 
@@ -257,23 +236,23 @@ mod tests {
         let mut positions: Vec<usize> = (0..132).collect();
         positions.append(&mut vec![138usize, 140, 146]);
         let br = bitrank(147, positions);
-        assert_eq!(br.rank_select(135), (132, Some(131)));
+        assert_eq!(br.rank(135), 132);
 
         let bits2: Vec<usize> = (0..BITS_PER_BLOCK - 5).collect();
         let br2 = bitrank(BITS_PER_BLOCK, bits2);
-        assert_eq!(br2.rank_select(169), (169, Some(168)));
+        assert_eq!(br2.rank(169), 169);
 
         let bits3: Vec<usize> = (0..BITS_PER_BLOCK + 5).collect();
         let br3 = bitrank(BITS_PER_BLOCK + 6, bits3);
-        assert_eq!(br3.rank_select(BITS_PER_BLOCK), (BITS_PER_BLOCK, None));
+        assert_eq!(br3.rank(BITS_PER_BLOCK), BITS_PER_BLOCK);
 
         let bits4: Vec<usize> = vec![1, 1000, 9999, BITS_PER_BLOCK + 1];
         let br4 = bitrank(BITS_PER_BLOCK + 1, bits4);
-        assert_eq!(br4.rank_select(10000), (3, Some(9999)));
+        assert_eq!(br4.rank(10000), 3);
 
         let bits5: Vec<usize> = vec![1, 1000, 9999, BITS_PER_BLOCK + 1];
         let br5 = bitrank(BITS_PER_BLOCK + 1, bits5);
-        assert_eq!(br5.rank_select(BITS_PER_BLOCK), (3, None));
+        assert_eq!(br5.rank(BITS_PER_BLOCK), 3);
     }
 
     #[test]
@@ -290,15 +269,10 @@ mod tests {
         random_bits.dedup();
         let br = bitrank(1_000_000, random_bits.iter().copied());
         let mut rank = 0;
-        let mut select = None;
         for i in 0..random_bits.capacity() {
-            if i % BITS_PER_SUB_BLOCK == 0 {
-                select = None;
-            }
-            assert_eq!(br.rank_select(i), (rank, select));
+            assert_eq!(br.rank(i), rank);
             if i == random_bits[rank] {
                 rank += 1;
-                select = Some(i);
             }
         }
     }

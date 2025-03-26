@@ -100,12 +100,14 @@ pub struct StringOffsets<C: ConfigType> {
     /// the byte belongs.
     utf8_to_line: BitRank,
 
-    /// Encoded bitrank where the rank of a byte position corresponds to the char position to which
+    /// Encoded bitrank where the start of a utf8 code point is marked with a 1 bit.
+    /// The rank of a byte position + 1 corresponds to the char position + 1 to which
     /// the byte belongs.
     utf8_to_char: BitRank,
 
-    /// Encoded bitrank where the rank of a byte position corresponds to the UTF-16 encoded word
-    /// position to which the byte belongs.
+    /// Encoded bitrank where a multi word utf16 code point is marked with a 1 bit.
+    /// Converting a byte position into a utf16 word position is achieved by combining utf8_to_char
+    /// and utf8_to_utf16 rank information.
     utf8_to_utf16: BitRank,
 
     /// Marks, for every line, whether it consists only of whitespace characters.
@@ -167,6 +169,11 @@ impl<C: ConfigType<HasLines = True>> StringOffsets<C> {
     /// Returns the number of bytes in the string.
     pub fn len(&self) -> usize {
         self.line_begins.last().copied().unwrap_or(0) as usize
+    }
+
+    /// Returns whether there are no bytes in the string.
+    pub fn is_empty(&self) -> bool {
+        self.line_begins.is_empty()
     }
 
     /// Returns the number of lines in the string.
@@ -383,17 +390,14 @@ fn new_converter<C: ConfigType>(content: &[u8]) -> StringOffsets<C> {
     let mut utf8_builder =
         BitRankBuilder::with_capacity(if C::HasChars::VALUE { n + 1 } else { 0 });
     let mut utf16_builder =
-        BitRankBuilder::with_capacity(if C::HasUtf16::VALUE { n + 1 } else { 0 });
+        BitRankBuilder::with_capacity(if C::HasUtf16::VALUE { n } else { 0 });
     let mut line_builder =
-        BitRankBuilder::with_capacity(if C::HasLines::VALUE { n + 1 } else { 0 });
+        BitRankBuilder::with_capacity(if C::HasLines::VALUE { n } else { 0 });
     let mut line_begins = vec![0];
     let mut whitespace_only = vec![];
     let mut only_whitespaces = true; // true if all characters in the current line are whitespaces.
-    for i in 0..content.len() {
-        // In case of invalid utf8, we might get a utf8_len of 0.
-        // In this case, we just treat the single byte character.
-        // In principle, a single incorrect byte can break the whole decoding...
-        let c = content[i];
+    for (i, &c) in content.into_iter().enumerate() {
+        // Note: We expect here proper utf8 encoded strings! Otherwise, the conversion will have undefined behaviour.
         if C::HasChars::VALUE && is_char_boundary(c) {
             utf8_builder.push(i);
         }

@@ -6,6 +6,7 @@ fn only_lines_construction_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("only_lines_construction");
     for size in [1000, 10000, 100000] {
         let mut rng = rng();
+        // Generate random ascii input.
         let random_input: String = (0..size)
             .map(|_| rng.random_range(32u8..128u8) as char)
             .collect();
@@ -23,6 +24,7 @@ fn full_construction_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("full_construction");
     for size in [1000, 10000, 100000] {
         let mut rng = rng();
+        // Generate random ascii input.
         let random_input: String = (0..size)
             .map(|_| rng.random_range(32u8..128u8) as char)
             .collect();
