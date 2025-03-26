@@ -26,16 +26,18 @@
 
 use std::{marker::PhantomData, ops::Range};
 
+#[cfg(feature = "wasm")]
+use wasm_bindgen::prelude::*;
+
 mod bitrank;
 mod config;
+#[cfg(feature = "wasm")]
+mod wasm;
 
 use bitrank::{BitRank, BitRankBuilder};
 use config::{Bool, ConfigType, True};
 
 pub use config::{AllConfig, OnlyLines};
-
-#[cfg(feature = "wasm")]
-use wasm_bindgen::prelude::*;
 
 /// Converts positions within a given string between UTF-8 byte offsets (the usual in Rust), UTF-16
 /// code units, Unicode code points, and line numbers.
@@ -91,7 +93,6 @@ use wasm_bindgen::prelude::*;
 /// Most operations run in O(1) time. A few require O(log n) time. The memory consumed by this
 /// data structure is typically less than the memory occupied by the actual content. In the best
 /// case, it requires ~45% of the content space.
-#[cfg_attr(feature = "wasm", wasm_bindgen)]
 pub struct StringOffsets<C: ConfigType> {
     /// Vector storing, for every line, the byte position at which the line starts.
     line_begins: Vec<u32>,
@@ -146,10 +147,8 @@ pub struct Pos {
 // Question: Consider whether we should return an empty line range in this case which would
 // probably be consistent from a mathematical point of view. But then we should also return empty
 // line ranges for empty character ranges in the middle of a line...
-#[cfg_attr(feature = "wasm", wasm_bindgen)]
 impl<C: ConfigType> StringOffsets<C> {
     /// Create a new converter to work with offsets into the given string.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(constructor))]
     pub fn new(content: &str) -> Self {
         new_converter(content.as_bytes())
     }
@@ -158,8 +157,6 @@ impl<C: ConfigType> StringOffsets<C> {
     ///
     /// If `content` is UTF-8, this is just like [`StringOffsets::new`]. Otherwise, the
     /// conversion methods will produce unspecified (but memory-safe) results.
-    #[allow(unused_variables)]
-    #[cfg_attr(feature = "wasm", wasm_bindgen(static_method_of = StringOffsets))]
     pub fn from_bytes(content: &[u8]) -> Self {
         new_converter(content)
     }
@@ -177,7 +174,6 @@ impl<C: ConfigType<HasLines = True>> StringOffsets<C> {
     }
 
     /// Returns the number of lines in the string.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lines))]
     pub fn lines(&self) -> usize {
         self.line_begins.len() - 1
     }
@@ -186,20 +182,17 @@ impl<C: ConfigType<HasLines = True>> StringOffsets<C> {
     ///
     /// If `line_number` is greater than or equal to the number of lines in the text, this returns
     /// the length of the string.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineToUtf8Begin))]
     pub fn line_to_utf8_begin(&self, line_number: usize) -> usize {
         self.line_begins[line_number.min(self.lines())] as usize
     }
 
     /// UTF-8 offset of the first character of a line.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineToUtf8End))]
     pub fn line_to_utf8_end(&self, line_number: usize) -> usize {
         self.line_to_utf8_begin(line_number + 1)
     }
 
     /// Return the zero-based line number of the line containing the specified UTF-8 offset.
     /// Newline characters count as part of the preceding line.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = utf8ToLine))]
     pub fn utf8_to_line(&self, byte_number: usize) -> usize {
         self.utf8_to_line.rank(byte_number)
     }
@@ -233,7 +226,6 @@ impl<C: ConfigType<HasLines = True>> StringOffsets<C> {
 
 impl<C: ConfigType<HasChars = True, HasLines = True>> StringOffsets<C> {
     /// Returns the number of Unicode characters on the specified line.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineChars))]
     pub fn line_chars(&self, line_number: usize) -> usize {
         let r = self.utf8s_to_chars(self.line_to_utf8s(line_number));
         r.end - r.start
@@ -243,13 +235,11 @@ impl<C: ConfigType<HasChars = True, HasLines = True>> StringOffsets<C> {
     ///
     /// That is, return the offset that would point to the start of that line in a UTF-32
     /// representation of the source string.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineToCharBegin))]
     pub fn line_to_char_begin(&self, line_number: usize) -> usize {
         self.utf8_to_char(self.line_to_utf8_begin(line_number))
     }
 
     /// UTF-32 offset one past the end of a line (the offset of the start of the next line).
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineToCharEnd))]
     pub fn line_to_char_end(&self, line_number: usize) -> usize {
         self.utf8_to_char(self.line_to_utf8_end(line_number))
     }
@@ -266,7 +256,6 @@ impl<C: ConfigType<HasChars = True, HasLines = True>> StringOffsets<C> {
 
     /// Converts a UTF-8 offset to a zero-based line number and UTF-32 offset within the
     /// line.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = utf8ToCharPos))]
     pub fn utf8_to_char_pos(&self, byte_number: usize) -> Pos {
         let line = self.utf8_to_line(byte_number);
         let line_start_char_number = self.line_to_char_begin(line);
@@ -286,7 +275,6 @@ impl<C: ConfigType<HasChars = True, HasLines = True>> StringOffsets<C> {
 
 impl<C: ConfigType<HasWhitespace = True>> StringOffsets<C> {
     /// Returns true if the specified line is empty except for whitespace.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = onlyWhitespaces))]
     pub fn only_whitespaces(&self, line_number: usize) -> bool {
         self.whitespace_only
             .get(line_number)
@@ -297,13 +285,11 @@ impl<C: ConfigType<HasWhitespace = True>> StringOffsets<C> {
 
 impl<C: ConfigType<HasChars = True>> StringOffsets<C> {
     /// Converts a UTF-8 offset to a UTF-32 offset.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = utf8ToChar))]
     pub fn utf8_to_char(&self, byte_number: usize) -> usize {
         self.utf8_to_char.rank(byte_number + 1) - 1
     }
 
     /// Converts a UTF-32 offset to a UTF-8 offset.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = charToUtf8))]
     pub fn char_to_utf8(&self, char_number: usize) -> usize {
         let mut byte_number = char_number;
         for _ in 0..128 {
@@ -349,7 +335,6 @@ impl<C: ConfigType<HasChars = True>> StringOffsets<C> {
 
 impl<C: ConfigType<HasChars = True, HasUtf16 = True>> StringOffsets<C> {
     /// Converts a UTF-8 offset to a UTF-16 offset.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = utf8ToUtf16))]
     pub fn utf8_to_utf16(&self, byte_number: usize) -> usize {
         self.utf8_to_char(byte_number) + self.utf8_to_utf16.rank(byte_number)
     }
@@ -360,20 +345,17 @@ impl<C: ConfigType<HasChars = True, HasLines = True, HasUtf16 = True>> StringOff
     ///
     /// That is, return the offset that would point to the start of that line in a UTF-16
     /// representation of the source string.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineToUtf16Begin))]
     pub fn line_to_utf16_begin(&self, line_number: usize) -> usize {
         self.utf8_to_utf16(self.line_to_utf8_begin(line_number))
     }
 
     /// UTF-16 offset one past the end of a line (the offset of the start of the next line).
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineToUtf16End))]
     pub fn line_to_utf16_end(&self, line_number: usize) -> usize {
         self.utf8_to_utf16(self.line_to_utf8_end(line_number))
     }
 
     /// Converts a UTF-8 offset to a zero-based line number and UTF-16 offset within the
     /// line.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = utf8ToUtf16Pos))]
     pub fn utf8_to_utf16_pos(&self, byte_number: usize) -> Pos {
         let line = self.utf8_to_line(byte_number);
         let line_start_char_number = self.line_to_utf16_begin(line);
@@ -394,7 +376,7 @@ fn new_converter<C: ConfigType>(content: &[u8]) -> StringOffsets<C> {
     let mut line_begins = vec![0];
     let mut whitespace_only = vec![];
     let mut only_whitespaces = true; // true if all characters in the current line are whitespaces.
-    for (i, &c) in content.into_iter().enumerate() {
+    for (i, &c) in content.iter().enumerate() {
         // Note: We expect here proper utf8 encoded strings! Otherwise, the conversion will have undefined behaviour.
         if C::HasChars::VALUE && is_char_boundary(c) {
             utf8_builder.push(i);
