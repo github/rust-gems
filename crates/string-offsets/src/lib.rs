@@ -375,7 +375,7 @@ fn new_converter(content: &[u8]) -> StringOffsets {
     let mut line_begins = vec![0];
     let mut whitespace_only = vec![];
     let mut only_whitespaces = true; // true if all characters in the current line are whitespaces.
-    for (i, &c) in content.into_iter().enumerate() {
+    for (i, &c) in content.iter().enumerate() {
         // Note: We expect here proper utf8 encoded strings! Otherwise, the conversion will have undefined behaviour.
         if is_char_boundary(c) {
             utf8_builder.push(i);
