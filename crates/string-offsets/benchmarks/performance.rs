@@ -7,7 +7,9 @@ fn construction_benchmark(c: &mut Criterion) {
     for size in [1000, 10000, 100000] {
         let mut rng = rng();
         // Generate random ascii input.
-        let random_input: String = (0..size).map(|_| rng.random_range(32u8..128) as char).collect();
+        let random_input: String = (0..size)
+            .map(|_| rng.random_range(32u8..128) as char)
+            .collect();
         group.throughput(criterion::Throughput::Bytes(random_input.len() as u64));
         group.bench_with_input(
             BenchmarkId::from_parameter(size),
