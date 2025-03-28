@@ -40,9 +40,6 @@ struct Block {
 
 impl Block {
     /// Set a bit without updating `self.sub_blocks`.
-    ///
-    /// This panics if the bit was already set, because that indicates that the original positions
-    /// list is invalid/had duplicates.
     fn set(&mut self, index: usize) {
         debug_assert!(index < BITS_PER_BLOCK);
         let chunk_idx = index / BITS_PER_SUB_BLOCK;
@@ -52,11 +49,7 @@ impl Block {
         self.bits[chunk_idx] |= mask;
     }
 
-    /// The **total rank** of the block relative local index, and the index of the one
-    /// bit that establishes that rank (aka "select") **if** it occurs within that same
-    /// chunk, otherwise ['None'].  The assumption is that if you would have to look back
-    /// through previous chunks it would actually be cheaper to do a lookup in the original
-    /// data structure that the bit vector was created from.
+    /// The **total rank** of the block relative local index.
     fn rank(&self, local_idx: usize) -> usize {
         let mut rank = self.rank as usize;
         let sub_block = local_idx / BITS_PER_SUB_BLOCK;
@@ -65,11 +58,7 @@ impl Block {
         let remainder = local_idx % BITS_PER_SUB_BLOCK;
 
         let last_chunk = local_idx / BITS_PER_SUB_BLOCK;
-        let masked = if remainder == 0 {
-            0
-        } else {
-            self.bits[last_chunk] << (BITS_PER_SUB_BLOCK - remainder)
-        };
+        let masked = self.bits[last_chunk] & !(SubblockBits::MAX << remainder);
         rank + masked.count_ones() as usize
     }
 
@@ -176,42 +165,52 @@ mod tests {
 
     /// Creates a `BitRank` containing the integers in `iter` (which should be strictly
     /// increasing).
-    pub fn bitrank<I: IntoIterator<Item = usize>>(capacity: usize, iter: I) -> BitRank {
-        let mut builder = BitRankBuilder::with_capacity(capacity);
-        for position in iter {
-            builder.push(position);
+    pub fn bitrank<I>(iter: I) -> BitRank
+    where
+        I: IntoIterator<Item = usize>,
+        I::IntoIter: DoubleEndedIterator,
+    {
+        let mut iter = iter.into_iter().rev();
+        if let Some(last) = iter.next() {
+            let mut builder = BitRankBuilder::with_capacity(last + 1);
+            builder.push(last);
+            for position in iter {
+                builder.push(position);
+            }
+            builder.finish()
+        } else {
+            BitRank { blocks: vec![] }
         }
-        builder.finish()
     }
 
     #[test]
     fn test_rank_zero() {
-        let br = bitrank(1, [0]);
+        let br = bitrank([0]);
         assert_eq!(br.rank(0), 0);
         assert_eq!(br.rank(1), 1);
     }
 
     #[test]
     fn test_empty() {
-        let br = bitrank(0, []);
+        let br = bitrank([]);
         assert!(br.blocks.is_empty());
     }
 
     #[test]
     fn test_index_out_of_bounds() {
-        let br = bitrank(BITS_PER_BLOCK, [BITS_PER_BLOCK - 1]);
+        let br = bitrank([BITS_PER_BLOCK - 1]);
         assert_eq!(br.rank(BITS_PER_BLOCK), 1);
     }
 
     #[test]
     #[should_panic]
     fn test_duplicate_position() {
-        bitrank(91, [64, 66, 68, 68, 90]);
+        bitrank([64, 66, 68, 68, 90]);
     }
 
     #[test]
     fn test_rank_exclusive() {
-        let br = bitrank(133, 0..132);
+        let br = bitrank(0..132);
         assert_eq!(br.blocks.len(), 1);
         assert_eq!(br.rank(64), 64);
         assert_eq!(br.rank(132), 132);
@@ -221,13 +220,13 @@ mod tests {
     fn test_rank() {
         let mut positions: Vec<usize> = (0..132).collect();
         positions.append(&mut vec![138usize, 140, 146]);
-        let br = bitrank(146, positions);
+        let br = bitrank(positions);
         assert_eq!(br.rank(135), 132);
 
-        let br2 = bitrank(BITS_PER_BLOCK, 0..BITS_PER_BLOCK - 5);
+        let br2 = bitrank(0..BITS_PER_BLOCK - 5);
         assert_eq!(br2.rank(169), 169);
 
-        let br3 = bitrank(BITS_PER_BLOCK + 6, 0..BITS_PER_BLOCK + 5);
+        let br3 = bitrank(0..BITS_PER_BLOCK + 5);
         assert_eq!(br3.rank(BITS_PER_BLOCK), BITS_PER_BLOCK);
     }
 
@@ -235,23 +234,23 @@ mod tests {
     fn test_rank_idx() {
         let mut positions: Vec<usize> = (0..132).collect();
         positions.append(&mut vec![138usize, 140, 146]);
-        let br = bitrank(147, positions);
+        let br = bitrank(positions);
         assert_eq!(br.rank(135), 132);
 
         let bits2: Vec<usize> = (0..BITS_PER_BLOCK - 5).collect();
-        let br2 = bitrank(BITS_PER_BLOCK, bits2);
+        let br2 = bitrank(bits2);
         assert_eq!(br2.rank(169), 169);
 
         let bits3: Vec<usize> = (0..BITS_PER_BLOCK + 5).collect();
-        let br3 = bitrank(BITS_PER_BLOCK + 6, bits3);
+        let br3 = bitrank(bits3);
         assert_eq!(br3.rank(BITS_PER_BLOCK), BITS_PER_BLOCK);
 
         let bits4: Vec<usize> = vec![1, 1000, 7777, BITS_PER_BLOCK + 1];
-        let br4 = bitrank(BITS_PER_BLOCK + 1, bits4);
+        let br4 = bitrank(bits4);
         assert_eq!(br4.rank(8000), 3);
 
         let bits5: Vec<usize> = vec![1, 1000, 7777, BITS_PER_BLOCK + 1];
-        let br5 = bitrank(BITS_PER_BLOCK + 1, bits5);
+        let br5 = bitrank(bits5);
         assert_eq!(br5.rank(BITS_PER_BLOCK), 3);
     }
 
@@ -267,7 +266,7 @@ mod tests {
         // This isn't strictly necessary, given that the bit would just be toggled again, but it
         // ensures that we are meeting the contract.
         random_bits.dedup();
-        let br = bitrank(1_000_000, random_bits.iter().copied());
+        let br = bitrank(random_bits.iter().copied());
         let mut rank = 0;
         for i in 0..random_bits.capacity() {
             assert_eq!(br.rank(i), rank);
@@ -282,7 +281,7 @@ mod tests {
     #[test]
     fn test_rank_out_of_bounds() {
         for i in 1..30 {
-            let br = bitrank(BITS_PER_BLOCK * i, [BITS_PER_BLOCK * i - 1]);
+            let br = bitrank([BITS_PER_BLOCK * i - 1]);
             assert_eq!(br.max_rank(), 1);
             assert_eq!(br.rank(BITS_PER_BLOCK * i - 1), 0);
             for j in 0..10 {
@@ -293,10 +292,7 @@ mod tests {
 
     #[test]
     fn test_large_gap() {
-        let br = bitrank(
-            BITS_PER_BLOCK * 16,
-            (3..4).chain(BITS_PER_BLOCK * 15..BITS_PER_BLOCK * 15 + 17),
-        );
+        let br = bitrank((3..4).chain(BITS_PER_BLOCK * 15..BITS_PER_BLOCK * 15 + 17));
         for i in 1..15 {
             assert_eq!(br.rank(BITS_PER_BLOCK * i), 1);
         }

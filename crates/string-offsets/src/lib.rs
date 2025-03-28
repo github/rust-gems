@@ -6,7 +6,7 @@
 //! use string_offsets::StringOffsets;
 //!
 //! let s = "☀️hello\n🗺️world\n";
-//! let offsets = StringOffsets::new(s);
+//! let offsets: StringOffsets = StringOffsets::new(s);
 //!
 //! // Find offsets where lines begin and end.
 //! assert_eq!(offsets.line_to_utf8s(0), 0..12);  // note: 0-based line numbers
@@ -24,13 +24,20 @@
 //! See [`StringOffsets`] for details.
 #![deny(missing_docs)]
 
-use std::ops::Range;
-
-mod bitrank;
-use bitrank::{BitRank, BitRankBuilder};
+use std::{marker::PhantomData, ops::Range};
 
 #[cfg(feature = "wasm")]
 use wasm_bindgen::prelude::*;
+
+mod bitrank;
+mod config;
+#[cfg(feature = "wasm")]
+mod wasm;
+
+use bitrank::{BitRank, BitRankBuilder};
+use config::{Bool, ConfigType, True};
+
+pub use config::{AllConfig, OnlyLines};
 
 /// Converts positions within a given string between UTF-8 byte offsets (the usual in Rust), UTF-16
 /// code units, Unicode code points, and line numbers.
@@ -86,8 +93,9 @@ use wasm_bindgen::prelude::*;
 /// Most operations run in O(1) time. A few require O(log n) time. The memory consumed by this
 /// data structure is typically less than the memory occupied by the actual content. In the best
 /// case, it requires ~45% of the content space.
-#[cfg_attr(feature = "wasm", wasm_bindgen)]
-pub struct StringOffsets {
+/// One can reduce memory requirements further by only requesting the necessary features via the
+/// configuration type.
+pub struct StringOffsets<C: ConfigType = AllConfig> {
     /// Vector storing, for every line, the byte position at which the line starts.
     line_begins: Vec<u32>,
 
@@ -107,6 +115,9 @@ pub struct StringOffsets {
 
     /// Marks, for every line, whether it consists only of whitespace characters.
     whitespace_only: Vec<bool>,
+
+    /// Configuration type.
+    _config: PhantomData<C>,
 }
 
 /// A position in a string, specified by line and column number.
@@ -138,14 +149,22 @@ pub struct Pos {
 // Question: Consider whether we should return an empty line range in this case which would
 // probably be consistent from a mathematical point of view. But then we should also return empty
 // line ranges for empty character ranges in the middle of a line...
-#[cfg_attr(feature = "wasm", wasm_bindgen)]
-impl StringOffsets {
+impl<C: ConfigType> StringOffsets<C> {
     /// Create a new converter to work with offsets into the given string.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(constructor))]
     pub fn new(content: &str) -> Self {
         new_converter(content.as_bytes())
     }
 
+    /// Create a new converter to work with offsets into the given byte-string.
+    ///
+    /// If `content` is UTF-8, this is just like [`StringOffsets::new`]. Otherwise, the
+    /// conversion methods will produce unspecified (but memory-safe) results.
+    pub fn from_bytes(content: &[u8]) -> Self {
+        new_converter(content)
+    }
+}
+
+impl<C: ConfigType<HasLines = True>> StringOffsets<C> {
     /// Returns the number of bytes in the string.
     pub fn len(&self) -> usize {
         self.line_begins.last().copied().unwrap_or(0) as usize
@@ -156,93 +175,89 @@ impl StringOffsets {
         self.line_begins.is_empty()
     }
 
-    /// Create a new converter to work with offsets into the given byte-string.
-    ///
-    /// If `content` is UTF-8, this is just like [`StringOffsets::new`]. Otherwise, the
-    /// conversion methods will produce unspecified (but memory-safe) results.
-    #[allow(unused_variables)]
-    #[cfg_attr(feature = "wasm", wasm_bindgen(static_method_of = StringOffsets))]
-    pub fn from_bytes(content: &[u8]) -> Self {
-        new_converter(content)
-    }
-
-    /// Returns the number of Unicode characters on the specified line.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineChars))]
-    pub fn line_chars(&self, line_number: usize) -> usize {
-        let r = self.utf8s_to_chars(self.line_to_utf8s(line_number));
-        r.end - r.start
-    }
-
     /// Returns the number of lines in the string.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lines))]
     pub fn lines(&self) -> usize {
         self.line_begins.len() - 1
-    }
-
-    /// Returns true if the specified line is empty except for whitespace.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = onlyWhitespaces))]
-    pub fn only_whitespaces(&self, line_number: usize) -> bool {
-        self.whitespace_only
-            .get(line_number)
-            .copied()
-            .unwrap_or(true)
     }
 
     /// Return the byte offset of the first character on the specified (zero-based) line.
     ///
     /// If `line_number` is greater than or equal to the number of lines in the text, this returns
     /// the length of the string.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineToUtf8Begin))]
     pub fn line_to_utf8_begin(&self, line_number: usize) -> usize {
         self.line_begins[line_number.min(self.lines())] as usize
     }
 
-    /// UTF-16 offset of the first character of a line.
+    /// UTF-8 offset of the first character of a line.
+    pub fn line_to_utf8_end(&self, line_number: usize) -> usize {
+        self.line_to_utf8_begin(line_number + 1)
+    }
+
+    /// Return the zero-based line number of the line containing the specified UTF-8 offset.
+    /// Newline characters count as part of the preceding line.
+    pub fn utf8_to_line(&self, byte_number: usize) -> usize {
+        self.utf8_to_line.rank(byte_number)
+    }
+
+    /// Returns the range of line numbers containing the substring specified by the Rust-style
+    /// range `bytes`. Newline characters count as part of the preceding line.
     ///
-    /// That is, return the offset that would point to the start of that line in a UTF-16
-    /// representation of the source string.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineToUtf16Begin))]
-    pub fn line_to_utf16_begin(&self, line_number: usize) -> usize {
-        self.utf8_to_utf16(self.line_to_utf8_begin(line_number))
+    /// If `bytes` is an empty range at a position within or at the beginning of a line, this
+    /// returns a nonempty range containing the line number of that one line. An empty range at or
+    /// beyond the end of the string translates to an empty range of line numbers.
+    pub fn utf8s_to_lines(&self, bytes: Range<usize>) -> Range<usize> {
+        // The fiddly parts of this formula are necessary because `bytes.start` rounds down to the
+        // beginning of the line, but `bytes.end` "rounds up" to the end of the line. the final
+        // `+1` is to produce a half-open range.
+        self.utf8_to_line(bytes.start)
+            ..self
+                .lines()
+                .min(self.utf8_to_line(bytes.end.saturating_sub(1).max(bytes.start)) + 1)
+    }
+
+    /// UTF-8 offset one past the end of a line (the offset of the start of the next line).
+    pub fn line_to_utf8s(&self, line_number: usize) -> Range<usize> {
+        self.line_to_utf8_begin(line_number)..self.line_to_utf8_end(line_number)
+    }
+
+    /// UTF-8 offsets for the beginning and end of a range of lines, including the newline if any.
+    pub fn lines_to_utf8s(&self, line_numbers: Range<usize>) -> Range<usize> {
+        self.line_to_utf8_begin(line_numbers.start)..self.line_to_utf8_begin(line_numbers.end)
+    }
+}
+
+impl<C: ConfigType<HasChars = True, HasLines = True>> StringOffsets<C> {
+    /// Returns the number of Unicode characters on the specified line.
+    pub fn line_chars(&self, line_number: usize) -> usize {
+        let r = self.utf8s_to_chars(self.line_to_utf8s(line_number));
+        r.end - r.start
     }
 
     /// UTF-32 offset of the first character of a line.
     ///
     /// That is, return the offset that would point to the start of that line in a UTF-32
     /// representation of the source string.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineToCharBegin))]
     pub fn line_to_char_begin(&self, line_number: usize) -> usize {
         self.utf8_to_char(self.line_to_utf8_begin(line_number))
     }
 
-    /// UTF-8 offset of the first character of a line.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineToUtf8End))]
-    pub fn line_to_utf8_end(&self, line_number: usize) -> usize {
-        self.line_to_utf8_begin(line_number + 1)
-    }
-
-    /// UTF-16 offset one past the end of a line (the offset of the start of the next line).
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineToUtf16End))]
-    pub fn line_to_utf16_end(&self, line_number: usize) -> usize {
-        self.utf8_to_utf16(self.line_to_utf8_end(line_number))
-    }
-
     /// UTF-32 offset one past the end of a line (the offset of the start of the next line).
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = lineToCharEnd))]
     pub fn line_to_char_end(&self, line_number: usize) -> usize {
         self.utf8_to_char(self.line_to_utf8_end(line_number))
     }
 
-    /// Return the zero-based line number of the line containing the specified UTF-8 offset.
-    /// Newline characters count as part of the preceding line.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = utf8ToLine))]
-    pub fn utf8_to_line(&self, byte_number: usize) -> usize {
-        self.utf8_to_line.rank(byte_number)
+    /// UTF-32 offsets for the beginning and end of a line, including the newline if any.
+    pub fn line_to_chars(&self, line_number: usize) -> Range<usize> {
+        self.utf8s_to_chars(self.line_to_utf8s(line_number))
+    }
+
+    /// UTF-32 offsets for the beginning and end of a range of lines, including the newline if any.
+    pub fn lines_to_chars(&self, line_numbers: Range<usize>) -> Range<usize> {
+        self.utf8s_to_chars(self.lines_to_utf8s(line_numbers))
     }
 
     /// Converts a UTF-8 offset to a zero-based line number and UTF-32 offset within the
     /// line.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = utf8ToCharPos))]
     pub fn utf8_to_char_pos(&self, byte_number: usize) -> Pos {
         let line = self.utf8_to_line(byte_number);
         let line_start_char_number = self.line_to_char_begin(line);
@@ -253,33 +268,30 @@ impl StringOffsets {
         }
     }
 
-    /// Converts a UTF-8 offset to a zero-based line number and UTF-16 offset within the
-    /// line.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = utf8ToUtf16Pos))]
-    pub fn utf8_to_utf16_pos(&self, byte_number: usize) -> Pos {
-        let line = self.utf8_to_line(byte_number);
-        let line_start_char_number = self.line_to_utf16_begin(line);
-        let char_idx = self.utf8_to_utf16(byte_number);
-        Pos {
-            line,
-            col: char_idx - line_start_char_number,
-        }
+    /// Returns the range of line numbers containing the substring specified by the UTF-32
+    /// range `chars`. Newline characters count as part of the preceding line.
+    pub fn chars_to_lines(&self, chars: Range<usize>) -> Range<usize> {
+        self.utf8s_to_lines(self.chars_to_utf8s(chars))
     }
+}
 
+impl<C: ConfigType<HasWhitespace = True>> StringOffsets<C> {
+    /// Returns true if the specified line is empty except for whitespace.
+    pub fn only_whitespaces(&self, line_number: usize) -> bool {
+        self.whitespace_only
+            .get(line_number)
+            .copied()
+            .unwrap_or(true)
+    }
+}
+
+impl<C: ConfigType<HasChars = True>> StringOffsets<C> {
     /// Converts a UTF-8 offset to a UTF-32 offset.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = utf8ToChar))]
     pub fn utf8_to_char(&self, byte_number: usize) -> usize {
         self.utf8_to_char.rank(byte_number + 1) - 1
     }
 
-    /// Converts a UTF-8 offset to a UTF-16 offset.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = utf8ToUtf16))]
-    pub fn utf8_to_utf16(&self, byte_number: usize) -> usize {
-        self.utf8_to_char(byte_number) + self.utf8_to_utf16.rank(byte_number)
-    }
-
     /// Converts a UTF-32 offset to a UTF-8 offset.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = charToUtf8))]
     pub fn char_to_utf8(&self, char_number: usize) -> usize {
         let mut byte_number = char_number;
         for _ in 0..128 {
@@ -311,50 +323,6 @@ impl StringOffsets {
             assert!(byte_number < limit);
         }
     }
-}
-
-impl StringOffsets {
-    /// UTF-8 offset one past the end of a line (the offset of the start of the next line).
-    pub fn line_to_utf8s(&self, line_number: usize) -> Range<usize> {
-        self.line_to_utf8_begin(line_number)..self.line_to_utf8_end(line_number)
-    }
-
-    /// UTF-32 offsets for the beginning and end of a line, including the newline if any.
-    pub fn line_to_chars(&self, line_number: usize) -> Range<usize> {
-        self.utf8s_to_chars(self.line_to_utf8s(line_number))
-    }
-
-    /// UTF-8 offsets for the beginning and end of a range of lines, including the newline if any.
-    pub fn lines_to_utf8s(&self, line_numbers: Range<usize>) -> Range<usize> {
-        self.line_to_utf8_begin(line_numbers.start)..self.line_to_utf8_begin(line_numbers.end)
-    }
-
-    /// UTF-32 offsets for the beginning and end of a range of lines, including the newline if any.
-    pub fn lines_to_chars(&self, line_numbers: Range<usize>) -> Range<usize> {
-        self.utf8s_to_chars(self.lines_to_utf8s(line_numbers))
-    }
-
-    /// Returns the range of line numbers containing the substring specified by the Rust-style
-    /// range `bytes`. Newline characters count as part of the preceding line.
-    ///
-    /// If `bytes` is an empty range at a position within or at the beginning of a line, this
-    /// returns a nonempty range containing the line number of that one line. An empty range at or
-    /// beyond the end of the string translates to an empty range of line numbers.
-    pub fn utf8s_to_lines(&self, bytes: Range<usize>) -> Range<usize> {
-        // The fiddly parts of this formula are necessary because `bytes.start` rounds down to the
-        // beginning of the line, but `bytes.end` "rounds up" to the end of the line. the final
-        // `+1` is to produce a half-open range.
-        self.utf8_to_line(bytes.start)
-            ..self
-                .lines()
-                .min(self.utf8_to_line(bytes.end.saturating_sub(1).max(bytes.start)) + 1)
-    }
-
-    /// Returns the range of line numbers containing the substring specified by the UTF-32
-    /// range `chars`. Newline characters count as part of the preceding line.
-    pub fn chars_to_lines(&self, chars: Range<usize>) -> Range<usize> {
-        self.utf8s_to_lines(self.chars_to_utf8s(chars))
-    }
 
     /// Converts a UTF-8 offset range to a UTF-32 offset range.
     pub fn utf8s_to_chars(&self, bytes: Range<usize>) -> Range<usize> {
@@ -367,36 +335,81 @@ impl StringOffsets {
     }
 }
 
-fn new_converter(content: &[u8]) -> StringOffsets {
+impl<C: ConfigType<HasChars = True, HasUtf16 = True>> StringOffsets<C> {
+    /// Converts a UTF-8 offset to a UTF-16 offset.
+    pub fn utf8_to_utf16(&self, byte_number: usize) -> usize {
+        self.utf8_to_char(byte_number) + self.utf8_to_utf16.rank(byte_number)
+    }
+}
+
+impl<C: ConfigType<HasChars = True, HasLines = True, HasUtf16 = True>> StringOffsets<C> {
+    /// UTF-16 offset of the first character of a line.
+    ///
+    /// That is, return the offset that would point to the start of that line in a UTF-16
+    /// representation of the source string.
+    pub fn line_to_utf16_begin(&self, line_number: usize) -> usize {
+        self.utf8_to_utf16(self.line_to_utf8_begin(line_number))
+    }
+
+    /// UTF-16 offset one past the end of a line (the offset of the start of the next line).
+    pub fn line_to_utf16_end(&self, line_number: usize) -> usize {
+        self.utf8_to_utf16(self.line_to_utf8_end(line_number))
+    }
+
+    /// Converts a UTF-8 offset to a zero-based line number and UTF-16 offset within the
+    /// line.
+    pub fn utf8_to_utf16_pos(&self, byte_number: usize) -> Pos {
+        let line = self.utf8_to_line(byte_number);
+        let line_start_char_number = self.line_to_utf16_begin(line);
+        let char_idx = self.utf8_to_utf16(byte_number);
+        Pos {
+            line,
+            col: char_idx - line_start_char_number,
+        }
+    }
+}
+
+fn new_converter<C: ConfigType>(content: &[u8]) -> StringOffsets<C> {
     let n = content.len();
-    let mut utf8_builder = BitRankBuilder::with_capacity(n + 1);
-    let mut utf16_builder = BitRankBuilder::with_capacity(n);
-    let mut line_builder = BitRankBuilder::with_capacity(n);
+    let mut utf8_builder =
+        BitRankBuilder::with_capacity(if C::HasChars::VALUE { n + 1 } else { 0 });
+    let mut utf16_builder = BitRankBuilder::with_capacity(if C::HasUtf16::VALUE { n } else { 0 });
+    let mut line_builder = BitRankBuilder::with_capacity(if C::HasLines::VALUE { n } else { 0 });
     let mut line_begins = vec![0];
     let mut whitespace_only = vec![];
     let mut only_whitespaces = true; // true if all characters in the current line are whitespaces.
     for (i, &c) in content.iter().enumerate() {
         // Note: We expect here proper utf8 encoded strings! Otherwise, the conversion will have undefined behaviour.
-        if is_char_boundary(c) {
+        if C::HasChars::VALUE && is_char_boundary(c) {
             utf8_builder.push(i);
         }
-        if two_utf16(c) {
+        if C::HasUtf16::VALUE && two_utf16(c) {
             utf16_builder.push(i);
         }
         if c == b'\n' {
-            whitespace_only.push(only_whitespaces);
-            line_begins.push(i as u32 + 1);
-            line_builder.push(i);
-            only_whitespaces = true; // reset for next line.
-        } else {
-            only_whitespaces &= matches!(c, b'\t' | b'\r' | b' ');
+            if C::HasWhitespace::VALUE {
+                whitespace_only.push(only_whitespaces);
+                only_whitespaces = true; // reset for next line.
+            }
+            if C::HasLines::VALUE {
+                line_begins.push(i as u32 + 1);
+                line_builder.push(i);
+            }
+        } else if C::HasWhitespace::VALUE {
+            only_whitespaces = only_whitespaces && matches!(c, b'\t' | b'\r' | b' ');
         }
     }
-    utf8_builder.push(n);
+    if C::HasChars::VALUE {
+        utf8_builder.push(n);
+    }
     if line_begins.last() != Some(&(n as u32)) {
-        whitespace_only.push(only_whitespaces);
-        line_begins.push(n as u32);
-        line_builder.push(n - 1);
+        if C::HasWhitespace::VALUE {
+            whitespace_only.push(only_whitespaces);
+        }
+        if C::HasLines::VALUE {
+            line_begins.push(n as u32);
+            line_builder.push(n - 1);
+        }
     }
 
     StringOffsets {
@@ -405,6 +418,7 @@ fn new_converter(content: &[u8]) -> StringOffsets {
         whitespace_only,
         utf8_to_char: utf8_builder.finish(),
         utf8_to_utf16: utf16_builder.finish(),
+        _config: PhantomData,
     }
 }
 
@@ -476,7 +490,7 @@ mod tests {
         let content = r#"a short line.
 followed by another one.
 no terminating newline!"#;
-        let lines = StringOffsets::new(content);
+        let lines: StringOffsets = StringOffsets::new(content);
         assert_eq!(lines.line_to_utf8s(0), 0..14);
         assert_eq!(&content[0..14], "a short line.\n");
         assert_eq!(lines.line_to_utf8s(1), 14..39);
@@ -522,7 +536,7 @@ no terminating newline!"#;
     fn test_convert_ascii() {
         let content = r#"line0
 line1"#;
-        let lines = StringOffsets::new(content);
+        let lines: StringOffsets = StringOffsets::new(content);
         assert_eq!(lines.utf8_to_char_pos(0), pos(0, 0));
         assert_eq!(lines.utf8_to_char_pos(1), pos(0, 1));
         assert_eq!(lines.utf8_to_char_pos(6), pos(1, 0));
@@ -535,7 +549,7 @@ line1"#;
         let content = r#"❤️ line0
 line1
 ✅ line2"#;
-        let lines = StringOffsets::new(content);
+        let lines: StringOffsets = StringOffsets::new(content);
         assert_eq!(lines.utf8_to_char_pos(0), pos(0, 0)); // ❤️ takes 6 bytes to represent in utf8 (2 code points)
         assert_eq!(lines.utf8_to_char_pos(1), pos(0, 0));
         assert_eq!(lines.utf8_to_char_pos(2), pos(0, 0));
@@ -566,7 +580,7 @@ line1
     fn test_small() {
         // Á - 2 bytes utf8
         let content = r#"❤️ line0 ❤️Á 👋"#;
-        let lines = StringOffsets::new(content);
+        let lines: StringOffsets = StringOffsets::new(content);
         let mut utf16_index = 0;
         let mut char_index = 0;
         for (byte_index, char) in content.char_indices() {
@@ -586,7 +600,7 @@ line1
         //                 ^~~~ utf8: 1 char, 1 byte, utf16: 1 code unit
         //                ^~~~~ utf8: 1 char, 2 bytes, utf16: 1 code unit
         //               ^~~~~~ utf8: 2 chars, 3 byte ea., utf16: 2 code units
-        let lines = StringOffsets::new(content);
+        let lines: StringOffsets = StringOffsets::new(content);
 
         // UTF-16 positions
         assert_eq!(lines.utf8_to_utf16_pos(0), pos(0, 0)); // ❤️
@@ -632,7 +646,7 @@ line1
     #[test]
     fn test_critical_input_len() {
         let content = [b'a'; 16384];
-        let lines = StringOffsets::from_bytes(&content);
+        let lines: StringOffsets = StringOffsets::from_bytes(&content);
         assert_eq!(lines.utf8_to_utf16_pos(16384), pos(1, 0));
     }
 }
