@@ -1,7 +1,7 @@
 [package]
 name = "string-offsets"
 authors = ["The blackbird team <support@github.com>"]
-version = "0.1.0"
+version = "0.2"
 edition = "2021"
 description = "Converts string offsets between UTF-8 bytes, UTF-16 code units, Unicode code points, and lines."
 repository = "https://github.com/github/rust-gems"
