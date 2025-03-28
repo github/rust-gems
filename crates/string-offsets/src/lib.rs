@@ -3,10 +3,10 @@
 //! # Example
 //!
 //! ```
-//! use string_offsets::{StringOffsets, AllConfig};
+//! use string_offsets::StringOffsets;
 //!
 //! let s = "☀️hello\n🗺️world\n";
-//! let offsets = StringOffsets::<AllConfig>::new(s);
+//! let offsets: StringOffsets = StringOffsets::new(s);
 //!
 //! // Find offsets where lines begin and end.
 //! assert_eq!(offsets.line_to_utf8s(0), 0..12);  // note: 0-based line numbers
@@ -93,7 +93,9 @@ pub use config::{AllConfig, OnlyLines};
 /// Most operations run in O(1) time. A few require O(log n) time. The memory consumed by this
 /// data structure is typically less than the memory occupied by the actual content. In the best
 /// case, it requires ~45% of the content space.
-pub struct StringOffsets<C: ConfigType> {
+/// One can reduce memory requirements further by only requesting the necessary features via the
+/// configuration type.
+pub struct StringOffsets<C: ConfigType = AllConfig> {
     /// Vector storing, for every line, the byte position at which the line starts.
     line_begins: Vec<u32>,
 
@@ -488,7 +490,7 @@ mod tests {
         let content = r#"a short line.
 followed by another one.
 no terminating newline!"#;
-        let lines = StringOffsets::<AllConfig>::new(content);
+        let lines: StringOffsets = StringOffsets::new(content);
         assert_eq!(lines.line_to_utf8s(0), 0..14);
         assert_eq!(&content[0..14], "a short line.\n");
         assert_eq!(lines.line_to_utf8s(1), 14..39);
@@ -534,7 +536,7 @@ no terminating newline!"#;
     fn test_convert_ascii() {
         let content = r#"line0
 line1"#;
-        let lines = StringOffsets::<AllConfig>::new(content);
+        let lines: StringOffsets = StringOffsets::new(content);
         assert_eq!(lines.utf8_to_char_pos(0), pos(0, 0));
         assert_eq!(lines.utf8_to_char_pos(1), pos(0, 1));
         assert_eq!(lines.utf8_to_char_pos(6), pos(1, 0));
@@ -547,7 +549,7 @@ line1"#;
         let content = r#"❤️ line0
 line1
 ✅ line2"#;
-        let lines = StringOffsets::<AllConfig>::new(content);
+        let lines: StringOffsets = StringOffsets::new(content);
         assert_eq!(lines.utf8_to_char_pos(0), pos(0, 0)); // ❤️ takes 6 bytes to represent in utf8 (2 code points)
         assert_eq!(lines.utf8_to_char_pos(1), pos(0, 0));
         assert_eq!(lines.utf8_to_char_pos(2), pos(0, 0));
@@ -578,7 +580,7 @@ line1
     fn test_small() {
         // Á - 2 bytes utf8
         let content = r#"❤️ line0 ❤️Á 👋"#;
-        let lines = StringOffsets::<AllConfig>::new(content);
+        let lines: StringOffsets = StringOffsets::new(content);
         let mut utf16_index = 0;
         let mut char_index = 0;
         for (byte_index, char) in content.char_indices() {
@@ -598,7 +600,7 @@ line1
         //                 ^~~~ utf8: 1 char, 1 byte, utf16: 1 code unit
         //                ^~~~~ utf8: 1 char, 2 bytes, utf16: 1 code unit
         //               ^~~~~~ utf8: 2 chars, 3 byte ea., utf16: 2 code units
-        let lines = StringOffsets::<AllConfig>::new(content);
+        let lines: StringOffsets = StringOffsets::new(content);
 
         // UTF-16 positions
         assert_eq!(lines.utf8_to_utf16_pos(0), pos(0, 0)); // ❤️
@@ -644,7 +646,7 @@ line1
     #[test]
     fn test_critical_input_len() {
         let content = [b'a'; 16384];
-        let lines = StringOffsets::<AllConfig>::from_bytes(&content);
+        let lines: StringOffsets = StringOffsets::from_bytes(&content);
         assert_eq!(lines.utf8_to_utf16_pos(16384), pos(1, 0));
     }
 }
