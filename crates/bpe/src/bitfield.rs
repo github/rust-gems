@@ -8,7 +8,7 @@ impl BitField {
     /// All bits are initialized to 1.
     pub(crate) fn new(bits: usize) -> Self {
         Self {
-            bitfield: vec![u64::MAX; (bits + 63) / 64],
+            bitfield: vec![u64::MAX; bits.div_ceil(64)],
         }
     }
 
