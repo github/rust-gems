@@ -1,4 +1,3 @@
-use core::panic;
 use std::collections::HashSet;
 
 use bpe::byte_pair_encoding::{create_test_string, select_test_string};
