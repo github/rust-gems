@@ -9,23 +9,29 @@ pub static TOKENIZERS: LazyLock<
     [(
         &'static str,
         &'static Tokenizer,
-        TiktokenTokenizer,
+        Option<TiktokenTokenizer>,
         HuggingfaceTokenizer,
-    ); 2],
+    ); 3],
 > = LazyLock::new(|| {
     [
         (
             "cl100k",
             bpe_openai::cl100k_base(),
-            tiktoken_rs::cl100k_base().expect("tokenizer available"),
+            Some(tiktoken_rs::cl100k_base().expect("tokenizer available")),
             HuggingfaceTokenizer::from_pretrained("Xenova/gpt-4", None).expect("model available"),
         ),
         (
             "o200k",
             bpe_openai::o200k_base(),
-            tiktoken_rs::o200k_base().expect("tokenizer available"),
+            Some(tiktoken_rs::o200k_base().expect("tokenizer available")),
             HuggingfaceTokenizer::from_pretrained("Xenova/gpt-4o", None).expect("model available"),
         ),
+        (
+            "voyage3",
+            bpe_openai::voyage3_base(),
+            None,
+            HuggingfaceTokenizer::from_pretrained("voyageai/voyage-code-3", None).expect("model available"),
+        )
     ]
 });
 

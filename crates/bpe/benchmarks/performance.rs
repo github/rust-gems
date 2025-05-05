@@ -163,13 +163,15 @@ fn comparison_benchmark(c: &mut Criterion) {
                     )
                 },
             );
-            group.bench_with_input(BenchmarkId::new("tiktoken", bytes), &bytes, |b, bytes| {
-                b.iter_batched(
-                    || select_test_string(&text, *bytes),
-                    |text| tiktoken.encode_ordinary(text),
-                    criterion::BatchSize::SmallInput,
-                )
-            });
+            if let Some(tiktoken) = tiktoken {
+                group.bench_with_input(BenchmarkId::new("tiktoken", bytes), &bytes, |b, bytes| {
+                    b.iter_batched(
+                        || select_test_string(&text, *bytes),
+                        |text| tiktoken.encode_ordinary(text),
+                        criterion::BatchSize::SmallInput,
+                    )
+                });
+            }
             group.bench_with_input(
                 BenchmarkId::new("huggingface", bytes),
                 &bytes,
@@ -206,13 +208,15 @@ fn worstcase_comparison_benchmark(c: &mut Criterion) {
                     )
                 },
             );
-            group.bench_with_input(BenchmarkId::new("tiktoken", bytes), &bytes, |b, bytes| {
-                b.iter_batched(
-                    || select_test_string(&text, *bytes),
-                    |text| tiktoken.encode_ordinary(text),
-                    criterion::BatchSize::SmallInput,
-                )
-            });
+            if let Some(tiktoken) = tiktoken {
+                group.bench_with_input(BenchmarkId::new("tiktoken", bytes), &bytes, |b, bytes| {
+                    b.iter_batched(
+                        || select_test_string(&text, *bytes),
+                        |text| tiktoken.encode_ordinary(text),
+                        criterion::BatchSize::SmallInput,
+                    )
+                });
+            }
             group.bench_with_input(
                 BenchmarkId::new("huggingface", bytes),
                 &bytes,
