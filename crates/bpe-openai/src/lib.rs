@@ -50,7 +50,7 @@ static BPE_VOYAGE3_BASE: LazyLock<Tokenizer> = LazyLock::new(|| {
     let pat1 = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+$";
     let pat2 = "\\s+\\s";
     let pat3 = "\\s+";
-    Tokenizer::new_lookahead(bpe, &[(&pat1, false), (pat2, true), (pat3, false)], true)
+    Tokenizer::new_lookahead(bpe, &[(pat1, false), (pat2, true), (pat3, false)], true)
         .expect("valid regex")
 });
 
