@@ -30,8 +30,9 @@ pub static TOKENIZERS: LazyLock<
             "voyage3",
             bpe_openai::voyage3_base(),
             None,
-            HuggingfaceTokenizer::from_pretrained("voyageai/voyage-code-3", None).expect("model available"),
-        )
+            HuggingfaceTokenizer::from_pretrained("voyageai/voyage-code-3", None)
+                .expect("model available"),
+        ),
     ]
 });
 
