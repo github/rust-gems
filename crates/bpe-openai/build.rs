@@ -17,6 +17,11 @@ fn main() {
         include_bytes!("data/o200k_base.tiktoken.gz"),
         17846336922010275747,
     );
+    serialize_tiktoken_bpe(
+        "voyage3_base",
+        include_bytes!("data/voyage3_base.tiktoken.gz"),
+        17846336922010275747,
+    );
     println!("cargo::rerun-if-changed=build.rs");
 }
 

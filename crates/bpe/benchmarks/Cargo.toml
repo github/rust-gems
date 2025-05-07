@@ -18,7 +18,7 @@ path = "equivalence.rs"
 test = true
 
 [dependencies]
-bpe = { path = "../../bpe" }
+bpe = { path = "../../bpe", features = ["rand", "tiktoken"] }
 bpe-openai = { path = "../../bpe-openai" }
 criterion = "0.5"
 rand = "0.9"
