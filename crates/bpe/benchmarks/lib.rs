@@ -5,6 +5,7 @@ use tiktoken_rs::CoreBPE as TiktokenTokenizer;
 use tokenizers::pre_tokenizers::byte_level::ByteLevel as HuggingfaceByteLevel;
 use tokenizers::tokenizer::Tokenizer as HuggingfaceTokenizer;
 
+#[allow(clippy::type_complexity)]
 pub static TOKENIZERS: LazyLock<
     [(
         &'static str,
