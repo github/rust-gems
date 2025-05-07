@@ -17,9 +17,11 @@ impl<'a> NormalizedString<'a> {
     /// This function is unsafe, since the caller must ensure that the correct normalization
     /// was used. The normalization may vary by tokenizer. This mostly a backdoor which might
     /// be handy for certain optimizations or for testing.
+    ///
+    /// # Safety
+    /// This is safe if `s` is in fact correctly normalized already. The caller is
+    /// responsible for ensuring that.
     pub unsafe fn from_str(s: &'a str) -> NormalizedString<'a> {
-        // SAFETY: This is safe if `s` is in fact correctly normalized already. The caller is
-        // responsible for ensuring that.
         NormalizedString(Cow::Borrowed(s))
     }
 }
