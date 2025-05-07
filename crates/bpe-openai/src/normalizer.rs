@@ -18,8 +18,8 @@ impl<'a> NormalizedString<'a> {
     /// was used. The normalization may vary by tokenizer. This mostly a backdoor which might
     /// be handy for certain optimizations or for testing.
     pub unsafe fn from_str(s: &'a str) -> NormalizedString<'a> {
-        // SAFETY: This is safe because we are creating a NormalizedString from a &str
-        // which is guaranteed to be valid UTF-8.
+        // SAFETY: This is safe if `s` is in fact correctly normalized already. The caller is
+        // responsible for ensuring that.
         NormalizedString(Cow::Borrowed(s))
     }
 }
