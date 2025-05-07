@@ -26,7 +26,7 @@ fn test_compare_dictionary() {
         let mut hugging_tokens = huggingface.get_vocab(false);
         // HACK: There are incorrect vocabularies in huggingface which have the added tokens stored together with the base tokens..
         // This is a workaround to remove them.
-        for (added_token, _) in huggingface.get_added_vocabulary().get_vocab() {
+        for added_token in huggingface.get_added_vocabulary().get_vocab().keys() {
             hugging_tokens.remove(added_token);
         }
         let mut hugging_tokens: Vec<_> = hugging_tokens.into_iter().collect();
