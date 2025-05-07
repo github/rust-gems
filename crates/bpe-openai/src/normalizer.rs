@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use unicode_normalization::UnicodeNormalization;
 
 /// Type which represents a normalized string.
-/// This is to avoid calling normalize multiple times of forgetting to call normalization!
+/// This is to avoid calling normalize multiple times or forgetting to call normalization!
 ///
 /// TODO: Annotate the type with the normalization type, once there are more than one.
 pub struct NormalizedString<'a>(Cow<'a, str>);
