@@ -20,7 +20,7 @@ test = true
 [dependencies]
 bpe = { path = "../../bpe", features = ["rand", "tiktoken"] }
 bpe-openai = { path = "../../bpe-openai" }
-criterion = "0.5"
+criterion = "0.6"
 rand = "0.9"
 tiktoken-rs = "0.6"
 tokenizers = { version = "0.21", features = ["http"] }
