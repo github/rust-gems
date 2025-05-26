@@ -89,7 +89,6 @@ mod tests {
         .unwrap();
         let bpe = &cl100k_base().bpe;
         let encoded1 = cl100k_base_singleton()
-            .lock()
             .encode_ordinary(input)
             .into_iter()
             .collect_vec();
