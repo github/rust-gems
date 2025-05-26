@@ -7,4 +7,4 @@ bpe = { path = "../../bpe", features = ["rand"] }
 bpe-openai = { path = "../../bpe-openai" }
 itertools = "0.14"
 rand = "0.9"
-tiktoken-rs = "0.6"
+tiktoken-rs = "0.7"
