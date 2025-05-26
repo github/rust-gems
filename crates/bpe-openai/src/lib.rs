@@ -242,12 +242,12 @@ mod tests {
 
     #[test]
     fn test_cl100k() {
-        test_equivalence(cl100k_base(), &cl100k_base_singleton().lock());
+        test_equivalence(cl100k_base(), cl100k_base_singleton());
     }
 
     #[test]
     fn test_o200k() {
-        test_equivalence(o200k_base(), &o200k_base_singleton().lock());
+        test_equivalence(o200k_base(), o200k_base_singleton());
     }
 
     #[track_caller]
