@@ -10,7 +10,11 @@ Two variants are implemented, which differ in the way new elements are added to 
   It has some similar properties as related filters like HyperLogLog, MinHash, etc, but uses less space.
 
 <details>
-<summary>Data Structure Analogy</summary>
+<summary>
+
+### Data Structure Analogy
+
+</summary>
 If you're not familiar with probabilistic data structures then getting an intuition for how this data structure works
 using a real world example might be helpful. 
 
