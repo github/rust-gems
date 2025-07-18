@@ -259,15 +259,20 @@ mod tests {
 
     #[test]
     fn test_geo_count() {
+        // Pairs of (n, expected) where n is the number of inserted items
+        // and expected is the expected size of the GeoDistinctCount.
+        // The output matching the expected values is dependent on the configuration
+        // and hashing function. Changes to these will lead to different results and the 
+        // test will need to be updated.
         for (n, result) in [
             (10, 10.0021105),
             (100, 100.21153),
-            (1000, 1001.81635),
-            (10000, 9951.017),
-            (30000, 29927.705),
-            (100000, 99553.24),
-            (1000000, 1003824.1),
-            (10000000, 10071972.0),
+            (1000, 1021.64075),
+            (10000, 11064.973),
+            (30000, 34484.45),
+            (100000, 112042.44),
+            (1000000, 827151.1),
+            (10000000, 3110472.8),
         ] {
             let mut geo_count = GeoDistinctCount13::default();
             (0..n).for_each(|i| geo_count.push(i));
