@@ -1,6 +1,7 @@
 //! Geometric filter implementation for distinct count.
 
 use std::collections::VecDeque;
+use std::hash::BuildHasher;
 use std::mem::{size_of, size_of_val};
 
 use crate::config::{
@@ -14,33 +15,35 @@ mod bitdeque;
 mod config;
 
 pub use config::{GeoDistinctConfig13, GeoDistinctConfig7};
+use fnv::FnvBuildHasher;
 
 /// Distinct count filter with a relative error standard deviation of ~0.065.
 /// Uses at most 168 bytes of memory.
-pub type GeoDistinctCount7<'a> = GeoDistinctCount<'a, GeoDistinctConfig7>;
+pub type GeoDistinctCount7<'a> = GeoDistinctCount<'a, GeoDistinctConfig7, FnvBuildHasher>;
 
 /// Distinct count filter with a relative error standard deviation of ~0.0075.
 /// Uses at most 9248 bytes of memory.
-pub type GeoDistinctCount13<'a> = GeoDistinctCount<'a, GeoDistinctConfig13>;
+pub type GeoDistinctCount13<'a> = GeoDistinctCount<'a, GeoDistinctConfig13, FnvBuildHasher>;
 
 /// Probabilistic distinct count data structure based on geometric filters.
 ///
 /// The [`GeoDistinctCount`] falls into the category of probabilistic set size estimators.
 /// It has some similar properties as related filters like HyperLogLog, MinHash, etc, but uses less space.
 #[derive(Eq, PartialEq)]
-pub struct GeoDistinctCount<'a, C: GeoConfig<Distinct>> {
+pub struct GeoDistinctCount<'a, C: GeoConfig<Distinct>, H: BuildHasher> {
     config: C,
+    hash_builder: H,
     msb: VecDeque<C::BucketType>,
     lsb: BitDeque<'a>,
 }
 
-impl<C: GeoConfig<Distinct> + Default> Default for GeoDistinctCount<'_, C> {
+impl<C: GeoConfig<Distinct> + Default, H: BuildHasher + Clone + Default> Default for GeoDistinctCount<'_, C, H> {
     fn default() -> Self {
-        Self::new(C::default())
+        Self::new(C::default(), H::default())
     }
 }
 
-impl<C: GeoConfig<Distinct>> std::fmt::Debug for GeoDistinctCount<'_, C> {
+impl<C: GeoConfig<Distinct>, H: BuildHasher + Clone> std::fmt::Debug for GeoDistinctCount<'_, C, H> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
@@ -52,17 +55,17 @@ impl<C: GeoConfig<Distinct>> std::fmt::Debug for GeoDistinctCount<'_, C> {
     }
 }
 
-impl<C: GeoConfig<Distinct>> GeoDistinctCount<'_, C> {
-    pub fn new(config: C) -> Self {
+impl<C: GeoConfig<Distinct>, H: BuildHasher + Clone> GeoDistinctCount<'_, C, H> {
+    pub fn new(config: C, hash_builder: H) -> Self {
         let msb = Default::default();
         let lsb = BitDeque::new(max_lsb_bytes::<C::BucketType>(
             config.max_bytes(),
             config.max_msb_len(),
         ));
-        Self { config, msb, lsb }
+        Self { config, msb, lsb, hash_builder }
     }
 
-    fn from_bit_chunks<I: Iterator<Item = BitChunk>>(config: C, chunks: I) -> Self {
+    fn from_bit_chunks<I: Iterator<Item = BitChunk>>(config: C, hash_builder: H, chunks: I) -> Self {
         let mut ones = iter_ones::<C::BucketType, _>(chunks.peekable());
 
         let mut msb = VecDeque::default();
@@ -83,7 +86,7 @@ impl<C: GeoConfig<Distinct>> GeoDistinctCount<'_, C> {
             max_lsb_bytes::<C::BucketType>(config.max_bytes(), config.max_msb_len()),
         );
 
-        let result = Self { config, msb, lsb };
+        let result = Self { config, msb, lsb, hash_builder };
         result.debug_assert_invariants();
         result
     }
@@ -128,7 +131,11 @@ impl<C: GeoConfig<Distinct>> GeoDistinctCount<'_, C> {
     }
 }
 
-impl<C: GeoConfig<Distinct>> Count<Distinct> for GeoDistinctCount<'_, C> {
+impl<C: GeoConfig<Distinct>, H: BuildHasher + Clone> Count<Distinct, H> for GeoDistinctCount<'_, C, H> {
+    fn hasher_builder(&self) -> &H {
+        &self.hash_builder
+    }
+
     fn push_hash(&mut self, hash: u64) {
         self.set_bit(self.config.hash_to_bucket(hash));
     }
@@ -174,12 +181,13 @@ impl<C: GeoConfig<Distinct>> Count<Distinct> for GeoDistinctCount<'_, C> {
     }
 
     fn bytes_in_memory(&self) -> usize {
-        let Self { config, msb, lsb } = self;
-        size_of_val(config) + msb.len() * size_of::<C::BucketType>() + lsb.bytes_in_memory()
+        let Self { config, msb, lsb, hash_builder } = self;
+        size_of_val(config) + msb.len() * size_of::<C::BucketType>() + lsb.bytes_in_memory() + 
+            size_of_val(hash_builder)
     }
 }
 
-impl<C: GeoConfig<Distinct>> GeoDistinctCount<'_, C> {
+impl<C: GeoConfig<Distinct>, H: BuildHasher + Clone> GeoDistinctCount<'_, C, H> {
     fn insert_into_lsb(&mut self, bucket: usize) {
         if !self.lsb.test_bit(bucket) {
             self.lsb.set_bit(bucket);
@@ -208,16 +216,22 @@ impl<C: GeoConfig<Distinct>> GeoDistinctCount<'_, C> {
     }
 }
 
-fn or<C: GeoConfig<Distinct>>(
-    a: &GeoDistinctCount<'_, C>,
-    b: &GeoDistinctCount<'_, C>,
-) -> GeoDistinctCount<'static, C> {
+fn or<C: GeoConfig<Distinct>, H: BuildHasher + Clone>(
+    a: &GeoDistinctCount<'_, C, H>,
+    b: &GeoDistinctCount<'_, C, H>,
+) -> GeoDistinctCount<'static, C, H> {
     assert!(
         a.config == b.config,
         "combined filters must have the same configuration"
     );
+
+    // It would be really nice to be able to asser that our hash builders have
+    // the same state here, but from what I can see it is not common
+    // for hash builders to implement `PartialEq` or `Eq`.
+
     GeoDistinctCount::from_bit_chunks(
         a.config.clone(),
+        a.hash_builder.clone(),
         or_bit_chunks(a.bit_chunks(), b.bit_chunks()).peekable(),
     )
 }
@@ -362,7 +376,7 @@ mod tests {
                         13,
                         7800,
                         (7800 - (msb.round() as usize) * 8) / 3,
-                    )))
+                    ), FnvBuildHasher::default()))
                 },
                 3000,
                 &[100000],
@@ -381,7 +395,7 @@ mod tests {
                 expected.push_hash(rnd.next_u64());
             }
             let actual =
-                GeoDistinctCount::from_bit_chunks(expected.config.clone(), expected.bit_chunks());
+                GeoDistinctCount::from_bit_chunks(expected.config.clone(), expected.hash_builder.clone(), expected.bit_chunks());
             assert_eq!(expected, actual);
         }
     }
@@ -395,9 +409,9 @@ mod tests {
         assert_eq!(vec![17, 11, 7], a.msb.iter().copied().collect_vec());
     }
 
-    impl<C: GeoConfig<Distinct>> GeoDistinctCount<'_, C> {
+    impl<C: GeoConfig<Distinct>> GeoDistinctCount<'_, C, FnvBuildHasher> {
         fn from_ones(config: C, ones: impl IntoIterator<Item = C::BucketType>) -> Self {
-            let mut result = Self::new(config);
+            let mut result = Self::new(config, FnvBuildHasher::default());
             for one in ones {
                 result.set_bit(one);
             }

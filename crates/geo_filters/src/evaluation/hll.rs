@@ -87,7 +87,7 @@ impl Hasher for NoopHasher {
 
     #[inline]
     fn write(&mut self, _: &[u8]) {
-        todo!("")
+        unimplemented!("NoopHasher only supports writing u64 values");
     }
 
     #[inline]
@@ -104,13 +104,17 @@ impl BuildHasher for BuildNoopHasher {
     }
 }
 
-impl<C: HllConfig> Count<Distinct> for Hll<C> {
+impl<C: HllConfig> Count<Distinct, BuildNoopHasher> for Hll<C> {
+    fn hasher_builder(&self) -> &BuildNoopHasher {
+        unimplemented!()
+    }
+
     fn push_hash(&mut self, hash: u64) {
         self.inner.borrow_mut().insert(&hash)
     }
 
     fn push_sketch(&mut self, _other: &Self) {
-        todo!()
+        unimplemented!()
     }
 
     fn size(&self) -> f32 {
@@ -118,7 +122,7 @@ impl<C: HllConfig> Count<Distinct> for Hll<C> {
     }
 
     fn size_with_sketch(&self, _other: &Self) -> f32 {
-        todo!()
+        unimplemented!()
     }
 
     fn bytes_in_memory(&self) -> usize {

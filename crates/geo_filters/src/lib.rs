@@ -13,7 +13,7 @@ pub mod distinct_count;
 #[cfg(feature = "evaluation")]
 pub mod evaluation;
 
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash};
 
 /// Marker trait to indicate the variant implemented by a [`Count`] instance.
 pub trait Method: Clone + Eq + PartialEq + Send + Sync {}
@@ -29,13 +29,17 @@ pub struct Distinct {}
 impl Method for Distinct {}
 
 /// Trait for types solving the set cardinality estimation problem.
-pub trait Count<M: Method> {
+pub trait Count<M: Method, H: BuildHasher> {
+    /// Get the current hash builder
+    fn hasher_builder(&self) -> &H;
+
     /// Add the given hash to the set.
     fn push_hash(&mut self, hash: u64);
 
     /// Add the hash of the given item, computed with the default hasher, to the set.
     fn push<I: Hash>(&mut self, item: I) {
-        self.push_hash(item_to_hash(item))
+        let hash_builder = self.hasher_builder();
+        self.push_hash(hash_builder.hash_one(item));
     }
 
     /// Add the given sketch to this one.
@@ -51,11 +55,4 @@ pub trait Count<M: Method> {
 
     /// Returns the number of bytes in memory used to represent this filter.
     fn bytes_in_memory(&self) -> usize;
-}
-
-fn item_to_hash<I: Hash>(item: I) -> u64 {
-    // TODO: replace with a stable hashing function!
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    item.hash(&mut hasher);
-    hasher.finish()
 }
