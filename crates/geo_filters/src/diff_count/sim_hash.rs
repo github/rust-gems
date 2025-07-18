@@ -1,6 +1,6 @@
 //! Similarity hashing allows quickly finding similar sets with a reverse index.
 
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::Range;
 
 use fnv::FnvHasher;
@@ -42,7 +42,7 @@ impl SimHash {
     }
 }
 
-impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
+impl<C: GeoConfig<Diff>, H: BuildHasher + Clone> GeoDiffCount<'_, C, H> {
     /// Given the expected size of a diff, this function returns the range of bucket ids which should
     /// be searched for in order to find geometric filters of the desired similarity. If at least half
     /// of the buckets in the range match, one found a match that has the expected diff size (or better).
@@ -107,14 +107,14 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
 ///
 /// Property 2 is used to construct all sim hashes efficiently.
 /// Property 3 is used to search for similar GeoDiffCounts.
-struct SimHashIterator<'a, C: GeoConfig<Diff>> {
-    filter: &'a GeoDiffCount<'a, C>,
+struct SimHashIterator<'a, C: GeoConfig<Diff>, H: BuildHasher + Clone> {
+    filter: &'a GeoDiffCount<'a, C, H>,
     prev_bucket_id: BucketId,
     sim_hash: [u64; SIM_BUCKETS],
 }
 
-impl<'a, C: GeoConfig<Diff>> SimHashIterator<'a, C> {
-    pub fn new(filter: &'a GeoDiffCount<'a, C>) -> Self {
+impl<'a, C: GeoConfig<Diff>, H: BuildHasher + Clone> SimHashIterator<'a, C, H> {
+    pub fn new(filter: &'a GeoDiffCount<'a, C, H>) -> Self {
         let msb = filter.nth_most_significant_one(0);
         let prev_bucket_id =
             msb.map(|b| b.into_usize() / SIM_BUCKET_SIZE).unwrap_or(0) + SIM_BUCKETS;
@@ -126,7 +126,7 @@ impl<'a, C: GeoConfig<Diff>> SimHashIterator<'a, C> {
     }
 }
 
-impl<C: GeoConfig<Diff>> Iterator for SimHashIterator<'_, C> {
+impl<C: GeoConfig<Diff>, H: BuildHasher + Clone> Iterator for SimHashIterator<'_, C, H> {
     type Item = (BucketId, SimHash);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -148,7 +148,7 @@ impl<C: GeoConfig<Diff>> Iterator for SimHashIterator<'_, C> {
     }
 }
 
-impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
+impl<C: GeoConfig<Diff>, H: BuildHasher + Clone> GeoDiffCount<'_, C, H> {
     /// n specifies the desired zero-based index of the most significant one.
     /// The zero-based index of the desired one bit is returned.
     fn nth_most_significant_one(&self, mut n: usize) -> Option<C::BucketType> {
