@@ -2,9 +2,9 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::hash::BuildHasher;
 use std::mem::{size_of, size_of_val};
 
+use crate::build_hasher::{DefaultBuildHasher, GeoFilterBuildHasher};
 use crate::config::{
     count_ones_from_bitchunks, count_ones_from_msb_and_lsb, iter_bit_chunks, iter_ones,
     mask_bit_chunks, take_ref, xor_bit_chunks, BitChunk, GeoConfig, IsBucketType,
@@ -17,13 +17,12 @@ mod sim_hash;
 
 use bitvec::*;
 pub use config::{GeoDiffConfig13, GeoDiffConfig7};
-use fnv::FnvBuildHasher;
 
 /// Diff count filter with a relative error standard deviation of ~0.125.
-pub type GeoDiffCount7<'a> = GeoDiffCount<'a, GeoDiffConfig7, FnvBuildHasher>;
+pub type GeoDiffCount7<'a> = GeoDiffCount<'a, GeoDiffConfig7, DefaultBuildHasher>;
 
 /// Diff count filter with a relative error standard deviation of ~0.015.
-pub type GeoDiffCount13<'a> = GeoDiffCount<'a, GeoDiffConfig13, FnvBuildHasher>;
+pub type GeoDiffCount13<'a> = GeoDiffCount<'a, GeoDiffConfig13, DefaultBuildHasher>;
 
 /// Probabilistic diff count data structure based on geometric filters.
 ///
@@ -59,15 +58,15 @@ pub type GeoDiffCount13<'a> = GeoDiffCount<'a, GeoDiffConfig13, FnvBuildHasher>;
 ///     1500 bytes achieves a precision of ~0.022 and could estimate the 10k items with an error
 ///     of +/-22k items in the best case which is 20 times worse despite using 5 times more space!
 #[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct GeoDiffCount<'a, C: GeoConfig<Diff>, H: BuildHasher + Clone> {
+pub struct GeoDiffCount<'a, C: GeoConfig<Diff>, H: GeoFilterBuildHasher = DefaultBuildHasher> {
     config: C,
     /// The bit positions are stored from largest to smallest.
     msb: Cow<'a, [C::BucketType]>,
     lsb: BitVec<'a>,
-    hash_builder: H,
+    build_hasher: H,
 }
 
-impl<C: GeoConfig<Diff>, H: BuildHasher + Clone> std::fmt::Debug for GeoDiffCount<'_, C, H> {
+impl<C: GeoConfig<Diff>, H: GeoFilterBuildHasher> std::fmt::Debug for GeoDiffCount<'_, C, H> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
@@ -79,13 +78,22 @@ impl<C: GeoConfig<Diff>, H: BuildHasher + Clone> std::fmt::Debug for GeoDiffCoun
     }
 }
 
-impl<C: GeoConfig<Diff>, H: BuildHasher + Clone> GeoDiffCount<'_, C, H> {
-    pub fn new(config: C, hash_builder: H) -> Self {
+impl<C: GeoConfig<Diff>, H: GeoFilterBuildHasher> GeoDiffCount<'_, C, H> {
+    pub fn new(config: C) -> Self {
         Self {
             config,
             msb: Default::default(),
             lsb: Default::default(),
-            hash_builder,   
+            build_hasher: Default::default(),
+        }
+    }
+
+    pub fn with_build_hasher(config: C, build_hasher: H) -> Self {
+        Self {
+            config,
+            msb: Default::default(),
+            lsb: Default::default(),
+            build_hasher,
         }
     }
 
@@ -96,7 +104,11 @@ impl<C: GeoConfig<Diff>, H: BuildHasher + Clone> GeoDiffCount<'_, C, H> {
     ///
     /// Note: we need a peekable iterator, such that we can extract the most significant bits without
     /// having to construct another iterator with the remaining `BitChunk`s.
-    fn from_bit_chunks<I: Iterator<Item = BitChunk>>(config: C, hash_builder: H, chunks: I) -> Self {
+    fn from_bit_chunks<I: Iterator<Item = BitChunk>>(
+        config: C,
+        hash_builder: H,
+        chunks: I,
+    ) -> Self {
         let mut ones = iter_ones::<C::BucketType, _>(chunks.peekable());
 
         let mut msb = Vec::default();
@@ -117,7 +129,7 @@ impl<C: GeoConfig<Diff>, H: BuildHasher + Clone> GeoDiffCount<'_, C, H> {
             config,
             msb: Cow::from(msb),
             lsb,
-            hash_builder,
+            build_hasher: hash_builder,
         };
         result.debug_assert_invariants();
         result
@@ -258,7 +270,7 @@ impl<C: GeoConfig<Diff>, H: BuildHasher + Clone> GeoDiffCount<'_, C, H> {
             config: self.config,
             lsb: self.lsb.into_owned(),
             msb: Cow::Owned(self.msb.into_owned()),
-            hash_builder: self.hash_builder.clone(),
+            build_hasher: self.build_hasher.clone(),
         }
     }
 
@@ -296,14 +308,14 @@ impl<C: GeoConfig<Diff>, H: BuildHasher + Clone> GeoDiffCount<'_, C, H> {
 /// after compression             : 01 0   10 1   00 0
 /// bitset of the returned filter :           010 101000
 #[cfg(test)]
-pub(crate) fn masked<C: GeoConfig<Diff>, H: BuildHasher + Clone>(
+pub(crate) fn masked<C: GeoConfig<Diff>, H: GeoFilterBuildHasher>(
     diff_count: &GeoDiffCount<'_, C, H>,
     mask: usize,
     modulus: usize,
 ) -> GeoDiffCount<'static, C, H> {
     GeoDiffCount::from_bit_chunks(
         diff_count.config.clone(),
-        diff_count.hash_builder.clone(),
+        diff_count.build_hasher.clone(),
         mask_bit_chunks(diff_count.bit_chunks(), mask as u64, modulus).peekable(),
     )
 }
@@ -311,9 +323,9 @@ pub(crate) fn masked<C: GeoConfig<Diff>, H: BuildHasher + Clone>(
 /// Computes an xor of the two underlying bitsets.
 /// This operation corresponds to computing the symmetric difference of the two
 /// sets represented by the GeoDiffCounts.
-/// 
+///
 /// SAFETY: The two GeoDiffCounts must have the same configuration and hash builder.
-pub(crate) fn xor<C: GeoConfig<Diff>, H: BuildHasher + Clone>(
+pub(crate) fn xor<C: GeoConfig<Diff>, H: GeoFilterBuildHasher>(
     diff_count: &GeoDiffCount<'_, C, H>,
     other: &GeoDiffCount<'_, C, H>,
 ) -> GeoDiffCount<'static, C, H> {
@@ -328,14 +340,14 @@ pub(crate) fn xor<C: GeoConfig<Diff>, H: BuildHasher + Clone>(
 
     GeoDiffCount::from_bit_chunks(
         diff_count.config.clone(),
-        diff_count.hash_builder.clone(),
+        diff_count.build_hasher.clone(),
         xor_bit_chunks(diff_count.bit_chunks(), other.bit_chunks()).peekable(),
     )
 }
 
-impl<C: GeoConfig<Diff>, H: BuildHasher + Clone> Count<Diff, H> for GeoDiffCount<'_, C, H> {
+impl<C: GeoConfig<Diff>, H: GeoFilterBuildHasher> Count<Diff, H> for GeoDiffCount<'_, C, H> {
     fn hasher_builder(&self) -> &H {
-        &self.hash_builder
+        &self.build_hasher
     }
 
     fn push_hash(&mut self, hash: u64) {
@@ -359,8 +371,16 @@ impl<C: GeoConfig<Diff>, H: BuildHasher + Clone> Count<Diff, H> for GeoDiffCount
     }
 
     fn bytes_in_memory(&self) -> usize {
-        let Self { config, msb, lsb, hash_builder } = self;
-        size_of_val(config) + msb.len() * size_of::<C::BucketType>() + lsb.bytes_in_memory() + size_of_val(hash_builder)
+        let Self {
+            config,
+            msb,
+            lsb,
+            build_hasher: hash_builder,
+        } = self;
+        size_of_val(config)
+            + msb.len() * size_of::<C::BucketType>()
+            + lsb.bytes_in_memory()
+            + size_of_val(hash_builder)
     }
 }
 
@@ -378,7 +398,8 @@ mod tests {
     //
     //     scripts/accuracy -n 10000 geo_diff/u16/b=7/bytes=50/msb=10
     //
-    type GeoDiffCount7_50<'a> = GeoDiffCount<'a, FixedConfig<Diff, u16, 7, 50, 10>, FnvBuildHasher>;
+    type GeoDiffCount7_50<'a> =
+        GeoDiffCount<'a, FixedConfig<Diff, u16, 7, 50, 10, DefaultBuildHasher>>;
 
     #[test]
     fn test_geo_count() {
@@ -554,7 +575,7 @@ mod tests {
             }
             let actual = GeoDiffCount::from_bit_chunks(
                 expected.config.clone(),
-                expected.hash_builder.clone(),
+                expected.build_hasher.clone(),
                 expected.bit_chunks().peekable(),
             );
             assert_eq!(expected, actual);
@@ -570,9 +591,9 @@ mod tests {
         assert_eq!(vec![17, 11, 7], a.msb.iter().copied().collect_vec());
     }
 
-    impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C, FnvBuildHasher> {
+    impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C, DefaultBuildHasher> {
         fn from_ones(config: C, ones: impl IntoIterator<Item = C::BucketType>) -> Self {
-            let mut result = Self::new(config, FnvBuildHasher::default());
+            let mut result = Self::new(config);
             for one in ones {
                 result.xor_bit(one);
             }

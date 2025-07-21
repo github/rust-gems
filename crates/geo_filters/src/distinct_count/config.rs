@@ -1,5 +1,6 @@
 use once_cell::sync::Lazy;
 
+use crate::build_hasher::DefaultBuildHasher;
 use crate::config::EstimationLookup;
 use crate::config::FixedConfig;
 use crate::config::HashToBucketLookup;
@@ -18,7 +19,7 @@ use crate::Distinct;
 //
 //     scripts/accuracy -n 10000 geo_distinct/u16/b=7/bytes=136/msb={8,16,32,64}
 //
-pub type GeoDistinctConfig7 = FixedConfig<Distinct, u16, 7, 136, 8>;
+pub type GeoDistinctConfig7 = FixedConfig<Distinct, u16, 7, 136, 8, DefaultBuildHasher>;
 
 /// Distinct count configuration with a relative error standard deviation of ~0.0075.
 /// Uses at most 9248 bytes of memory.
@@ -31,7 +32,7 @@ pub type GeoDistinctConfig7 = FixedConfig<Distinct, u16, 7, 136, 8>;
 //
 //     scripts/accuracy -n 10000 geo_distinct/u32/b=13/bytes=9216/msb={128,192,256,320,512,640}
 //
-pub type GeoDistinctConfig13 = FixedConfig<Distinct, u32, 13, 9216, 320>;
+pub type GeoDistinctConfig13 = FixedConfig<Distinct, u32, 13, 9216, 320, DefaultBuildHasher>;
 
 impl Lookups for Distinct {
     #[inline]

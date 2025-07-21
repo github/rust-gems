@@ -77,6 +77,7 @@ pub struct NoopHasher {
     hash: u64,
 }
 
+#[derive(Clone, Default)]
 pub struct BuildNoopHasher {}
 
 impl Hasher for NoopHasher {

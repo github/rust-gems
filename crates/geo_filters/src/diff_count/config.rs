@@ -1,5 +1,6 @@
 use once_cell::sync::Lazy;
 
+use crate::build_hasher::DefaultBuildHasher;
 use crate::config::EstimationLookup;
 use crate::config::FixedConfig;
 use crate::config::HashToBucketLookup;
@@ -17,7 +18,7 @@ use crate::Diff;
 //
 //     scripts/accuracy -n 10000 geo_diff/u16/b=7/bytes=112/msb={8,12,16,20}
 //
-pub type GeoDiffConfig7 = FixedConfig<Diff, u16, 7, 112, 12>;
+pub type GeoDiffConfig7 = FixedConfig<Diff, u16, 7, 112, 12, DefaultBuildHasher>;
 
 /// Diff count configuration with a relative error standard deviation of ~0.015.
 //
@@ -29,7 +30,7 @@ pub type GeoDiffConfig7 = FixedConfig<Diff, u16, 7, 112, 12>;
 //
 //     scripts/accuracy -n 1000 geo_diff/u32/b=13/bytes=7138/msb={128,192,256,384,512}
 //
-pub type GeoDiffConfig13 = FixedConfig<Diff, u32, 13, 7138, 384>;
+pub type GeoDiffConfig13 = FixedConfig<Diff, u32, 13, 7138, 384, DefaultBuildHasher>;
 
 impl Lookups for Diff {
     #[inline]

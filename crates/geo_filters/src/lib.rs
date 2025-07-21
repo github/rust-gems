@@ -12,8 +12,11 @@ pub mod diff_count;
 pub mod distinct_count;
 #[cfg(feature = "evaluation")]
 pub mod evaluation;
+pub mod build_hasher;
 
-use std::hash::{BuildHasher, Hash};
+use std::hash::Hash;
+
+use crate::build_hasher::GeoFilterBuildHasher;
 
 /// Marker trait to indicate the variant implemented by a [`Count`] instance.
 pub trait Method: Clone + Eq + PartialEq + Send + Sync {}
@@ -29,7 +32,7 @@ pub struct Distinct {}
 impl Method for Distinct {}
 
 /// Trait for types solving the set cardinality estimation problem.
-pub trait Count<M: Method, H: BuildHasher> {
+pub trait Count<M: Method, H: GeoFilterBuildHasher> {
     /// Get the current hash builder
     fn hasher_builder(&self) -> &H;
 

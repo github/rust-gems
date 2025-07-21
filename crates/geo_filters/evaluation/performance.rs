@@ -23,7 +23,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function("geo_diff_count_var_13", |b| {
             let c = VariableConfig::<_, u32>::new(13, 7680, 256);
             b.iter(move || {
-                let mut gc = GeoDiffCount::new(c.clone(), FnvBuildHasher::default());
+                let mut gc = GeoDiffCount::new(c.clone());
                 for i in 0..*size {
                     gc.push(i);
                 }
@@ -62,7 +62,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function("geo_diff_count_var_13", |b| {
             let c = VariableConfig::<_, u32>::new(13, 7680, 256);
             b.iter(move || {
-                let mut gc = GeoDiffCount::new(c.clone(), FnvBuildHasher::default());
+                let mut gc = GeoDiffCount::new(c.clone());
                 for i in 0..*size {
                     gc.push(i);
                     black_box(gc.size());
@@ -107,8 +107,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function("geo_diff_count_var_13", |b| {
             let c = VariableConfig::<_, u32>::new(13, 7680, 256);
             b.iter(move || {
-                let mut gc1 = GeoDiffCount::new(c.clone(), FnvBuildHasher::default());
-                let mut gc2 = GeoDiffCount::new(c.clone(), FnvBuildHasher::default());
+                let mut gc1 = GeoDiffCount::new(c.clone());
+                let mut gc2 = GeoDiffCount::new(c.clone());
                 for i in 0..size {
                     gc1.push(i * 2);
                     gc2.push(i * 2 + 1);

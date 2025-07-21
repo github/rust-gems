@@ -2,7 +2,7 @@
 
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::Method;
+use crate::{build_hasher::GeoFilterBuildHasher, Method};
 
 mod bitchunks;
 mod buckets;
@@ -79,8 +79,16 @@ pub trait GeoConfig<M: Method>: Clone + Eq + Sized + Send + Sync {
 /// Instantiating this type may panic if `T` is too small to hold the maximum possible
 /// bucket id determined by `B`, or `B` is larger than the largest statically defined
 /// lookup table.
-#[derive(Clone, Eq, PartialEq)]
-pub struct FixedConfig<M: Method, T, const B: usize, const BYTES: usize, const MSB: usize> {
+#[derive(Clone)]
+pub struct FixedConfig<
+    M: Method,
+    T,
+    const B: usize,
+    const BYTES: usize,
+    const MSB: usize,
+    H: GeoFilterBuildHasher,
+> {
+    build_hasher: H,
     _phantom: PhantomData<(M, T)>,
 }
 
@@ -90,7 +98,8 @@ impl<
         const B: usize,
         const BYTES: usize,
         const MSB: usize,
-    > GeoConfig<M> for FixedConfig<M, T, B, BYTES, MSB>
+        H: GeoFilterBuildHasher,
+    > GeoConfig<M> for FixedConfig<M, T, B, BYTES, MSB, H>
 {
     type BucketType = T;
 
@@ -148,46 +157,87 @@ impl<
         const B: usize,
         const BYTES: usize,
         const MSB: usize,
-    > Default for FixedConfig<M, T, B, BYTES, MSB>
+        H: GeoFilterBuildHasher,
+    > Default for FixedConfig<M, T, B, BYTES, MSB, H>
 {
     fn default() -> Self {
         assert_bucket_type_large_enough::<T>(B);
         assert_buckets_within_estimation_bound(B, BYTES * BITS_PER_BYTE);
+
         assert!(
             B < M::get_lookups().len(),
             "B = {} is not available for fixed config, requires B < {}",
             B,
             M::get_lookups().len()
         );
+
         Self {
             _phantom: PhantomData,
+            build_hasher: H::default(),
         }
     }
 }
 
+impl<
+        M: Method + Lookups,
+        T: IsBucketType,
+        const B: usize,
+        const BYTES: usize,
+        const MSB: usize,
+        H: GeoFilterBuildHasher,
+    > PartialEq for FixedConfig<M, T, B, BYTES, MSB, H>
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.build_hasher.hasher_eq(&other.build_hasher)
+    }
+}
+
+impl<
+        M: Method + Lookups,
+        T: IsBucketType,
+        const B: usize,
+        const BYTES: usize,
+        const MSB: usize,
+        H: GeoFilterBuildHasher,
+    > Eq for FixedConfig<M, T, B, BYTES, MSB, H>
+{
+}
+
 /// Geometric filter configuration using dynamic lookup tables.
 #[derive(Clone)]
-pub struct VariableConfig<M: Method, T> {
+pub struct VariableConfig<M: Method, T, H: GeoFilterBuildHasher> {
     b: usize,
     bytes: usize,
     msb: usize,
     _phantom: PhantomData<(M, T)>,
     lookup: Arc<Lookup>,
+    build_hasher: H,
 }
 
-impl<M: Method, T> Eq for VariableConfig<M, T> {}
+impl<M: Method, T, H: GeoFilterBuildHasher> Eq for VariableConfig<M, T, H> {}
 
-impl<M: Method, T> PartialEq for VariableConfig<M, T> {
+impl<M: Method, T, H: GeoFilterBuildHasher> PartialEq for VariableConfig<M, T, H> {
     fn eq(&self, other: &Self) -> bool {
-        self.b == other.b && self.bytes == other.bytes && self.msb == other.msb
+        self.b == other.b
+            && self.bytes == other.bytes
+            && self.msb == other.msb
+            && self.build_hasher.hasher_eq(&other.build_hasher)
     }
 }
 
-impl<M: Method + Lookups, T: IsBucketType> VariableConfig<M, T> {
+impl<M: Method + Lookups, T: IsBucketType, H: GeoFilterBuildHasher> VariableConfig<M, T, H> {
     /// Returns a new configuration value. See [`FixedConfig`] for the meaning
     /// of the parameters. This functions computes a new lookup table every time
     /// it is invoked, so make sure to share the resulting value as much as possible.
     pub fn new(b: usize, bytes: usize, msb: usize) -> Self {
+        Self::with_hasher(b, bytes, msb, H::default())
+    }
+
+    /// Returns a new configuration value, specifying the [`GeoFilterBuildHasher`].
+    /// Useful, for example, if you wish to use a custom seed in your hashers.
+    ///
+    /// See [`Self::new`] for more.
+    pub fn with_hasher(b: usize, bytes: usize, msb: usize, build_hasher: H) -> Self {
         assert_bucket_type_large_enough::<T>(b);
         assert_buckets_within_estimation_bound(b, bytes * BITS_PER_BYTE);
         Self {
@@ -196,6 +246,7 @@ impl<M: Method + Lookups, T: IsBucketType> VariableConfig<M, T> {
             msb,
             _phantom: PhantomData,
             lookup: Arc::new(M::new_lookup(b)),
+            build_hasher,
         }
     }
 
@@ -205,7 +256,9 @@ impl<M: Method + Lookups, T: IsBucketType> VariableConfig<M, T> {
     }
 }
 
-impl<M: Method, T: IsBucketType + 'static> GeoConfig<M> for VariableConfig<M, T> {
+impl<M: Method, T: IsBucketType + 'static, H: GeoFilterBuildHasher> GeoConfig<M>
+    for VariableConfig<M, T, H>
+{
     type BucketType = T;
 
     #[inline]
@@ -306,14 +359,14 @@ pub(crate) fn take_ref<I: Iterator>(iter: &mut I, n: usize) -> impl Iterator<Ite
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::hash::BuildHasher;
-
     use rand::{RngCore, SeedableRng};
 
-    use crate::{ Count, Method};
+    use crate::{build_hasher::GeoFilterBuildHasher, Count, Method};
 
     /// Runs estimation trials and returns the average precision and variance.
-    pub(crate) fn test_estimate<M: Method, H: BuildHasher, C: Count<M, H>>(f: impl Fn() -> C) -> (f32, f32) {
+    pub(crate) fn test_estimate<M: Method, H: GeoFilterBuildHasher, C: Count<M, H>>(
+        f: impl Fn() -> C,
+    ) -> (f32, f32) {
         let mut rnd = rand::rngs::StdRng::from_os_rng();
         let cnt = 10000usize;
         let mut avg_precision = 0.0;

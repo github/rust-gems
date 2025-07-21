@@ -23,7 +23,7 @@ fn can_use_diff_count_with_predefined_config_value() {
     use geo_filters::diff_count::{GeoDiffConfig7, GeoDiffCount};
     use geo_filters::Count;
     let c = GeoDiffConfig7::default();
-    let mut f = GeoDiffCount::new(c, FnvBuildHasher::default());
+    let mut f = GeoDiffCount::new(c);
     f.push(42);
     f.size();
 }
@@ -34,7 +34,7 @@ fn can_use_diff_count_with_fixed_config_value() {
     use geo_filters::diff_count::GeoDiffCount;
     use geo_filters::Count;
     let c = FixedConfig::<_, u16, 7, 128, 10>::default();
-    let mut f = GeoDiffCount::new(c, FnvBuildHasher::default());
+    let mut f = GeoDiffCount::new(c);
     f.push(42);
     f.size();
 }
