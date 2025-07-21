@@ -98,7 +98,7 @@ pub fn run_simulations(
     println!("Parameters:");
     println!();
     println!("   number of configs = {}", configs.len());
-    println!("   number of samples = {}", samples);
+    println!("   number of samples = {samples}");
     println!("   number of sets    = {}", set_sizes.len());
     println!();
 
@@ -107,7 +107,7 @@ pub fn run_simulations(
     let results = configs
         .iter()
         .map(|(name, f)| {
-            print!("   {} ... ", name);
+            print!("   {name} ... ");
             std::io::stdout().flush().expect("stdout can be flushed");
             let t = Instant::now();
             let result = simulate(f, samples, set_sizes);
