@@ -54,7 +54,7 @@ fn test_different_hash_functions() {
 
 The actual value returned in this example is ~200. This makes sense because the geofilter
 thinks that there are 100 unique values in each of the filters, so the difference is approximated
-as being ~200. If we were to rerun the above example with a genuinely reproducable `BuildHasher`
+as being ~200. If we were to rerun the above example with a genuinely reproducible `BuildHasher`
 then the resulting diff size would be `0`.
 
 In debug builds, as part of the config's `eq` implementation, our library will assert that the `BuildHasher`s
