@@ -449,7 +449,7 @@ mod tests {
             0 => 0,
             1..=3 => 1,
             4 => 2,
-            _ => panic!("invalid utf8 char width: {}", len),
+            _ => panic!("invalid utf8 char width: {len}"),
         }
     }
 
