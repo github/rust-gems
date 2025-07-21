@@ -1,5 +1,7 @@
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher as _};
 
+use fnv::FnvBuildHasher;
+
 /// Trait for a hasher factory that can be used to produce hashers
 /// for use with geometric filters.
 ///
@@ -33,3 +35,4 @@ pub trait ReproducibleBuildHasher: BuildHasher + Default + Clone {
 pub type DefaultBuildHasher = BuildHasherDefault<DefaultHasher>;
 
 impl ReproducibleBuildHasher for DefaultBuildHasher {}
+impl ReproducibleBuildHasher for FnvBuildHasher {}
