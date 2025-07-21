@@ -21,8 +21,7 @@ where
     fn into_block(self) -> u64 {
         assert!(
             self.into_usize() < BITS_PER_BLOCK,
-            "position in block must be less then 64, got {:?}",
-            self
+            "position in block must be less then 64, got {self:?}",
         );
         1u64 << self.into_usize()
     }

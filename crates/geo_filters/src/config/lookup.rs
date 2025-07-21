@@ -54,13 +54,13 @@ mod tests {
     #[test]
     fn test_lookup_7() {
         let var = lookup_random_hashes_variance::<7>(1 << 16);
-        assert!(var < 1e-4, "variance {} too large", var);
+        assert!(var < 1e-4, "variance {var} too large");
     }
 
     #[test]
     fn test_lookup_13() {
         let var = lookup_random_hashes_variance::<13>(1 << 16);
-        assert!(var < 1e-4, "variance {} too large", var);
+        assert!(var < 1e-4, "variance {var} too large");
     }
 
     fn lookup_random_hashes_variance<const B: usize>(n: u64) -> f64 {
