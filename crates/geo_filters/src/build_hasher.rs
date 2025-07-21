@@ -22,16 +22,16 @@ pub trait ReproducibleBuildHasher: BuildHasher + Default + Clone {
         debug_assert_eq!(
             Self::default().build_hasher().finish(),
             Self::default().build_hasher().finish(),
-            "Hashers produced by GeoFilterBuildHasher do not produce the same output with the same input"
+            "Hashers produced by ReproducibleBuildHasher do not produce the same output with the same input"
         );
     }
 }
 
-// Note that this `BuildHasher` has a consistent implementation of `Default`
-// but is NOT stable across releases of Rust. It is therefore dangerous
-// to use if you plan on serializing the geofilters and reusing them due
-// to the fact that you can serialize a filter made with one version and
-// deserialize with another version of the hasher factor.
+/// Note that this `BuildHasher` has a consistent implementation of `Default`
+/// but is NOT stable across releases of Rust. It is therefore dangerous
+/// to use if you plan on serializing the geofilters and reusing them due
+/// to the fact that you can serialize a filter made with one version and
+/// deserialize with another version of the hasher factor.
 pub type DefaultBuildHasher = BuildHasherDefault<DefaultHasher>;
 
 impl ReproducibleBuildHasher for DefaultBuildHasher {}

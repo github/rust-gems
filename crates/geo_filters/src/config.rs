@@ -355,12 +355,10 @@ pub(crate) fn take_ref<I: Iterator>(iter: &mut I, n: usize) -> impl Iterator<Ite
 pub(crate) mod tests {
     use rand::{RngCore, SeedableRng};
 
-    use crate::{build_hasher::DefaultBuildHasher, Count, Method};
+    use crate::{Count, Method};
 
     /// Runs estimation trials and returns the average precision and variance.
-    pub(crate) fn test_estimate<M: Method, C: Count<M, DefaultBuildHasher>>(
-        f: impl Fn() -> C,
-    ) -> (f32, f32) {
+    pub(crate) fn test_estimate<M: Method, C: Count<M>>(f: impl Fn() -> C) -> (f32, f32) {
         let mut rnd = rand::rngs::StdRng::from_os_rng();
         let cnt = 10000usize;
         let mut avg_precision = 0.0;

@@ -22,35 +22,35 @@ pub trait SimulationCount {
 }
 impl<C: GeoConfig<Diff> + Clone> SimulationCount for GeoDiffCount<'_, C> {
     fn push_hash(&mut self, hash: u64) {
-        <Self as Count<_, _>>::push_hash(self, hash)
+        <Self as Count<_>>::push_hash(self, hash)
     }
     fn size(&self) -> f32 {
-        <Self as Count<_, _>>::size(self)
+        <Self as Count<_>>::size(self)
     }
     fn bytes_in_memory(&self) -> usize {
-        <Self as Count<_, _>>::bytes_in_memory(self)
+        <Self as Count<_>>::bytes_in_memory(self)
     }
 }
 impl<C: GeoConfig<Distinct>> SimulationCount for GeoDistinctCount<'_, C> {
     fn push_hash(&mut self, hash: u64) {
-        <Self as Count<_, _>>::push_hash(self, hash)
+        <Self as Count<_>>::push_hash(self, hash)
     }
     fn size(&self) -> f32 {
-        <Self as Count<_, _>>::size(self)
+        <Self as Count<_>>::size(self)
     }
     fn bytes_in_memory(&self) -> usize {
-        <Self as Count<_, _>>::bytes_in_memory(self)
+        <Self as Count<_>>::bytes_in_memory(self)
     }
 }
 impl<C: HllConfig> SimulationCount for Hll<C> {
     fn push_hash(&mut self, hash: u64) {
-        <Self as Count<_, _>>::push_hash(self, hash)
+        <Self as Count<_>>::push_hash(self, hash)
     }
     fn size(&self) -> f32 {
-        <Self as Count<_, _>>::size(self)
+        <Self as Count<_>>::size(self)
     }
     fn bytes_in_memory(&self) -> usize {
-        <Self as Count<_, _>>::bytes_in_memory(self)
+        <Self as Count<_>>::bytes_in_memory(self)
     }
 }
 

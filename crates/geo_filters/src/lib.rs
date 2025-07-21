@@ -14,7 +14,7 @@ pub mod distinct_count;
 #[cfg(feature = "evaluation")]
 pub mod evaluation;
 
-use std::hash::Hash;
+use std::hash::{BuildHasher as _, Hash};
 
 use crate::build_hasher::ReproducibleBuildHasher;
 
@@ -32,13 +32,15 @@ pub struct Distinct {}
 impl Method for Distinct {}
 
 /// Trait for types solving the set cardinality estimation problem.
-pub trait Count<M: Method, H: ReproducibleBuildHasher> {
+pub trait Count<M: Method> {
+    type BuildHasher: ReproducibleBuildHasher;
+
     /// Add the given hash to the set.
     fn push_hash(&mut self, hash: u64);
 
     /// Add the hash of the given item, computed with the configured hasher, to the set.
     fn push<I: Hash>(&mut self, item: I) {
-        let build_hasher = H::default();
+        let build_hasher = Self::BuildHasher::default();
         self.push_hash(build_hasher.hash_one(item));
     }
 

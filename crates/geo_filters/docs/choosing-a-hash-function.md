@@ -22,6 +22,8 @@ to `BuildHasher::hash_one`.
 The following is an example of some incorrect code which produces nonsense results:
 
 ```rust
+use std::hash::RandomState;
+
 // Implement our marker trait for `RandomState`.
 // You should _NOT_ do this as `RandomState::default` does not produce
 // reproducible hashers.

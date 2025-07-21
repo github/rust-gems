@@ -128,7 +128,9 @@ impl<C: GeoConfig<Distinct>> GeoDistinctCount<'_, C> {
     }
 }
 
-impl<C: GeoConfig<Distinct>> Count<Distinct, C::BuildHasher> for GeoDistinctCount<'_, C> {
+impl<C: GeoConfig<Distinct>> Count<Distinct> for GeoDistinctCount<'_, C> {
+    type BuildHasher = C::BuildHasher;
+
     fn push_hash(&mut self, hash: u64) {
         self.set_bit(self.config.hash_to_bucket(hash));
     }

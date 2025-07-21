@@ -305,7 +305,9 @@ pub(crate) fn masked<C: GeoConfig<Diff>>(
 /// This operation corresponds to computing the symmetric difference of the two
 /// sets represented by the GeoDiffCounts.
 ///
-/// SAFETY: The two GeoDiffCounts must have the same configuration and hash builder.
+/// # Panics
+///
+/// Panics if the configuration of the geofilters is not identical.
 pub(crate) fn xor<C: GeoConfig<Diff>>(
     diff_count: &GeoDiffCount<'_, C>,
     other: &GeoDiffCount<'_, C>,
@@ -321,7 +323,9 @@ pub(crate) fn xor<C: GeoConfig<Diff>>(
     )
 }
 
-impl<C: GeoConfig<Diff>> Count<Diff, C::BuildHasher> for GeoDiffCount<'_, C> {
+impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
+    type BuildHasher = C::BuildHasher;
+
     fn push_hash(&mut self, hash: u64) {
         self.xor_bit(self.config.hash_to_bucket(hash));
     }

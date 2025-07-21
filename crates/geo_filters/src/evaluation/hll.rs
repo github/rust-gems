@@ -91,7 +91,9 @@ impl Hasher for NoopHasher {
 
     #[inline]
     fn write(&mut self, _: &[u8]) {
-        unimplemented!("NoopHasher only supports writing u64 values");
+        unimplemented!(
+            "NoopHasher does not support arbitrary byte sequences. Use write_u64 instead"
+        );
     }
 
     #[inline]
@@ -110,7 +112,9 @@ impl BuildHasher for BuildNoopHasher {
 
 impl ReproducibleBuildHasher for BuildNoopHasher {}
 
-impl<C: HllConfig> Count<Distinct, DefaultBuildHasher> for Hll<C> {
+impl<C: HllConfig> Count<Distinct> for Hll<C> {
+    type BuildHasher = DefaultBuildHasher;
+
     fn push_hash(&mut self, hash: u64) {
         self.inner.borrow_mut().insert(&hash)
     }
