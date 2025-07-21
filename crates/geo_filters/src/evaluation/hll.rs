@@ -9,7 +9,7 @@ use std::{
 use hyperloglogplus::{HyperLogLog, HyperLogLogPlus};
 
 use crate::{
-    build_hasher::{DefaultBuildHasher, ReproducibleBuildHasher},
+    build_hasher::{ReproducibleBuildHasher, UnstableDefaultBuildHasher},
     Count, Distinct,
 };
 
@@ -113,10 +113,13 @@ impl BuildHasher for BuildNoopHasher {
 impl ReproducibleBuildHasher for BuildNoopHasher {}
 
 impl<C: HllConfig> Count<Distinct> for Hll<C> {
-    type BuildHasher = DefaultBuildHasher;
-
     fn push_hash(&mut self, hash: u64) {
         self.inner.borrow_mut().insert(&hash)
+    }
+
+    fn push<I: std::hash::Hash>(&mut self, item: I) {
+        let build_hasher = UnstableDefaultBuildHasher::default();
+        self.push_hash(build_hasher.hash_one(item));
     }
 
     fn push_sketch(&mut self, _other: &Self) {

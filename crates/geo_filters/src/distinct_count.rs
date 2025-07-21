@@ -1,6 +1,7 @@
 //! Geometric filter implementation for distinct count.
 
 use std::collections::VecDeque;
+use std::hash::BuildHasher as _;
 use std::mem::{size_of, size_of_val};
 
 use crate::config::{
@@ -129,10 +130,13 @@ impl<C: GeoConfig<Distinct>> GeoDistinctCount<'_, C> {
 }
 
 impl<C: GeoConfig<Distinct>> Count<Distinct> for GeoDistinctCount<'_, C> {
-    type BuildHasher = C::BuildHasher;
-
     fn push_hash(&mut self, hash: u64) {
         self.set_bit(self.config.hash_to_bucket(hash));
+    }
+
+    fn push<I: std::hash::Hash>(&mut self, item: I) {
+        let build_hasher = C::BuildHasher::default();
+        self.push_hash(build_hasher.hash_one(item));
     }
 
     fn push_sketch(&mut self, other: &Self) {
@@ -230,7 +234,7 @@ mod tests {
     use itertools::Itertools;
     use rand::{RngCore, SeedableRng};
 
-    use crate::build_hasher::DefaultBuildHasher;
+    use crate::build_hasher::UnstableDefaultBuildHasher;
     use crate::config::{iter_ones, tests::test_estimate, FixedConfig, VariableConfig};
     use crate::evaluation::simulation::simulate;
 
@@ -238,7 +242,8 @@ mod tests {
 
     #[test]
     fn test_lookup_table() {
-        let c = FixedConfig::<Distinct, u32, 13, 10000, 1000, DefaultBuildHasher>::default();
+        let c =
+            FixedConfig::<Distinct, u32, 13, 10000, 1000, UnstableDefaultBuildHasher>::default();
         for i in 0..c.max_bytes() * 4 {
             let hash = (c.phi_f64().powf(i as f64 + 0.5) * u64::MAX as f64).round() as u64;
             let a = c.hash_to_bucket(hash);
@@ -370,7 +375,7 @@ mod tests {
                     Box::new(GeoDistinctCount::new(VariableConfig::<
                         _,
                         u32,
-                        DefaultBuildHasher,
+                        UnstableDefaultBuildHasher,
                     >::new(
                         13,
                         7800,

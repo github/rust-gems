@@ -32,7 +32,7 @@ pub trait ReproducibleBuildHasher: BuildHasher + Default + Clone {
 /// to use if you plan on serializing the geofilters and reusing them due
 /// to the fact that you can serialize a filter made with one version and
 /// deserialize with another version of the hasher factor.
-pub type DefaultBuildHasher = BuildHasherDefault<DefaultHasher>;
+pub type UnstableDefaultBuildHasher = BuildHasherDefault<DefaultHasher>;
 
-impl ReproducibleBuildHasher for DefaultBuildHasher {}
+impl ReproducibleBuildHasher for UnstableDefaultBuildHasher {}
 impl ReproducibleBuildHasher for FnvBuildHasher {}

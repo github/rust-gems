@@ -1,6 +1,6 @@
 use once_cell::sync::Lazy;
 
-use crate::build_hasher::DefaultBuildHasher;
+use crate::build_hasher::UnstableDefaultBuildHasher;
 use crate::config::EstimationLookup;
 use crate::config::FixedConfig;
 use crate::config::HashToBucketLookup;
@@ -19,7 +19,8 @@ use crate::Distinct;
 //
 //     scripts/accuracy -n 10000 geo_distinct/u16/b=7/bytes=136/msb={8,16,32,64}
 //
-pub type GeoDistinctConfig7 = FixedConfig<Distinct, u16, 7, 136, 8, DefaultBuildHasher>;
+pub type GeoDistinctConfig7<H = UnstableDefaultBuildHasher> =
+    FixedConfig<Distinct, u16, 7, 136, 8, H>;
 
 /// Distinct count configuration with a relative error standard deviation of ~0.0075.
 /// Uses at most 9248 bytes of memory.
@@ -32,7 +33,8 @@ pub type GeoDistinctConfig7 = FixedConfig<Distinct, u16, 7, 136, 8, DefaultBuild
 //
 //     scripts/accuracy -n 10000 geo_distinct/u32/b=13/bytes=9216/msb={128,192,256,320,512,640}
 //
-pub type GeoDistinctConfig13 = FixedConfig<Distinct, u32, 13, 9216, 320, DefaultBuildHasher>;
+pub type GeoDistinctConfig13<H = UnstableDefaultBuildHasher> =
+    FixedConfig<Distinct, u32, 13, 9216, 320, H>;
 
 impl Lookups for Distinct {
     #[inline]
@@ -108,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_estimation_lut_7() {
-        let c = GeoDistinctConfig7::default();
+        let c = GeoDistinctConfig7::<UnstableDefaultBuildHasher>::default();
         let err = (0..600)
             .step_by(1)
             .map(|i| {
@@ -127,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_estimation_lut_13() {
-        let c = GeoDistinctConfig13::default();
+        let c = GeoDistinctConfig13::<UnstableDefaultBuildHasher>::default();
         let err = (0..24000)
             .step_by(1)
             .map(|i| {

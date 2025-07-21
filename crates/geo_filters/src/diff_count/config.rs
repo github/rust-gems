@@ -1,6 +1,6 @@
 use once_cell::sync::Lazy;
 
-use crate::build_hasher::DefaultBuildHasher;
+use crate::build_hasher::UnstableDefaultBuildHasher;
 use crate::config::EstimationLookup;
 use crate::config::FixedConfig;
 use crate::config::HashToBucketLookup;
@@ -18,7 +18,7 @@ use crate::Diff;
 //
 //     scripts/accuracy -n 10000 geo_diff/u16/b=7/bytes=112/msb={8,12,16,20}
 //
-pub type GeoDiffConfig7 = FixedConfig<Diff, u16, 7, 112, 12, DefaultBuildHasher>;
+pub type GeoDiffConfig7<H = UnstableDefaultBuildHasher> = FixedConfig<Diff, u16, 7, 112, 12, H>;
 
 /// Diff count configuration with a relative error standard deviation of ~0.015.
 //
@@ -30,7 +30,7 @@ pub type GeoDiffConfig7 = FixedConfig<Diff, u16, 7, 112, 12, DefaultBuildHasher>
 //
 //     scripts/accuracy -n 1000 geo_diff/u32/b=13/bytes=7138/msb={128,192,256,384,512}
 //
-pub type GeoDiffConfig13 = FixedConfig<Diff, u32, 13, 7138, 384, DefaultBuildHasher>;
+pub type GeoDiffConfig13<H = UnstableDefaultBuildHasher> = FixedConfig<Diff, u32, 13, 7138, 384, H>;
 
 impl Lookups for Diff {
     #[inline]
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_bit_from_hash() {
-        let config = GeoDiffConfig7::default();
+        let config = GeoDiffConfig7::<UnstableDefaultBuildHasher>::default();
         assert_eq!(config.hash_to_bucket(u64::MAX), 0);
         assert_eq!(
             config.hash_to_bucket(0) as usize,
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_estimation_lut_7() {
-        let c = GeoDiffConfig7::default();
+        let c = GeoDiffConfig7::<UnstableDefaultBuildHasher>::default();
         let err = (0..600)
             .step_by(1)
             .map(|i| {
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_estimation_lut_13() {
-        let c = GeoDiffConfig13::default();
+        let c = GeoDiffConfig13::<UnstableDefaultBuildHasher>::default();
         let err = (0..24000)
             .step_by(100)
             .map(|i| {

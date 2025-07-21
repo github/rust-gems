@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::hash::BuildHasher as _;
 use std::mem::{size_of, size_of_val};
 
 use crate::config::{
@@ -324,10 +325,13 @@ pub(crate) fn xor<C: GeoConfig<Diff>>(
 }
 
 impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
-    type BuildHasher = C::BuildHasher;
-
     fn push_hash(&mut self, hash: u64) {
         self.xor_bit(self.config.hash_to_bucket(hash));
+    }
+
+    fn push<I: std::hash::Hash>(&mut self, item: I) {
+        let build_hasher = C::BuildHasher::default();
+        self.push_hash(build_hasher.hash_one(item));
     }
 
     fn push_sketch(&mut self, other: &Self) {
@@ -359,7 +363,7 @@ mod tests {
     use rand::{RngCore, SeedableRng};
 
     use crate::{
-        build_hasher::DefaultBuildHasher,
+        build_hasher::UnstableDefaultBuildHasher,
         config::{iter_ones, tests::test_estimate, FixedConfig},
     };
 
@@ -371,7 +375,7 @@ mod tests {
     //     scripts/accuracy -n 10000 geo_diff/u16/b=7/bytes=50/msb=10
     //
     type GeoDiffCount7_50<'a> =
-        GeoDiffCount<'a, FixedConfig<Diff, u16, 7, 50, 10, DefaultBuildHasher>>;
+        GeoDiffCount<'a, FixedConfig<Diff, u16, 7, 50, 10, UnstableDefaultBuildHasher>>;
 
     #[test]
     fn test_geo_count() {
