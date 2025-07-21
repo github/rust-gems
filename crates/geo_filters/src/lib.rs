@@ -51,3 +51,7 @@ pub trait Count<M: Method> {
     /// Returns the number of bytes in memory used to represent this filter.
     fn bytes_in_memory(&self) -> usize;
 }
+
+#[doc = include_str!("../README.md")]
+#[cfg(doctest)]
+pub struct ReadmeDocTests;

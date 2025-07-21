@@ -1,24 +1,5 @@
 use geo_filters::build_hasher::UnstableDefaultBuildHasher;
 
-// Mirrors what we have in the README.
-// If this breaks then it should be fixed an the readme updated.
-#[test]
-fn readme() {
-    use geo_filters::distinct_count::GeoDistinctCount13;
-    use geo_filters::Count;
-
-    let mut c1 = GeoDistinctCount13::default();
-    c1.push(1);
-    c1.push(2);
-
-    let mut c2 = GeoDistinctCount13::default();
-    c2.push(2);
-    c2.push(3);
-
-    let estimated_size = c1.size_with_sketch(&c2);
-    assert!((3.0_f32 * 0.9..=3.0_f32 * 1.1).contains(&estimated_size));
-}
-
 #[test]
 fn can_use_predefined_diff_count() {
     use geo_filters::diff_count::GeoDiffCount7;
