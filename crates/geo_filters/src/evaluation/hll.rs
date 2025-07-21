@@ -8,7 +8,10 @@ use std::{
 
 use hyperloglogplus::{HyperLogLog, HyperLogLogPlus};
 
-use crate::{Count, Distinct};
+use crate::{
+    build_hasher::{DefaultBuildHasher, ReproducibleBuildHasher},
+    Count, Distinct,
+};
 
 /// Uses at most 192 bytes.
 /// The relative error has a standard deviation of ~0.065.
@@ -105,11 +108,9 @@ impl BuildHasher for BuildNoopHasher {
     }
 }
 
-impl<C: HllConfig> Count<Distinct, BuildNoopHasher> for Hll<C> {
-    fn hasher_builder(&self) -> &BuildNoopHasher {
-        unimplemented!()
-    }
+impl ReproducibleBuildHasher for BuildNoopHasher {}
 
+impl<C: HllConfig> Count<Distinct, DefaultBuildHasher> for Hll<C> {
     fn push_hash(&mut self, hash: u64) {
         self.inner.borrow_mut().insert(&hash)
     }

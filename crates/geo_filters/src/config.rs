@@ -2,7 +2,7 @@
 
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::{build_hasher::GeoFilterBuildHasher, Method};
+use crate::{build_hasher::ReproducibleBuildHasher, Method};
 
 mod bitchunks;
 mod buckets;
@@ -30,8 +30,9 @@ use once_cell::sync::Lazy;
 /// Those conversions can be shared across multiple geo filter instances. This way, the
 /// conversions can also be optimized via e.g. lookup tables without paying the cost with every
 /// new geo filter instance again and again.
-pub trait GeoConfig<M: Method>: Clone + Eq + Sized + Send + Sync {
+pub trait GeoConfig<M: Method>: Clone + Eq + Sized {
     type BucketType: IsBucketType + 'static;
+    type BuildHasher: ReproducibleBuildHasher;
 
     /// The number of most-significant bits that are stored sparsely as positions.
     fn max_msb_len(&self) -> usize;
@@ -86,10 +87,9 @@ pub struct FixedConfig<
     const B: usize,
     const BYTES: usize,
     const MSB: usize,
-    H: GeoFilterBuildHasher,
+    H: ReproducibleBuildHasher,
 > {
-    build_hasher: H,
-    _phantom: PhantomData<(M, T)>,
+    _phantom: PhantomData<(M, T, H)>,
 }
 
 impl<
@@ -98,10 +98,11 @@ impl<
         const B: usize,
         const BYTES: usize,
         const MSB: usize,
-        H: GeoFilterBuildHasher,
+        H: ReproducibleBuildHasher,
     > GeoConfig<M> for FixedConfig<M, T, B, BYTES, MSB, H>
 {
     type BucketType = T;
+    type BuildHasher = H;
 
     #[inline]
     fn max_msb_len(&self) -> usize {
@@ -157,7 +158,7 @@ impl<
         const B: usize,
         const BYTES: usize,
         const MSB: usize,
-        H: GeoFilterBuildHasher,
+        H: ReproducibleBuildHasher,
     > Default for FixedConfig<M, T, B, BYTES, MSB, H>
 {
     fn default() -> Self {
@@ -173,7 +174,6 @@ impl<
 
         Self {
             _phantom: PhantomData,
-            build_hasher: H::default(),
         }
     }
 }
@@ -184,11 +184,15 @@ impl<
         const B: usize,
         const BYTES: usize,
         const MSB: usize,
-        H: GeoFilterBuildHasher,
+        H: ReproducibleBuildHasher,
     > PartialEq for FixedConfig<M, T, B, BYTES, MSB, H>
 {
-    fn eq(&self, other: &Self) -> bool {
-        self.build_hasher.hasher_eq(&other.build_hasher)
+    fn eq(&self, _other: &Self) -> bool {
+        H::debug_assert_hashers_eq();
+
+        // The values of the fixed config are provided at compile time
+        // so no runtime computation is required
+        true
     }
 }
 
@@ -198,46 +202,36 @@ impl<
         const B: usize,
         const BYTES: usize,
         const MSB: usize,
-        H: GeoFilterBuildHasher,
+        H: ReproducibleBuildHasher,
     > Eq for FixedConfig<M, T, B, BYTES, MSB, H>
 {
 }
 
 /// Geometric filter configuration using dynamic lookup tables.
 #[derive(Clone)]
-pub struct VariableConfig<M: Method, T, H: GeoFilterBuildHasher> {
+pub struct VariableConfig<M: Method, T, H: ReproducibleBuildHasher> {
     b: usize,
     bytes: usize,
     msb: usize,
-    _phantom: PhantomData<(M, T)>,
+    _phantom: PhantomData<(M, T, H)>,
     lookup: Arc<Lookup>,
-    build_hasher: H,
 }
 
-impl<M: Method, T, H: GeoFilterBuildHasher> Eq for VariableConfig<M, T, H> {}
+impl<M: Method, T, H: ReproducibleBuildHasher> Eq for VariableConfig<M, T, H> {}
 
-impl<M: Method, T, H: GeoFilterBuildHasher> PartialEq for VariableConfig<M, T, H> {
+impl<M: Method, T, H: ReproducibleBuildHasher> PartialEq for VariableConfig<M, T, H> {
     fn eq(&self, other: &Self) -> bool {
-        self.b == other.b
-            && self.bytes == other.bytes
-            && self.msb == other.msb
-            && self.build_hasher.hasher_eq(&other.build_hasher)
+        H::debug_assert_hashers_eq();
+
+        self.b == other.b && self.bytes == other.bytes && self.msb == other.msb
     }
 }
 
-impl<M: Method + Lookups, T: IsBucketType, H: GeoFilterBuildHasher> VariableConfig<M, T, H> {
+impl<M: Method + Lookups, T: IsBucketType, H: ReproducibleBuildHasher> VariableConfig<M, T, H> {
     /// Returns a new configuration value. See [`FixedConfig`] for the meaning
     /// of the parameters. This functions computes a new lookup table every time
     /// it is invoked, so make sure to share the resulting value as much as possible.
     pub fn new(b: usize, bytes: usize, msb: usize) -> Self {
-        Self::with_hasher(b, bytes, msb, H::default())
-    }
-
-    /// Returns a new configuration value, specifying the [`GeoFilterBuildHasher`].
-    /// Useful, for example, if you wish to use a custom seed in your hashers.
-    ///
-    /// See [`Self::new`] for more.
-    pub fn with_hasher(b: usize, bytes: usize, msb: usize, build_hasher: H) -> Self {
         assert_bucket_type_large_enough::<T>(b);
         assert_buckets_within_estimation_bound(b, bytes * BITS_PER_BYTE);
         Self {
@@ -246,7 +240,6 @@ impl<M: Method + Lookups, T: IsBucketType, H: GeoFilterBuildHasher> VariableConf
             msb,
             _phantom: PhantomData,
             lookup: Arc::new(M::new_lookup(b)),
-            build_hasher,
         }
     }
 
@@ -256,10 +249,11 @@ impl<M: Method + Lookups, T: IsBucketType, H: GeoFilterBuildHasher> VariableConf
     }
 }
 
-impl<M: Method, T: IsBucketType + 'static, H: GeoFilterBuildHasher> GeoConfig<M>
+impl<M: Method, T: IsBucketType + 'static, H: ReproducibleBuildHasher> GeoConfig<M>
     for VariableConfig<M, T, H>
 {
     type BucketType = T;
+    type BuildHasher = H;
 
     #[inline]
     fn max_msb_len(&self) -> usize {
@@ -361,10 +355,10 @@ pub(crate) fn take_ref<I: Iterator>(iter: &mut I, n: usize) -> impl Iterator<Ite
 pub(crate) mod tests {
     use rand::{RngCore, SeedableRng};
 
-    use crate::{build_hasher::GeoFilterBuildHasher, Count, Method};
+    use crate::{build_hasher::DefaultBuildHasher, Count, Method};
 
     /// Runs estimation trials and returns the average precision and variance.
-    pub(crate) fn test_estimate<M: Method, H: GeoFilterBuildHasher, C: Count<M, H>>(
+    pub(crate) fn test_estimate<M: Method, C: Count<M, DefaultBuildHasher>>(
         f: impl Fn() -> C,
     ) -> (f32, f32) {
         let mut rnd = rand::rngs::StdRng::from_os_rng();

@@ -1,7 +1,6 @@
 use std::io::Write;
 use std::time::Instant;
 
-use fnv::FnvBuildHasher;
 use itertools::Itertools;
 use rand::{RngCore, SeedableRng};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
@@ -21,7 +20,7 @@ pub trait SimulationCount {
     fn size(&self) -> f32;
     fn bytes_in_memory(&self) -> usize;
 }
-impl<C: GeoConfig<Diff> + Clone> SimulationCount for GeoDiffCount<'_, C, FnvBuildHasher> {
+impl<C: GeoConfig<Diff> + Clone> SimulationCount for GeoDiffCount<'_, C> {
     fn push_hash(&mut self, hash: u64) {
         <Self as Count<_, _>>::push_hash(self, hash)
     }
@@ -32,7 +31,7 @@ impl<C: GeoConfig<Diff> + Clone> SimulationCount for GeoDiffCount<'_, C, FnvBuil
         <Self as Count<_, _>>::bytes_in_memory(self)
     }
 }
-impl<C: GeoConfig<Distinct>> SimulationCount for GeoDistinctCount<'_, C, FnvBuildHasher> {
+impl<C: GeoConfig<Distinct>> SimulationCount for GeoDistinctCount<'_, C> {
     fn push_hash(&mut self, hash: u64) {
         <Self as Count<_, _>>::push_hash(self, hash)
     }

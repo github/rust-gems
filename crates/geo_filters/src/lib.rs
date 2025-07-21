@@ -7,16 +7,16 @@
 //!   Supports estimating the size of the union of two sets with a precision related to the estimated size.
 //!   It has some similar properties as related filters like HyperLogLog, MinHash, etc, but uses less space.
 
+pub mod build_hasher;
 pub mod config;
 pub mod diff_count;
 pub mod distinct_count;
 #[cfg(feature = "evaluation")]
 pub mod evaluation;
-pub mod build_hasher;
 
 use std::hash::Hash;
 
-use crate::build_hasher::GeoFilterBuildHasher;
+use crate::build_hasher::ReproducibleBuildHasher;
 
 /// Marker trait to indicate the variant implemented by a [`Count`] instance.
 pub trait Method: Clone + Eq + PartialEq + Send + Sync {}
@@ -32,17 +32,14 @@ pub struct Distinct {}
 impl Method for Distinct {}
 
 /// Trait for types solving the set cardinality estimation problem.
-pub trait Count<M: Method, H: GeoFilterBuildHasher> {
-    /// Get the current hash builder
-    fn hasher_builder(&self) -> &H;
-
+pub trait Count<M: Method, H: ReproducibleBuildHasher> {
     /// Add the given hash to the set.
     fn push_hash(&mut self, hash: u64);
 
-    /// Add the hash of the given item, computed with the default hasher, to the set.
+    /// Add the hash of the given item, computed with the configured hasher, to the set.
     fn push<I: Hash>(&mut self, item: I) {
-        let hash_builder = self.hasher_builder();
-        self.push_hash(hash_builder.hash_one(item));
+        let build_hasher = H::default();
+        self.push_hash(build_hasher.hash_one(item));
     }
 
     /// Add the given sketch to this one.

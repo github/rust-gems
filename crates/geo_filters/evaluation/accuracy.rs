@@ -2,7 +2,6 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use clap::Parser;
-use fnv::FnvBuildHasher;
 use geo_filters::build_hasher::DefaultBuildHasher;
 use geo_filters::config::VariableConfig;
 use itertools::Itertools;
@@ -158,20 +157,20 @@ static SIMULATION_CONFIG_FROM_STR: Lazy<Vec<SimulationConfigParser>> = Lazy::new
             let [b, bytes, msb] = capture_usizes(&c, [2, 3, 4]);
             match t {
                 BucketType::U8 => {
-                    let c = VariableConfig::<_, u8>::new(b, bytes, msb);
-                    Box::new(move || Box::new(GeoDiffCount::new(c.clone(), DefaultBuildHasher::default())))
+                    let c = VariableConfig::<_, u8, DefaultBuildHasher>::new(b, bytes, msb);
+                    Box::new(move || Box::new(GeoDiffCount::new(c.clone())))
                 }
                 BucketType::U16 => {
-                    let c = VariableConfig::<_, u16>::new(b, bytes, msb);
-                    Box::new(move || Box::new(GeoDiffCount::new(c.clone(), DefaultBuildHasher::default())))
+                    let c = VariableConfig::<_, u16, DefaultBuildHasher>::new(b, bytes, msb);
+                    Box::new(move || Box::new(GeoDiffCount::new(c.clone())))
                 }
                 BucketType::U32 => {
-                    let c = VariableConfig::<_, u32>::new(b, bytes, msb);
-                    Box::new(move || Box::new(GeoDiffCount::new(c.clone(), DefaultBuildHasher::default())))
+                    let c = VariableConfig::<_, u32, DefaultBuildHasher>::new(b, bytes, msb);
+                    Box::new(move || Box::new(GeoDiffCount::new(c.clone())))
                 }
                 BucketType::U64 => {
-                    let c = VariableConfig::<_, u64>::new(b, bytes, msb);
-                    Box::new(move || Box::new(GeoDiffCount::new(c.clone(), DefaultBuildHasher::default())))
+                    let c = VariableConfig::<_, u64, DefaultBuildHasher>::new(b, bytes, msb);
+                    Box::new(move || Box::new(GeoDiffCount::new(c.clone())))
                 }
             }
         }),
@@ -187,20 +186,20 @@ static SIMULATION_CONFIG_FROM_STR: Lazy<Vec<SimulationConfigParser>> = Lazy::new
 
             match t {
                 BucketType::U8 => {
-                    let c = VariableConfig::<_, u8>::new(b, bytes, msb);
-                    Box::new(move || Box::new(GeoDistinctCount::new(c.clone(), DefaultBuildHasher::default())))
+                    let c = VariableConfig::<_, u8, DefaultBuildHasher>::new(b, bytes, msb);
+                    Box::new(move || Box::new(GeoDistinctCount::new(c.clone())))
                 }
                 BucketType::U16 => {
-                    let c = VariableConfig::<_, u16>::new(b, bytes, msb);
-                    Box::new(move || Box::new(GeoDistinctCount::new(c.clone(), DefaultBuildHasher::default())))
+                    let c = VariableConfig::<_, u16, DefaultBuildHasher>::new(b, bytes, msb);
+                    Box::new(move || Box::new(GeoDistinctCount::new(c.clone())))
                 }
                 BucketType::U32 => {
-                    let c = VariableConfig::<_, u32>::new(b, bytes, msb);
-                    Box::new(move || Box::new(GeoDistinctCount::new(c.clone(), DefaultBuildHasher::default())))
+                    let c = VariableConfig::<_, u32, DefaultBuildHasher>::new(b, bytes, msb);
+                    Box::new(move || Box::new(GeoDistinctCount::new(c.clone())))
                 }
                 BucketType::U64 => {
-                    let c = VariableConfig::<_, u64>::new(b, bytes, msb);
-                    Box::new(move || Box::new(GeoDistinctCount::new(c.clone(), DefaultBuildHasher::default())))
+                    let c = VariableConfig::<_, u64, DefaultBuildHasher>::new(b, bytes, msb);
+                    Box::new(move || Box::new(GeoDistinctCount::new(c.clone())))
                 }
             }
         }),

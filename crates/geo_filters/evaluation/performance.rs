@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use fnv::FnvBuildHasher;
+use geo_filters::build_hasher::DefaultBuildHasher;
 use geo_filters::config::VariableConfig;
 use geo_filters::diff_count::{GeoDiffCount, GeoDiffCount13};
 use geo_filters::distinct_count::GeoDistinctCount13;
@@ -21,7 +21,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
         });
         group.bench_function("geo_diff_count_var_13", |b| {
-            let c = VariableConfig::<_, u32>::new(13, 7680, 256);
+            let c = VariableConfig::<_, u32, DefaultBuildHasher>::new(13, 7680, 256);
             b.iter(move || {
                 let mut gc = GeoDiffCount::new(c.clone());
                 for i in 0..*size {
@@ -60,7 +60,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
         });
         group.bench_function("geo_diff_count_var_13", |b| {
-            let c = VariableConfig::<_, u32>::new(13, 7680, 256);
+            let c = VariableConfig::<_, u32, DefaultBuildHasher>::new(13, 7680, 256);
             b.iter(move || {
                 let mut gc = GeoDiffCount::new(c.clone());
                 for i in 0..*size {
@@ -105,7 +105,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
         });
         group.bench_function("geo_diff_count_var_13", |b| {
-            let c = VariableConfig::<_, u32>::new(13, 7680, 256);
+            let c = VariableConfig::<_, u32, DefaultBuildHasher>::new(13, 7680, 256);
             b.iter(move || {
                 let mut gc1 = GeoDiffCount::new(c.clone());
                 let mut gc2 = GeoDiffCount::new(c.clone());
