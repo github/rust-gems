@@ -5,7 +5,11 @@
 //! to the usual "network endian" approach where big endian is the default, but most of our
 //! consumers are little endian so it makes sense for this to be the optimal approach.
 //!
-//! We still need to support big endian platforms though, but they get a less efficient path.
+//! For now we do not support big endian platforms. In the future we might add a big endian
+//! platform specific implementation which is able to read the little endian serialized
+//! representation. For now, if you attempt to serialize a filter on a big endian platform
+//! you get a panic.
+
 use std::{borrow::Cow, ops::Deref as _};
 
 use crate::{config::GeoConfig, Diff};

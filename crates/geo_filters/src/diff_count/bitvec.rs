@@ -189,7 +189,6 @@ impl BitVec<'_> {
 
         // First serialize the number of unoccupied bits in the last block as one byte.
         let unoccupied_bits = 63 - ((self.num_bits - 1) % 64) as u8;
-
         writer.write_all(&[unoccupied_bits])?;
 
         let blocks = self.blocks.deref();
