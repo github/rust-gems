@@ -1,6 +1,7 @@
 //! Geometric filter implementation for distinct count.
 
 use std::collections::VecDeque;
+use std::hash::BuildHasher as _;
 use std::mem::{size_of, size_of_val};
 
 use crate::config::{
@@ -133,6 +134,11 @@ impl<C: GeoConfig<Distinct>> Count<Distinct> for GeoDistinctCount<'_, C> {
         self.set_bit(self.config.hash_to_bucket(hash));
     }
 
+    fn push<I: std::hash::Hash>(&mut self, item: I) {
+        let build_hasher = C::BuildHasher::default();
+        self.push_hash(build_hasher.hash_one(item));
+    }
+
     fn push_sketch(&mut self, other: &Self) {
         *self = or(self, other)
     }
@@ -216,7 +222,8 @@ fn or<C: GeoConfig<Distinct>>(
         a.config == b.config,
         "combined filters must have the same configuration"
     );
-    GeoDistinctCount::from_bit_chunks(
+
+    GeoDistinctCount::<'static, C>::from_bit_chunks(
         a.config.clone(),
         or_bit_chunks(a.bit_chunks(), b.bit_chunks()).peekable(),
     )
@@ -227,6 +234,7 @@ mod tests {
     use itertools::Itertools;
     use rand::{RngCore, SeedableRng};
 
+    use crate::build_hasher::UnstableDefaultBuildHasher;
     use crate::config::{iter_ones, tests::test_estimate, FixedConfig, VariableConfig};
     use crate::evaluation::simulation::simulate;
 
@@ -234,7 +242,8 @@ mod tests {
 
     #[test]
     fn test_lookup_table() {
-        let c = FixedConfig::<Distinct, u32, 13, 10000, 1000>::default();
+        let c =
+            FixedConfig::<Distinct, u32, 13, 10000, 1000, UnstableDefaultBuildHasher>::default();
         for i in 0..c.max_bytes() * 4 {
             let hash = (c.phi_f64().powf(i as f64 + 0.5) * u64::MAX as f64).round() as u64;
             let a = c.hash_to_bucket(hash);
@@ -245,6 +254,11 @@ mod tests {
 
     #[test]
     fn test_geo_count() {
+        // Pairs of (n, expected) where n is the number of inserted items
+        // and expected is the expected size of the GeoDistinctCount.
+        // The output matching the expected values is dependent on the configuration
+        // and hashing function. Changes to these will lead to different results and the
+        // test will need to be updated.
         for (n, result) in [
             (10, 10.0021105),
             (100, 100.21153),
@@ -358,7 +372,11 @@ mod tests {
         let msb = golden_section_min(1.0, 1000.0, |msb| {
             simulate(
                 || {
-                    Box::new(GeoDistinctCount::new(VariableConfig::<_, u32>::new(
+                    Box::new(GeoDistinctCount::new(VariableConfig::<
+                        _,
+                        u32,
+                        UnstableDefaultBuildHasher,
+                    >::new(
                         13,
                         7800,
                         (7800 - (msb.round() as usize) * 8) / 3,

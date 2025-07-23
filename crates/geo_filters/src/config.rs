@@ -2,7 +2,7 @@
 
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::Method;
+use crate::{build_hasher::ReproducibleBuildHasher, Method};
 
 mod bitchunks;
 mod buckets;
@@ -30,8 +30,9 @@ use once_cell::sync::Lazy;
 /// Those conversions can be shared across multiple geo filter instances. This way, the
 /// conversions can also be optimized via e.g. lookup tables without paying the cost with every
 /// new geo filter instance again and again.
-pub trait GeoConfig<M: Method>: Clone + Eq + Sized + Send + Sync {
+pub trait GeoConfig<M: Method>: Clone + Eq + Sized {
     type BucketType: IsBucketType + 'static;
+    type BuildHasher: ReproducibleBuildHasher;
 
     /// The number of most-significant bits that are stored sparsely as positions.
     fn max_msb_len(&self) -> usize;
@@ -79,9 +80,16 @@ pub trait GeoConfig<M: Method>: Clone + Eq + Sized + Send + Sync {
 /// Instantiating this type may panic if `T` is too small to hold the maximum possible
 /// bucket id determined by `B`, or `B` is larger than the largest statically defined
 /// lookup table.
-#[derive(Clone, Eq, PartialEq)]
-pub struct FixedConfig<M: Method, T, const B: usize, const BYTES: usize, const MSB: usize> {
-    _phantom: PhantomData<(M, T)>,
+#[derive(Clone)]
+pub struct FixedConfig<
+    M: Method,
+    T,
+    const B: usize,
+    const BYTES: usize,
+    const MSB: usize,
+    H: ReproducibleBuildHasher,
+> {
+    _phantom: PhantomData<(M, T, H)>,
 }
 
 impl<
@@ -90,9 +98,11 @@ impl<
         const B: usize,
         const BYTES: usize,
         const MSB: usize,
-    > GeoConfig<M> for FixedConfig<M, T, B, BYTES, MSB>
+        H: ReproducibleBuildHasher,
+    > GeoConfig<M> for FixedConfig<M, T, B, BYTES, MSB, H>
 {
     type BucketType = T;
+    type BuildHasher = H;
 
     #[inline]
     fn max_msb_len(&self) -> usize {
@@ -148,42 +158,76 @@ impl<
         const B: usize,
         const BYTES: usize,
         const MSB: usize,
-    > Default for FixedConfig<M, T, B, BYTES, MSB>
+        H: ReproducibleBuildHasher,
+    > Default for FixedConfig<M, T, B, BYTES, MSB, H>
 {
     fn default() -> Self {
         assert_bucket_type_large_enough::<T>(B);
         assert_buckets_within_estimation_bound(B, BYTES * BITS_PER_BYTE);
+
         assert!(
             B < M::get_lookups().len(),
             "B = {} is not available for fixed config, requires B < {}",
             B,
             M::get_lookups().len()
         );
+
         Self {
             _phantom: PhantomData,
         }
     }
 }
 
+impl<
+        M: Method + Lookups,
+        T: IsBucketType,
+        const B: usize,
+        const BYTES: usize,
+        const MSB: usize,
+        H: ReproducibleBuildHasher,
+    > PartialEq for FixedConfig<M, T, B, BYTES, MSB, H>
+{
+    fn eq(&self, _other: &Self) -> bool {
+        H::debug_assert_hashers_eq();
+
+        // The values of the fixed config are provided at compile time
+        // so no runtime computation is required
+        true
+    }
+}
+
+impl<
+        M: Method + Lookups,
+        T: IsBucketType,
+        const B: usize,
+        const BYTES: usize,
+        const MSB: usize,
+        H: ReproducibleBuildHasher,
+    > Eq for FixedConfig<M, T, B, BYTES, MSB, H>
+{
+}
+
 /// Geometric filter configuration using dynamic lookup tables.
 #[derive(Clone)]
-pub struct VariableConfig<M: Method, T> {
+pub struct VariableConfig<M: Method, T, H: ReproducibleBuildHasher> {
     b: usize,
     bytes: usize,
     msb: usize,
-    _phantom: PhantomData<(M, T)>,
+    _phantom: PhantomData<(M, T, H)>,
     lookup: Arc<Lookup>,
 }
 
-impl<M: Method, T> Eq for VariableConfig<M, T> {}
+impl<M: Method, T, H: ReproducibleBuildHasher> Eq for VariableConfig<M, T, H> {}
 
-impl<M: Method, T> PartialEq for VariableConfig<M, T> {
+impl<M: Method, T, H: ReproducibleBuildHasher> PartialEq for VariableConfig<M, T, H> {
     fn eq(&self, other: &Self) -> bool {
+        H::debug_assert_hashers_eq();
+
         self.b == other.b && self.bytes == other.bytes && self.msb == other.msb
     }
 }
 
-impl<M: Method + Lookups, T: IsBucketType> VariableConfig<M, T> {
+impl<M: Method + Lookups, T: IsBucketType, H: ReproducibleBuildHasher> VariableConfig<M, T, H> {
     /// Returns a new configuration value. See [`FixedConfig`] for the meaning
     /// of the parameters. This functions computes a new lookup table every time
     /// it is invoked, so make sure to share the resulting value as much as possible.
@@ -205,8 +249,11 @@ impl<M: Method + Lookups, T: IsBucketType> VariableConfig<M, T> {
     }
 }
 
-impl<M: Method, T: IsBucketType + 'static> GeoConfig<M> for VariableConfig<M, T> {
+impl<M: Method, T: IsBucketType + 'static, H: ReproducibleBuildHasher> GeoConfig<M>
+    for VariableConfig<M, T, H>
+{
     type BucketType = T;
+    type BuildHasher = H;
 
     #[inline]
     fn max_msb_len(&self) -> usize {

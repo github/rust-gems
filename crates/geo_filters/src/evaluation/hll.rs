@@ -8,7 +8,10 @@ use std::{
 
 use hyperloglogplus::{HyperLogLog, HyperLogLogPlus};
 
-use crate::{Count, Distinct};
+use crate::{
+    build_hasher::{ReproducibleBuildHasher, UnstableDefaultBuildHasher},
+    Count, Distinct,
+};
 
 /// Uses at most 192 bytes.
 /// The relative error has a standard deviation of ~0.065.
@@ -77,6 +80,7 @@ pub struct NoopHasher {
     hash: u64,
 }
 
+#[derive(Clone, Default)]
 pub struct BuildNoopHasher {}
 
 impl Hasher for NoopHasher {
@@ -87,7 +91,9 @@ impl Hasher for NoopHasher {
 
     #[inline]
     fn write(&mut self, _: &[u8]) {
-        todo!("")
+        unimplemented!(
+            "NoopHasher does not support arbitrary byte sequences. Use write_u64 instead"
+        );
     }
 
     #[inline]
@@ -104,13 +110,20 @@ impl BuildHasher for BuildNoopHasher {
     }
 }
 
+impl ReproducibleBuildHasher for BuildNoopHasher {}
+
 impl<C: HllConfig> Count<Distinct> for Hll<C> {
     fn push_hash(&mut self, hash: u64) {
         self.inner.borrow_mut().insert(&hash)
     }
 
+    fn push<I: std::hash::Hash>(&mut self, item: I) {
+        let build_hasher = UnstableDefaultBuildHasher::default();
+        self.push_hash(build_hasher.hash_one(item));
+    }
+
     fn push_sketch(&mut self, _other: &Self) {
-        todo!()
+        unimplemented!()
     }
 
     fn size(&self) -> f32 {
@@ -118,7 +131,7 @@ impl<C: HllConfig> Count<Distinct> for Hll<C> {
     }
 
     fn size_with_sketch(&self, _other: &Self) -> f32 {
-        todo!()
+        unimplemented!()
     }
 
     fn bytes_in_memory(&self) -> usize {

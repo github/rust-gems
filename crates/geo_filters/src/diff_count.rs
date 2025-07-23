@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::hash::BuildHasher as _;
 use std::mem::{size_of, size_of_val};
 
 use crate::config::{
@@ -304,6 +305,10 @@ pub(crate) fn masked<C: GeoConfig<Diff>>(
 /// Computes an xor of the two underlying bitsets.
 /// This operation corresponds to computing the symmetric difference of the two
 /// sets represented by the GeoDiffCounts.
+///
+/// # Panics
+///
+/// Panics if the configuration of the geofilters is not identical.
 pub(crate) fn xor<C: GeoConfig<Diff>>(
     diff_count: &GeoDiffCount<'_, C>,
     other: &GeoDiffCount<'_, C>,
@@ -312,6 +317,7 @@ pub(crate) fn xor<C: GeoConfig<Diff>>(
         diff_count.config == other.config,
         "combined filters must have the same configuration"
     );
+
     GeoDiffCount::from_bit_chunks(
         diff_count.config.clone(),
         xor_bit_chunks(diff_count.bit_chunks(), other.bit_chunks()).peekable(),
@@ -321,6 +327,11 @@ pub(crate) fn xor<C: GeoConfig<Diff>>(
 impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
     fn push_hash(&mut self, hash: u64) {
         self.xor_bit(self.config.hash_to_bucket(hash));
+    }
+
+    fn push<I: std::hash::Hash>(&mut self, item: I) {
+        let build_hasher = C::BuildHasher::default();
+        self.push_hash(build_hasher.hash_one(item));
     }
 
     fn push_sketch(&mut self, other: &Self) {
@@ -341,6 +352,7 @@ impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
 
     fn bytes_in_memory(&self) -> usize {
         let Self { config, msb, lsb } = self;
+
         size_of_val(config) + msb.len() * size_of::<C::BucketType>() + lsb.bytes_in_memory()
     }
 }
@@ -350,7 +362,10 @@ mod tests {
     use itertools::Itertools;
     use rand::{RngCore, SeedableRng};
 
-    use crate::config::{iter_ones, tests::test_estimate, FixedConfig};
+    use crate::{
+        build_hasher::UnstableDefaultBuildHasher,
+        config::{iter_ones, tests::test_estimate, FixedConfig},
+    };
 
     use super::*;
 
@@ -359,7 +374,8 @@ mod tests {
     //
     //     scripts/accuracy -n 10000 geo_diff/u16/b=7/bytes=50/msb=10
     //
-    type GeoDiffCount7_50<'a> = GeoDiffCount<'a, FixedConfig<Diff, u16, 7, 50, 10>>;
+    type GeoDiffCount7_50<'a> =
+        GeoDiffCount<'a, FixedConfig<Diff, u16, 7, 50, 10, UnstableDefaultBuildHasher>>;
 
     #[test]
     fn test_geo_count() {
@@ -374,6 +390,7 @@ mod tests {
             (10000000, 10194611.0),
         ] {
             let mut geo_count = GeoDiffCount13::default();
+
             (0..n).for_each(|i| geo_count.push(i));
             assert_eq!(result, geo_count.size());
         }

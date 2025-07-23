@@ -7,13 +7,14 @@
 //!   Supports estimating the size of the union of two sets with a precision related to the estimated size.
 //!   It has some similar properties as related filters like HyperLogLog, MinHash, etc, but uses less space.
 
+pub mod build_hasher;
 pub mod config;
 pub mod diff_count;
 pub mod distinct_count;
 #[cfg(feature = "evaluation")]
 pub mod evaluation;
 
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 /// Marker trait to indicate the variant implemented by a [`Count`] instance.
 pub trait Method: Clone + Eq + PartialEq + Send + Sync {}
@@ -33,10 +34,8 @@ pub trait Count<M: Method> {
     /// Add the given hash to the set.
     fn push_hash(&mut self, hash: u64);
 
-    /// Add the hash of the given item, computed with the default hasher, to the set.
-    fn push<I: Hash>(&mut self, item: I) {
-        self.push_hash(item_to_hash(item))
-    }
+    /// Add the hash of the given item, computed with the configured hasher, to the set.
+    fn push<I: Hash>(&mut self, item: I);
 
     /// Add the given sketch to this one.
     /// If only the size of the combined set is needed, [`Self::size_with_sketch`] is more efficient and should be used.
@@ -53,9 +52,6 @@ pub trait Count<M: Method> {
     fn bytes_in_memory(&self) -> usize;
 }
 
-fn item_to_hash<I: Hash>(item: I) -> u64 {
-    // TODO: replace with a stable hashing function!
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    item.hash(&mut hasher);
-    hasher.finish()
-}
+#[doc = include_str!("../README.md")]
+#[cfg(doctest)]
+pub struct ReadmeDocTests;
