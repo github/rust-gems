@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::BuildHasher as _;
 use std::mem::{size_of, size_of_val};
+use std::ops::Deref;
 
 use crate::config::{
     count_ones_from_bitchunks, count_ones_from_msb_and_lsb, iter_bit_chunks, iter_ones,
@@ -77,13 +78,56 @@ impl<C: GeoConfig<Diff>> std::fmt::Debug for GeoDiffCount<'_, C> {
     }
 }
 
-impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
+impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     pub fn new(config: C) -> Self {
         Self {
             config,
             msb: Default::default(),
             lsb: Default::default(),
         }
+    }
+
+    pub fn from_bytes(c: C, buf: &'a [u8]) -> Self {
+        if buf.is_empty() {
+            return Self::new(c);
+        }
+
+        // The number of most significant bits stores in the MSB sparse repr
+        let msb_len = (buf.len() / size_of::<C::BucketType>()).min(c.max_msb_len());
+
+        let msb =
+            unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const C::BucketType, msb_len) };
+
+        // The number of bytes representing the MSB - this is how many bytes we need to
+        // skip over to reach the LSB
+        let msb_bytes_len = msb_len * size_of::<C::BucketType>();
+
+        Self {
+            config: c,
+            msb: Cow::Borrowed(msb),
+            lsb: BitVec::from_bytes(&buf[msb_bytes_len..]),
+        }
+    }
+
+    pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<usize> {
+        if self.msb.is_empty() {
+            return Ok(0);
+        }
+
+        let msb_buckets = self.msb.deref();
+        let msb_bytes = unsafe {
+            std::slice::from_raw_parts(
+                msb_buckets.as_ptr() as *const u8,
+                msb_buckets.len() * size_of::<C::BucketType>(),
+            )
+        };
+        writer.write_all(msb_bytes)?;
+
+        let mut bytes_written = msb_bytes.len();
+
+        bytes_written += self.lsb.write(writer)?;
+
+        Ok(bytes_written)
     }
 
     /// `BitChunk`s can be processed much more efficiently than individual one bits!
@@ -208,16 +252,23 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
     /// that makes the cost of the else case negligible.
     fn xor_bit(&mut self, bucket: C::BucketType) {
         if bucket.into_usize() < self.lsb.num_bits() {
+            // The bit being toggled is within our LSB bit vector
+            // so toggle it directly.
             self.lsb.toggle(bucket.into_usize());
         } else {
             let msb = self.msb.to_mut();
             match msb.binary_search_by(|k| bucket.cmp(k)) {
                 Ok(idx) => {
+                    // The bit is already set in the MSB sparse bitset, remove it (XOR)
                     msb.remove(idx);
+
+                    // We have removed a value from our MSB, move a value in the
+                    // LSB into the MSB
                     let (first, second) = {
                         let mut lsb = iter_ones(self.lsb.bit_chunks().peekable());
                         (lsb.next(), lsb.next())
                     };
+
                     let new_smallest = if let Some(smallest) = first {
                         msb.push(C::BucketType::from_usize(smallest));
                         second.map(|_| smallest).unwrap_or(0)
@@ -229,15 +280,19 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
                 Err(idx) => {
                     msb.insert(idx, bucket);
                     if msb.len() > self.config.max_msb_len() {
+                        // We have too many values in the MSB sparse index vector,
+                        // let's move the smalles MSB value into the LSB bit vector
                         let smallest = msb
                             .pop()
                             .expect("we should have at least one element!")
                             .into_usize();
-                        // ensure vector covers smallest
+
                         let new_smallest = msb
                             .last()
                             .expect("should have at least one element")
                             .into_usize();
+
+                        // ensure LSB bit vector has the space for `smallest`
                         self.lsb.resize(new_smallest);
                         self.lsb.toggle(smallest);
                     }
@@ -360,7 +415,10 @@ impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use rand::{RngCore, SeedableRng};
+    use rand::{
+        seq::{IndexedRandom, IteratorRandom},
+        RngCore, SeedableRng,
+    };
 
     use crate::{
         build_hasher::UnstableDefaultBuildHasher,
@@ -578,6 +636,46 @@ mod tests {
 
         fn iter_ones(&self) -> impl Iterator<Item = C::BucketType> + '_ {
             iter_ones(self.bit_chunks().peekable()).map(C::BucketType::from_usize)
+        }
+    }
+
+    #[test]
+    fn test_serialization_empty() {
+        let before = GeoDiffCount7::default();
+
+        let mut writer = vec![];
+        before.write(&mut writer).unwrap();
+
+        assert_eq!(writer.len(), 0);
+
+        let after = GeoDiffCount7::from_bytes(before.config.clone(), &writer);
+
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn test_serialization_round_trip() {
+        let mut rnd = rand::rngs::StdRng::from_os_rng();
+
+        // Run 100 simulations of random values being put into
+        // a diff counter
+        for _ in 0..100 {
+            let mut before = GeoDiffCount7::default();
+
+            // Select a random number of items to insert
+            let items = (1..1000).choose(&mut rnd).unwrap();
+
+            for _ in 0..items {
+                before.push_hash(rnd.next_u64());
+            }
+
+            let mut writer = vec![];
+
+            before.write(&mut writer).unwrap();
+
+            let after = GeoDiffCount7::from_bytes(before.config.clone(), &writer);
+
+            assert_eq!(before, after);
         }
     }
 }
