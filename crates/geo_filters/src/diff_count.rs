@@ -415,10 +415,7 @@ impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use rand::{
-        seq::{IndexedRandom, IteratorRandom},
-        RngCore, SeedableRng,
-    };
+    use rand::{seq::IteratorRandom, RngCore, SeedableRng};
 
     use crate::{
         build_hasher::UnstableDefaultBuildHasher,
@@ -653,14 +650,17 @@ mod tests {
         assert_eq!(before, after);
     }
 
-    #[test]
-    fn test_serialization_round_trip() {
+    // This helper exists in order to easily test serializing types with different
+    // bucket types in the MSB sparse bit field representation. See tests below.
+    fn serialization_round_trip<C: GeoConfig<Diff> + Default>() {
         let mut rnd = rand::rngs::StdRng::from_os_rng();
 
         // Run 100 simulations of random values being put into
-        // a diff counter
+        // a diff counter. "Serializing" to a vector to emulate
+        // writing to a disk, and then deserializing and asserting
+        // the filters are equal.
         for _ in 0..100 {
-            let mut before = GeoDiffCount7::default();
+            let mut before = GeoDiffCount::<'_, C>::default();
 
             // Select a random number of items to insert
             let items = (1..1000).choose(&mut rnd).unwrap();
@@ -670,12 +670,23 @@ mod tests {
             }
 
             let mut writer = vec![];
-
             before.write(&mut writer).unwrap();
 
-            let after = GeoDiffCount7::from_bytes(before.config.clone(), &writer);
+            let after = GeoDiffCount::<'_, C>::from_bytes(before.config.clone(), &writer);
 
             assert_eq!(before, after);
         }
+    }
+
+    #[test]
+    fn test_serialization_round_trip_7() {
+        // Uses a u16 for MSB buckets
+        serialization_round_trip::<GeoDiffConfig7>();
+    }
+
+    #[test]
+    fn test_serialization_round_trip_13() {
+        // Uses a u32 for MSB buckets
+        serialization_round_trip::<GeoDiffConfig7>();
     }
 }
