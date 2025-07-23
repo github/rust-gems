@@ -4,7 +4,6 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::BuildHasher as _;
 use std::mem::{size_of, size_of_val};
-use std::ops::Deref;
 
 use crate::config::{
     count_ones_from_bitchunks, count_ones_from_msb_and_lsb, iter_bit_chunks, iter_ones,
@@ -14,6 +13,7 @@ use crate::{Count, Diff};
 
 mod bitvec;
 mod config;
+mod serde;
 mod sim_hash;
 
 use bitvec::*;
@@ -85,49 +85,6 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
             msb: Default::default(),
             lsb: Default::default(),
         }
-    }
-
-    pub fn from_bytes(c: C, buf: &'a [u8]) -> Self {
-        if buf.is_empty() {
-            return Self::new(c);
-        }
-
-        // The number of most significant bits stores in the MSB sparse repr
-        let msb_len = (buf.len() / size_of::<C::BucketType>()).min(c.max_msb_len());
-
-        let msb =
-            unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const C::BucketType, msb_len) };
-
-        // The number of bytes representing the MSB - this is how many bytes we need to
-        // skip over to reach the LSB
-        let msb_bytes_len = msb_len * size_of::<C::BucketType>();
-
-        Self {
-            config: c,
-            msb: Cow::Borrowed(msb),
-            lsb: BitVec::from_bytes(&buf[msb_bytes_len..]),
-        }
-    }
-
-    pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<usize> {
-        if self.msb.is_empty() {
-            return Ok(0);
-        }
-
-        let msb_buckets = self.msb.deref();
-        let msb_bytes = unsafe {
-            std::slice::from_raw_parts(
-                msb_buckets.as_ptr() as *const u8,
-                msb_buckets.len() * size_of::<C::BucketType>(),
-            )
-        };
-        writer.write_all(msb_bytes)?;
-
-        let mut bytes_written = msb_bytes.len();
-
-        bytes_written += self.lsb.write(writer)?;
-
-        Ok(bytes_written)
     }
 
     /// `BitChunk`s can be processed much more efficiently than individual one bits!

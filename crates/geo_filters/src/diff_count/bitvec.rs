@@ -34,62 +34,6 @@ impl PartialOrd for BitVec<'_> {
 }
 
 impl BitVec<'_> {
-    pub fn from_bytes(mut buf: &[u8]) -> Self {
-        if buf.is_empty() {
-            return Self::default();
-        }
-
-        // The first byte of the serialized BitVec is used to indicate how many
-        // of the bits in the left-most byte are *unoccupied*.
-        // See [`BitVec::write`] implementation for how this is done.
-        assert!(
-            buf[0] < 64,
-            "Number of unoccupied bits should be <64, got {}",
-            buf[0]
-        );
-
-        let num_bits = (buf.len() - 1) * 8 - buf[0] as usize;
-        buf = &buf[1..];
-
-        assert_eq!(
-            buf.len() % BYTES_PER_BLOCK,
-            0,
-            "buffer should be a multiple of 8 bytes, got {}",
-            buf.len()
-        );
-
-        let blocks = unsafe {
-            std::mem::transmute(std::slice::from_raw_parts(
-                buf.as_ptr(),
-                buf.len() / BYTES_PER_BLOCK,
-            ))
-        };
-        let blocks = Cow::Borrowed(blocks);
-
-        Self { num_bits, blocks }
-    }
-
-    pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<usize> {
-        if self.is_empty() {
-            return Ok(0);
-        }
-
-        // First serialize the number of unoccupied bits in the last block as one byte.
-        let unoccupied_bits = 63 - ((self.num_bits - 1) % 64) as u8;
-
-        writer.write_all(&[unoccupied_bits])?;
-
-        let blocks = self.blocks.deref();
-
-        let block_bytes = unsafe {
-            std::slice::from_raw_parts(blocks.as_ptr() as *const u8, blocks.len() * BYTES_PER_BLOCK)
-        };
-
-        writer.write_all(block_bytes)?;
-
-        Ok(block_bytes.len() + 1)
-    }
-
     /// Takes an iterator of `BitChunk` items as input and returns the corresponding `BitVec`.
     /// The order of `BitChunk`s doesn't matter for this function and `BitChunk` may be hitting
     /// the same block. In this case, the function will simply xor them together.
@@ -201,6 +145,61 @@ impl BitVec<'_> {
     pub fn bytes_in_memory(&self) -> usize {
         let Self { num_bits, blocks } = self;
         size_of_val(num_bits) + blocks.len() * size_of::<u64>()
+    }
+
+    pub fn from_bytes(mut buf: &[u8]) -> Self {
+        if buf.is_empty() {
+            return Self::default();
+        }
+
+        // The first byte of the serialized BitVec is used to indicate how many
+        // of the bits in the left-most byte are *unoccupied*.
+        // See [`BitVec::write`] implementation for how this is done.
+        assert!(
+            buf[0] < 64,
+            "Number of unoccupied bits should be <64, got {}",
+            buf[0]
+        );
+
+        let num_bits = (buf.len() - 1) * 8 - buf[0] as usize;
+        buf = &buf[1..];
+
+        assert_eq!(
+            buf.len() % BYTES_PER_BLOCK,
+            0,
+            "buffer should be a multiple of 8 bytes, got {}",
+            buf.len()
+        );
+
+        let blocks = unsafe {
+            std::mem::transmute(std::slice::from_raw_parts(
+                buf.as_ptr(),
+                buf.len() / BYTES_PER_BLOCK,
+            ))
+        };
+        let blocks = Cow::Borrowed(blocks);
+
+        Self { num_bits, blocks }
+    }
+
+    pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<usize> {
+        if self.is_empty() {
+            return Ok(0);
+        }
+
+        // First serialize the number of unoccupied bits in the last block as one byte.
+        let unoccupied_bits = 63 - ((self.num_bits - 1) % 64) as u8;
+
+        writer.write_all(&[unoccupied_bits])?;
+
+        let blocks = self.blocks.deref();
+        let block_bytes = unsafe {
+            std::slice::from_raw_parts(blocks.as_ptr() as *const u8, blocks.len() * BYTES_PER_BLOCK)
+        };
+
+        writer.write_all(block_bytes)?;
+
+        Ok(block_bytes.len() + 1)
     }
 }
 
