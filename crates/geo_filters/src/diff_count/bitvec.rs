@@ -147,13 +147,14 @@ impl BitVec<'_> {
         size_of_val(num_bits) + blocks.len() * size_of::<u64>()
     }
 
+    #[cfg(target_endian = "little")]
     pub fn from_bytes(mut buf: &[u8]) -> Self {
         if buf.is_empty() {
             return Self::default();
         }
 
         // The first byte of the serialized BitVec is used to indicate how many
-        // of the bits in the left-most byte are *unoccupied*.
+        // of the bits in the left-most u64 block are *unoccupied*.
         // See [`BitVec::write`] implementation for how this is done.
         assert!(
             buf[0] < 64,
@@ -182,6 +183,7 @@ impl BitVec<'_> {
         Self { num_bits, blocks }
     }
 
+    #[cfg(target_endian = "little")]
     pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<usize> {
         if self.is_empty() {
             return Ok(0);

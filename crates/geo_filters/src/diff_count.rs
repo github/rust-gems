@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::BuildHasher as _;
 use std::mem::{size_of, size_of_val};
+use std::ops::Deref as _;
 
 use crate::config::{
     count_ones_from_bitchunks, count_ones_from_msb_and_lsb, iter_bit_chunks, iter_ones,
@@ -13,7 +14,6 @@ use crate::{Count, Diff};
 
 mod bitvec;
 mod config;
-mod serde;
 mod sim_hash;
 
 use bitvec::*;
@@ -216,16 +216,11 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
             let msb = self.msb.to_mut();
             match msb.binary_search_by(|k| bucket.cmp(k)) {
                 Ok(idx) => {
-                    // The bit is already set in the MSB sparse bitset, remove it (XOR)
                     msb.remove(idx);
-
-                    // We have removed a value from our MSB, move a value in the
-                    // LSB into the MSB
                     let (first, second) = {
                         let mut lsb = iter_ones(self.lsb.bit_chunks().peekable());
                         (lsb.next(), lsb.next())
                     };
-
                     let new_smallest = if let Some(smallest) = first {
                         msb.push(C::BucketType::from_usize(smallest));
                         second.map(|_| smallest).unwrap_or(0)
@@ -243,12 +238,10 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
                             .pop()
                             .expect("we should have at least one element!")
                             .into_usize();
-
                         let new_smallest = msb
                             .last()
                             .expect("should have at least one element")
                             .into_usize();
-
                         // ensure LSB bit vector has the space for `smallest`
                         self.lsb.resize(new_smallest);
                         self.lsb.toggle(smallest);
@@ -292,6 +285,57 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
             self.msb,
             self.lsb.num_bits(),
         );
+    }
+
+    // Serialization:
+    //
+    // Since most of our target platforms are little endian there are more optimised approaches
+    // for little endian platforms, just splatting the bytes into the writer. This is contrary
+    // to the usual "network endian" approach where big endian is the default, but most of our
+    // consumers are little endian so it makes sense for this to be the optimal approach.
+    //
+    // For now we do not support big endian platforms. In the future we might add a big endian
+    // platform specific implementation which is able to read the little endian serialized
+    // representation. For now, if you attempt to serialize a filter on a big endian platform
+    // you get a panic.
+
+    /// Create a new [`GeoDiffCount`] from a slice of bytes
+    #[cfg(target_endian = "little")]
+    pub fn from_bytes(c: C, buf: &'a [u8]) -> Self {
+        if buf.is_empty() {
+            return Self::new(c);
+        }
+        // The number of most significant bits stores in the MSB sparse repr
+        let msb_len = (buf.len() / size_of::<C::BucketType>()).min(c.max_msb_len());
+        let msb = unsafe {
+            std::mem::transmute::<&[u8], &[C::BucketType]>(std::slice::from_raw_parts(
+                buf.as_ptr(),
+                msb_len,
+            ))
+        };
+        // The number of bytes representing the MSB - this is how many bytes we need to
+        // skip over to reach the LSB
+        let msb_bytes_len = msb_len * size_of::<C::BucketType>();
+        Self {
+            config: c,
+            msb: Cow::Borrowed(msb),
+            lsb: BitVec::from_bytes(&buf[msb_bytes_len..]),
+        }
+    }
+
+    #[cfg(target_endian = "little")]
+    pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<usize> {
+        if self.msb.is_empty() {
+            return Ok(0);
+        }
+        let msb_buckets = self.msb.deref();
+        let msb_bytes = unsafe {
+            std::slice::from_raw_parts(msb_buckets.as_ptr() as *const u8, size_of_val(msb_buckets))
+        };
+        writer.write_all(msb_bytes)?;
+        let mut bytes_written = msb_bytes.len();
+        bytes_written += self.lsb.write(writer)?;
+        Ok(bytes_written)
     }
 }
 
@@ -611,50 +655,45 @@ mod tests {
 
     // This helper exists in order to easily test serializing types with different
     // bucket types in the MSB sparse bit field representation. See tests below.
+    #[cfg(target_endian = "little")]
     fn serialization_round_trip<C: GeoConfig<Diff> + Default>() {
         let mut rnd = rand::rngs::StdRng::from_os_rng();
-
         // Run 100 simulations of random values being put into
         // a diff counter. "Serializing" to a vector to emulate
         // writing to a disk, and then deserializing and asserting
         // the filters are equal.
         for _ in 0..100 {
             let mut before = GeoDiffCount::<'_, C>::default();
-
-            // Select a random number of items to insert
+            // Select a random number of items to insert.
             let items = (1..1000).choose(&mut rnd).unwrap();
-
             for _ in 0..items {
                 before.push_hash(rnd.next_u64());
             }
-
             let mut writer = vec![];
-
-            // Insert some padding to emulate alignment issues with the slices
+            // Insert some padding to emulate alignment issues with the slices.
             // A previous version of this test never panicked even though we were
-            // violating the alignment preconditions for the `from_raw_parts` function
+            // violating the alignment preconditions for the `from_raw_parts` function.
             let padding = [0_u8; 8];
             let pad_amount = (0..8).choose(&mut rnd).unwrap();
             writer.write_all(&padding[..pad_amount]).unwrap();
-
             before.write(&mut writer).unwrap();
-
             let after =
                 GeoDiffCount::<'_, C>::from_bytes(before.config.clone(), &writer[pad_amount..]);
-
             assert_eq!(before, after);
         }
     }
 
     #[test]
+    #[cfg(target_endian = "little")]
     fn test_serialization_round_trip_7() {
-        // Uses a u16 for MSB buckets
+        // Uses a u16 for MSB buckets.
         serialization_round_trip::<GeoDiffConfig7>();
     }
 
     #[test]
+    #[cfg(target_endian = "little")]
     fn test_serialization_round_trip_13() {
-        // Uses a u32 for MSB buckets
+        // Uses a u32 for MSB buckets.
         serialization_round_trip::<GeoDiffConfig13>();
     }
 }
