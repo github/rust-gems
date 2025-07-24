@@ -105,9 +105,7 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
                 msb.push(*bucket);
             })
             .unwrap_or_default();
-
         let lsb = BitVec::from_bit_chunks(ones.into_bitchunks(), smallest_msb.into_usize());
-
         let result = Self {
             config,
             msb: Cow::from(msb),

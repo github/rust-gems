@@ -18,7 +18,7 @@ where
     match maybe_panic {
         Ok(t) => t,
         Err(panic_info) => {
-            eprintln!("Test failed! Reproduce with: TEST_SEED={}", seed);
+            eprintln!("Test failed! Reproduce with: TEST_SEED={seed}");
             resume_unwind(panic_info);
         }
     }
