@@ -172,7 +172,7 @@ impl BitVec<'_> {
         );
 
         let blocks = unsafe {
-            std::mem::transmute(std::slice::from_raw_parts(
+            std::mem::transmute::<&[u8], &[u64]>(std::slice::from_raw_parts(
                 buf.as_ptr(),
                 buf.len() / BYTES_PER_BLOCK,
             ))

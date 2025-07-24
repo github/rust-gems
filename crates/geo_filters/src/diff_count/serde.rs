@@ -27,8 +27,12 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         // The number of most significant bits stores in the MSB sparse repr
         let msb_len = (buf.len() / size_of::<C::BucketType>()).min(c.max_msb_len());
 
-        let msb =
-            unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const C::BucketType, msb_len) };
+        let msb = unsafe {
+            std::mem::transmute::<&[u8], &[C::BucketType]>(std::slice::from_raw_parts(
+                buf.as_ptr(),
+                msb_len,
+            ))
+        };
 
         // The number of bytes representing the MSB - this is how many bytes we need to
         // skip over to reach the LSB
@@ -55,10 +59,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
 
         let msb_buckets = self.msb.deref();
         let msb_bytes = unsafe {
-            std::slice::from_raw_parts(
-                msb_buckets.as_ptr() as *const u8,
-                msb_buckets.len() * size_of::<C::BucketType>(),
-            )
+            std::slice::from_raw_parts(msb_buckets.as_ptr() as *const u8, size_of_val(msb_buckets))
         };
         writer.write_all(msb_bytes)?;
 

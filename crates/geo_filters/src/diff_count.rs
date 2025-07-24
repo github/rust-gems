@@ -371,6 +371,8 @@ impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use itertools::Itertools;
     use rand::{seq::IteratorRandom, RngCore, SeedableRng};
 
@@ -627,9 +629,18 @@ mod tests {
             }
 
             let mut writer = vec![];
+
+            // Insert some padding to emulate alignment issues with the slices
+            // A previous version of this test never panicked even though we were
+            // violating the alignment preconditions for the `from_raw_parts` function
+            let pad = (0..8).choose(&mut rnd).unwrap();
+            for _ in 0..pad {
+                writer.write(&[0x0]).unwrap();
+            }
+
             before.write(&mut writer).unwrap();
 
-            let after = GeoDiffCount::<'_, C>::from_bytes(before.config.clone(), &writer);
+            let after = GeoDiffCount::<'_, C>::from_bytes(before.config.clone(), &writer[pad..]);
 
             assert_eq!(before, after);
         }
