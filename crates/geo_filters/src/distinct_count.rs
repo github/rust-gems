@@ -232,11 +232,12 @@ fn or<C: GeoConfig<Distinct>>(
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use rand::{RngCore, SeedableRng};
+    use rand::RngCore;
 
     use crate::build_hasher::UnstableDefaultBuildHasher;
     use crate::config::{iter_ones, tests::test_estimate, FixedConfig, VariableConfig};
     use crate::evaluation::simulation::simulate;
+    use crate::test_rng::prng_test_harness;
 
     use super::*;
 
@@ -321,19 +322,20 @@ mod tests {
 
     #[test]
     fn test_estimate_union_size_fast() {
-        let mut rnd = rand::rngs::StdRng::from_os_rng();
-        let mut a = GeoDistinctCount7::default();
-        let mut b = GeoDistinctCount7::default();
-        for _ in 0..10000 {
-            a.push_hash(rnd.next_u64());
-        }
-        for _ in 0..1000 {
-            b.push_hash(rnd.next_u64());
-        }
-        let c = or(&a, &b);
+        prng_test_harness(|rnd| {
+            let mut a = GeoDistinctCount7::default();
+            let mut b = GeoDistinctCount7::default();
+            for _ in 0..10000 {
+                a.push_hash(rnd.next_u64());
+            }
+            for _ in 0..1000 {
+                b.push_hash(rnd.next_u64());
+            }
+            let c = or(&a, &b);
 
-        assert_eq!(c.size(), a.size_with_sketch(&b));
-        assert_eq!(c.size(), b.size_with_sketch(&a));
+            assert_eq!(c.size(), a.size_with_sketch(&b));
+            assert_eq!(c.size(), b.size_with_sketch(&a));
+        })
     }
 
     fn golden_section_min<F: Fn(f32) -> f32>(min: f32, max: f32, f: F) -> f32 {
@@ -392,15 +394,18 @@ mod tests {
 
     #[test]
     fn test_bit_chunks() {
-        let mut rnd = rand::rngs::StdRng::from_os_rng();
         for _ in 0..100 {
-            let mut expected = GeoDistinctCount7::default();
-            for _ in 0..1000 {
-                expected.push_hash(rnd.next_u64());
-            }
-            let actual =
-                GeoDistinctCount::from_bit_chunks(expected.config.clone(), expected.bit_chunks());
-            assert_eq!(expected, actual);
+            prng_test_harness(|rnd| {
+                let mut expected = GeoDistinctCount7::default();
+                for _ in 0..1000 {
+                    expected.push_hash(rnd.next_u64());
+                }
+                let actual = GeoDistinctCount::from_bit_chunks(
+                    expected.config.clone(),
+                    expected.bit_chunks(),
+                );
+                assert_eq!(expected, actual);
+            })
         }
     }
 

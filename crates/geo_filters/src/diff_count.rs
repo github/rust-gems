@@ -358,7 +358,7 @@ impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use rand::{RngCore, SeedableRng};
+    use rand::RngCore;
 
     use crate::{
         build_hasher::UnstableDefaultBuildHasher,
@@ -462,29 +462,30 @@ mod tests {
 
     #[test]
     fn test_estimate_diff_size_fast() {
-        let mut rnd = rand::rngs::StdRng::from_os_rng();
-        let mut a_p = GeoDiffCount7_50::default();
-        let mut a_hp = GeoDiffCount7::default();
-        let mut b_p = GeoDiffCount7_50::default();
-        let mut b_hp = GeoDiffCount7::default();
-        for _ in 0..10000 {
-            let hash = rnd.next_u64();
-            a_p.push_hash(hash);
-            a_hp.push_hash(hash);
-        }
-        for _ in 0..1000 {
-            let hash = rnd.next_u64();
-            b_p.push_hash(hash);
-            b_hp.push_hash(hash);
-        }
-        let c_p = xor(&a_p, &b_p);
-        let c_hp = xor(&a_hp, &b_hp);
+        prng_test_harness(|rnd| {
+            let mut a_p = GeoDiffCount7_50::default();
+            let mut a_hp = GeoDiffCount7::default();
+            let mut b_p = GeoDiffCount7_50::default();
+            let mut b_hp = GeoDiffCount7::default();
+            for _ in 0..10000 {
+                let hash = rnd.next_u64();
+                a_p.push_hash(hash);
+                a_hp.push_hash(hash);
+            }
+            for _ in 0..1000 {
+                let hash = rnd.next_u64();
+                b_p.push_hash(hash);
+                b_hp.push_hash(hash);
+            }
+            let c_p = xor(&a_p, &b_p);
+            let c_hp = xor(&a_hp, &b_hp);
 
-        assert_eq!(c_p.size(), a_p.size_with_sketch(&b_p));
-        assert_eq!(c_p.size(), b_p.size_with_sketch(&a_p));
+            assert_eq!(c_p.size(), a_p.size_with_sketch(&b_p));
+            assert_eq!(c_p.size(), b_p.size_with_sketch(&a_p));
 
-        assert_eq!(c_hp.size(), a_hp.size_with_sketch(&b_hp));
-        assert_eq!(c_hp.size(), b_hp.size_with_sketch(&a_hp));
+            assert_eq!(c_hp.size(), a_hp.size_with_sketch(&b_hp));
+            assert_eq!(c_hp.size(), b_hp.size_with_sketch(&a_hp));
+        });
     }
 
     #[test]
@@ -517,24 +518,19 @@ mod tests {
     #[test]
     fn test_xor_plus_mask() {
         for _ in 0..1000 {
-            prng_test_harness(|mut rng| {
+            prng_test_harness(|rnd| {
                 let mask_size = 12;
                 let mask = 0b100001100000;
                 let mut a = GeoDiffCount7::default();
                 for _ in 0..10000 {
-                    a.xor_bit(a.config.hash_to_bucket(rng.next_u64()));
+                    a.xor_bit(a.config.hash_to_bucket(rnd.next_u64()));
                 }
                 let mut expected = GeoDiffCount7::default();
                 let mut b = a.clone();
                 for _ in 0..1000 {
-                    let hash = rng.next_u64();
+                    let hash = rnd.next_u64();
                     b.xor_bit(b.config.hash_to_bucket(hash));
                     expected.xor_bit(expected.config.hash_to_bucket(hash));
-
-                    println!("a   -> {:?}", a);
-                    println!("b   -> {:?}", b);
-                    println!("exp -> {:?}", expected);
-
                     assert_eq!(expected, xor(&a, &b));
                     let masked_a = masked(&a, mask, mask_size);
                     let masked_b = masked(&b, mask, mask_size);
@@ -547,17 +543,18 @@ mod tests {
 
     #[test]
     fn test_bit_chunks() {
-        let mut rnd = rand::rngs::StdRng::from_os_rng();
         for _ in 0..100 {
-            let mut expected = GeoDiffCount7::default();
-            for _ in 0..1000 {
-                expected.push_hash(rnd.next_u64());
-            }
-            let actual = GeoDiffCount::from_bit_chunks(
-                expected.config.clone(),
-                expected.bit_chunks().peekable(),
-            );
-            assert_eq!(expected, actual);
+            prng_test_harness(|rnd| {
+                let mut expected = GeoDiffCount7::default();
+                for _ in 0..1000 {
+                    expected.push_hash(rnd.next_u64());
+                }
+                let actual = GeoDiffCount::from_bit_chunks(
+                    expected.config.clone(),
+                    expected.bit_chunks().peekable(),
+                );
+                assert_eq!(expected, actual);
+            });
         }
     }
 

@@ -101,8 +101,6 @@ impl BitVec<'_> {
         assert!(index < self.num_bits);
         let (block_idx, bit_idx) = index.into_index_and_bit();
         self.blocks.to_mut()[block_idx] ^= bit_idx.into_block();
-
-        if self.blocks.to_mut()[block_idx] & bit_idx.into_block() == 0 {}
     }
 
     /// Returns an iterator over all blocks in reverse order.

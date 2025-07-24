@@ -45,9 +45,12 @@ impl HashToBucketLookup {
 
 #[cfg(test)]
 mod tests {
-    use rand::{RngCore, SeedableRng};
+    use rand::RngCore;
 
-    use crate::config::{hash_to_bucket, phi_f64};
+    use crate::{
+        config::{hash_to_bucket, phi_f64},
+        test_rng::prng_test_harness,
+    };
 
     use super::HashToBucketLookup;
 
@@ -66,15 +69,17 @@ mod tests {
     fn lookup_random_hashes_variance<const B: usize>(n: u64) -> f64 {
         let phi = phi_f64(B);
         let buckets = HashToBucketLookup::new(B);
-        let mut var = 0.0;
-        let mut rnd = rand::rngs::StdRng::from_os_rng();
-        for _ in 0..n {
-            let hash = rnd.next_u64();
-            let estimate = buckets.lookup(hash) as f64;
-            let real = hash_to_bucket(phi, hash) as f64;
-            let err = estimate - real; // assume the mean = 0.0
-            var += err.powf(2.0) / n as f64;
-        }
-        var
+
+        prng_test_harness(|rnd| {
+            let mut var = 0.0;
+            for _ in 0..n {
+                let hash = rnd.next_u64();
+                let estimate = buckets.lookup(hash) as f64;
+                let real = hash_to_bucket(phi, hash) as f64;
+                let err = estimate - real; // assume the mean = 0.0
+                var += err.powf(2.0) / n as f64;
+            }
+            var
+        })
     }
 }
