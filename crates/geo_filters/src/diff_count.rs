@@ -633,14 +633,14 @@ mod tests {
             // Insert some padding to emulate alignment issues with the slices
             // A previous version of this test never panicked even though we were
             // violating the alignment preconditions for the `from_raw_parts` function
-            let pad = (0..8).choose(&mut rnd).unwrap();
-            for _ in 0..pad {
-                writer.write(&[0x0]).unwrap();
-            }
+            let padding = [0_u8; 8];
+            let pad_amount = (0..8).choose(&mut rnd).unwrap();
+            writer.write_all(&padding[..pad_amount]).unwrap();
 
             before.write(&mut writer).unwrap();
 
-            let after = GeoDiffCount::<'_, C>::from_bytes(before.config.clone(), &writer[pad..]);
+            let after =
+                GeoDiffCount::<'_, C>::from_bytes(before.config.clone(), &writer[pad_amount..]);
 
             assert_eq!(before, after);
         }
