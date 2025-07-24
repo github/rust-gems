@@ -152,7 +152,6 @@ impl BitVec<'_> {
         if buf.is_empty() {
             return Self::default();
         }
-
         // The first byte of the serialized BitVec is used to indicate how many
         // of the bits in the left-most u64 block are *unoccupied*.
         // See [`BitVec::write`] implementation for how this is done.
@@ -161,17 +160,14 @@ impl BitVec<'_> {
             "Number of unoccupied bits should be <64, got {}",
             buf[0]
         );
-
         let num_bits = (buf.len() - 1) * 8 - buf[0] as usize;
         buf = &buf[1..];
-
         assert_eq!(
             buf.len() % BYTES_PER_BLOCK,
             0,
             "buffer should be a multiple of 8 bytes, got {}",
             buf.len()
         );
-
         let blocks = unsafe {
             std::mem::transmute::<&[u8], &[u64]>(std::slice::from_raw_parts(
                 buf.as_ptr(),
@@ -179,7 +175,6 @@ impl BitVec<'_> {
             ))
         };
         let blocks = Cow::Borrowed(blocks);
-
         Self { num_bits, blocks }
     }
 
@@ -188,18 +183,14 @@ impl BitVec<'_> {
         if self.is_empty() {
             return Ok(0);
         }
-
         // First serialize the number of unoccupied bits in the last block as one byte.
         let unoccupied_bits = 63 - ((self.num_bits - 1) % 64) as u8;
         writer.write_all(&[unoccupied_bits])?;
-
         let blocks = self.blocks.deref();
         let block_bytes = unsafe {
             std::slice::from_raw_parts(blocks.as_ptr() as *const u8, blocks.len() * BYTES_PER_BLOCK)
         };
-
         writer.write_all(block_bytes)?;
-
         Ok(block_bytes.len() + 1)
     }
 }
