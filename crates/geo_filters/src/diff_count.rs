@@ -95,16 +95,14 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
     /// having to construct another iterator with the remaining `BitChunk`s.
     fn from_bit_chunks<I: Iterator<Item = BitChunk>>(config: C, chunks: I) -> Self {
         let mut ones = iter_ones::<C::BucketType, _>(chunks.peekable());
-
         let mut msb = Vec::default();
         take_ref(&mut ones, config.max_msb_len() - 1).for_each(|bucket| {
             msb.push(bucket);
         });
         let smallest_msb = ones
             .next()
-            .map(|bucket| {
-                msb.push(bucket);
-                bucket
+            .inspect(|bucket| {
+                msb.push(*bucket);
             })
             .unwrap_or_default();
 
@@ -365,6 +363,7 @@ mod tests {
     use crate::{
         build_hasher::UnstableDefaultBuildHasher,
         config::{iter_ones, tests::test_estimate, FixedConfig},
+        test_rng::prng_test_harness,
     };
 
     use super::*;
@@ -517,28 +516,32 @@ mod tests {
 
     #[test]
     fn test_xor_plus_mask() {
-        let mut rnd = rand::rngs::StdRng::from_os_rng();
-        let mask_size = 12;
-        let mask = 0b100001100000;
-        let mut a = GeoDiffCount7::default();
-        for _ in 0..10000 {
-            a.xor_bit(a.config.hash_to_bucket(rnd.next_u64()));
-        }
-        let mut expected = GeoDiffCount7::default();
-        let mut b = a.clone();
         for _ in 0..1000 {
-            let hash = rnd.next_u64();
-            b.xor_bit(b.config.hash_to_bucket(hash));
-            expected.xor_bit(expected.config.hash_to_bucket(hash));
-            assert_eq!(expected, xor(&a, &b));
+            prng_test_harness(|mut rng| {
+                let mask_size = 12;
+                let mask = 0b100001100000;
+                let mut a = GeoDiffCount7::default();
+                for _ in 0..10000 {
+                    a.xor_bit(a.config.hash_to_bucket(rng.next_u64()));
+                }
+                let mut expected = GeoDiffCount7::default();
+                let mut b = a.clone();
+                for _ in 0..1000 {
+                    let hash = rng.next_u64();
+                    b.xor_bit(b.config.hash_to_bucket(hash));
+                    expected.xor_bit(expected.config.hash_to_bucket(hash));
 
-            let masked_a = masked(&a, mask, mask_size);
-            let masked_b = masked(&b, mask, mask_size);
-            let masked_expected = masked(&expected, mask, mask_size);
-            // FIXME: test failed once with:
-            // left: ~12.37563 (msb: [390, 334, 263, 242, 222, 215, 164, 148, 100, 97, 66, 36], |lsb|: 36)
-            // right: ~12.37563 (msb: [390, 334, 263, 242, 222, 215, 164, 148, 100, 97, 66, 36], |lsb|: 0)
-            assert_eq!(masked_expected, xor(&masked_a, &masked_b));
+                    println!("a   -> {:?}", a);
+                    println!("b   -> {:?}", b);
+                    println!("exp -> {:?}", expected);
+
+                    assert_eq!(expected, xor(&a, &b));
+                    let masked_a = masked(&a, mask, mask_size);
+                    let masked_b = masked(&b, mask, mask_size);
+                    let masked_expected = masked(&expected, mask, mask_size);
+                    assert_eq!(masked_expected, xor(&masked_a, &masked_b));
+                }
+            });
         }
     }
 

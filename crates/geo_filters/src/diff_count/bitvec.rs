@@ -12,11 +12,19 @@ use crate::config::BITS_PER_BLOCK;
 /// bit consumes 1 byte). It only implements the minimum number of operations that we need for our
 /// GeoDiffCount implementation. In particular it supports xor-ing of two bit vectors and
 /// iterating through one bits.
-#[derive(Clone, Default, Debug, PartialEq, Eq)]
+#[derive(Clone, Default, Debug)]
 pub(crate) struct BitVec<'a> {
     num_bits: usize,
     blocks: Cow<'a, [u64]>,
 }
+
+impl PartialEq for BitVec<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.bit_chunks().eq(other.bit_chunks())
+    }
+}
+
+impl Eq for BitVec<'_> {}
 
 impl Ord for BitVec<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -93,6 +101,8 @@ impl BitVec<'_> {
         assert!(index < self.num_bits);
         let (block_idx, bit_idx) = index.into_index_and_bit();
         self.blocks.to_mut()[block_idx] ^= bit_idx.into_block();
+
+        if self.blocks.to_mut()[block_idx] & bit_idx.into_block() == 0 {}
     }
 
     /// Returns an iterator over all blocks in reverse order.

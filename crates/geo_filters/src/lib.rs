@@ -13,6 +13,8 @@ pub mod diff_count;
 pub mod distinct_count;
 #[cfg(feature = "evaluation")]
 pub mod evaluation;
+#[cfg(test)]
+mod test_rng;
 
 use std::hash::Hash;
 
