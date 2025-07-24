@@ -655,6 +655,6 @@ mod tests {
     #[test]
     fn test_serialization_round_trip_13() {
         // Uses a u32 for MSB buckets
-        serialization_round_trip::<GeoDiffConfig7>();
+        serialization_round_trip::<GeoDiffConfig13>();
     }
 }
