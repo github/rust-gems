@@ -12,19 +12,11 @@ use crate::config::BITS_PER_BLOCK;
 /// bit consumes 1 byte). It only implements the minimum number of operations that we need for our
 /// GeoDiffCount implementation. In particular it supports xor-ing of two bit vectors and
 /// iterating through one bits.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, Eq, PartialEq)]
 pub(crate) struct BitVec<'a> {
     num_bits: usize,
     blocks: Cow<'a, [u64]>,
 }
-
-impl PartialEq for BitVec<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.bit_chunks().eq(other.bit_chunks())
-    }
-}
-
-impl Eq for BitVec<'_> {}
 
 impl Ord for BitVec<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -49,11 +41,9 @@ impl BitVec<'_> {
     /// NOTE: If the bitchunks iterator is empty, the result is NOT sized to `num_bits` but will
     ///       be EMPTY instead.
     pub fn from_bit_chunks<I: Iterator<Item = BitChunk>>(
-        mut chunks: Peekable<I>,
+        chunks: Peekable<I>,
         num_bits: usize,
     ) -> Self {
-        // if there are no chunks, we keep the size zero
-        let num_bits = chunks.peek().map(|_| num_bits).unwrap_or_default();
         let mut result = Self::default();
         result.resize(num_bits);
         let blocks = result.blocks.to_mut();

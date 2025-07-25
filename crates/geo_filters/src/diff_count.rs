@@ -210,17 +210,16 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
             match msb.binary_search_by(|k| bucket.cmp(k)) {
                 Ok(idx) => {
                     msb.remove(idx);
-                    let (first, second) = {
+                    let first = {
                         let mut lsb = iter_ones(self.lsb.bit_chunks().peekable());
-                        (lsb.next(), lsb.next())
+                        lsb.next()
                     };
-                    let new_smallest = if let Some(smallest) = first {
+                    if let Some(smallest) = first {
                         msb.push(C::BucketType::from_usize(smallest));
-                        second.map(|_| smallest).unwrap_or(0)
+                        self.lsb.resize(smallest);
                     } else {
-                        0
+                        self.lsb.resize(0);
                     };
-                    self.lsb.resize(new_smallest);
                 }
                 Err(idx) => {
                     msb.insert(idx, bucket);
@@ -236,6 +235,12 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
                             .into_usize();
                         self.lsb.resize(new_smallest);
                         self.lsb.toggle(smallest);
+                    } else if msb.len() == self.config.max_msb_len() {
+                        let smallest = msb
+                            .last()
+                            .expect("should have at least one element")
+                            .into_usize();
+                        self.lsb.resize(smallest);
                     }
                 }
             }
