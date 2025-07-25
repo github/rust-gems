@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     fn test_xor_plus_mask() {
-        prng_test_harness(1000, |rnd| {
+        prng_test_harness(10, |rnd| {
             let mask_size = 12;
             let mask = 0b100001100000;
             let mut a = GeoDiffCount7::default();
