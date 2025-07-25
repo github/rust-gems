@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::BuildHasher as _;
 use std::mem::{size_of, size_of_val};
+use std::ops::Deref as _;
 
 use crate::config::{
     count_ones_from_bitchunks, count_ones_from_msb_and_lsb, iter_bit_chunks, iter_ones,
@@ -77,7 +78,7 @@ impl<C: GeoConfig<Diff>> std::fmt::Debug for GeoDiffCount<'_, C> {
     }
 }
 
-impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
+impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     pub fn new(config: C) -> Self {
         Self {
             config,
@@ -204,6 +205,8 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
     /// that makes the cost of the else case negligible.
     fn xor_bit(&mut self, bucket: C::BucketType) {
         if bucket.into_usize() < self.lsb.num_bits() {
+            // The bit being toggled is within our LSB bit vector
+            // so toggle it directly.
             self.lsb.toggle(bucket.into_usize());
         } else {
             let msb = self.msb.to_mut();
@@ -224,15 +227,17 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
                 Err(idx) => {
                     msb.insert(idx, bucket);
                     if msb.len() > self.config.max_msb_len() {
+                        // We have too many values in the MSB sparse index vector,
+                        // let's move the smalles MSB value into the LSB bit vector
                         let smallest = msb
                             .pop()
                             .expect("we should have at least one element!")
                             .into_usize();
-                        // ensure vector covers smallest
                         let new_smallest = msb
                             .last()
                             .expect("should have at least one element")
                             .into_usize();
+                        // ensure LSB bit vector has the space for `smallest`
                         self.lsb.resize(new_smallest);
                         self.lsb.toggle(smallest);
                     } else if msb.len() == self.config.max_msb_len() {
@@ -281,6 +286,57 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
             self.msb,
             self.lsb.num_bits(),
         );
+    }
+
+    // Serialization:
+    //
+    // Since most of our target platforms are little endian there are more optimised approaches
+    // for little endian platforms, just splatting the bytes into the writer. This is contrary
+    // to the usual "network endian" approach where big endian is the default, but most of our
+    // consumers are little endian so it makes sense for this to be the optimal approach.
+    //
+    // For now we do not support big endian platforms. In the future we might add a big endian
+    // platform specific implementation which is able to read the little endian serialized
+    // representation. For now, if you attempt to serialize a filter on a big endian platform
+    // you get a panic.
+
+    /// Create a new [`GeoDiffCount`] from a slice of bytes
+    #[cfg(target_endian = "little")]
+    pub fn from_bytes(c: C, buf: &'a [u8]) -> Self {
+        if buf.is_empty() {
+            return Self::new(c);
+        }
+        // The number of most significant bits stores in the MSB sparse repr
+        let msb_len = (buf.len() / size_of::<C::BucketType>()).min(c.max_msb_len());
+        let msb = unsafe {
+            std::mem::transmute::<&[u8], &[C::BucketType]>(std::slice::from_raw_parts(
+                buf.as_ptr(),
+                msb_len,
+            ))
+        };
+        // The number of bytes representing the MSB - this is how many bytes we need to
+        // skip over to reach the LSB
+        let msb_bytes_len = msb_len * size_of::<C::BucketType>();
+        Self {
+            config: c,
+            msb: Cow::Borrowed(msb),
+            lsb: BitVec::from_bytes(&buf[msb_bytes_len..]),
+        }
+    }
+
+    #[cfg(target_endian = "little")]
+    pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<usize> {
+        if self.msb.is_empty() {
+            return Ok(0);
+        }
+        let msb_buckets = self.msb.deref();
+        let msb_bytes = unsafe {
+            std::slice::from_raw_parts(msb_buckets.as_ptr() as *const u8, size_of_val(msb_buckets))
+        };
+        writer.write_all(msb_bytes)?;
+        let mut bytes_written = msb_bytes.len();
+        bytes_written += self.lsb.write(writer)?;
+        Ok(bytes_written)
     }
 }
 
@@ -360,8 +416,10 @@ impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use itertools::Itertools;
-    use rand::RngCore;
+    use rand::{rngs::StdRng, seq::IteratorRandom, RngCore};
 
     use crate::{
         build_hasher::UnstableDefaultBuildHasher,
@@ -580,5 +638,63 @@ mod tests {
         fn iter_ones(&self) -> impl Iterator<Item = C::BucketType> + '_ {
             iter_ones(self.bit_chunks().peekable()).map(C::BucketType::from_usize)
         }
+    }
+
+    #[test]
+    fn test_serialization_empty() {
+        let before = GeoDiffCount7::default();
+
+        let mut writer = vec![];
+        before.write(&mut writer).unwrap();
+
+        assert_eq!(writer.len(), 0);
+
+        let after = GeoDiffCount7::from_bytes(before.config.clone(), &writer);
+
+        assert_eq!(before, after);
+    }
+
+    // This helper exists in order to easily test serializing types with different
+    // bucket types in the MSB sparse bit field representation. See tests below.
+    #[cfg(target_endian = "little")]
+    fn serialization_round_trip<C: GeoConfig<Diff> + Default>(rnd: &mut StdRng) {
+        // Run 100 simulations of random values being put into
+        // a diff counter. "Serializing" to a vector to emulate
+        // writing to a disk, and then deserializing and asserting
+        // the filters are equal.
+        let mut before = GeoDiffCount::<'_, C>::default();
+        // Select a random number of items to insert.
+        let items = (1..1000).choose(rnd).unwrap();
+        for _ in 0..items {
+            before.push_hash(rnd.next_u64());
+        }
+        let mut writer = vec![];
+        // Insert some padding to emulate alignment issues with the slices.
+        // A previous version of this test never panicked even though we were
+        // violating the alignment preconditions for the `from_raw_parts` function.
+        let padding = [0_u8; 8];
+        let pad_amount = (0..8).choose(rnd).unwrap();
+        writer.write_all(&padding[..pad_amount]).unwrap();
+        before.write(&mut writer).unwrap();
+        let after = GeoDiffCount::<'_, C>::from_bytes(before.config.clone(), &writer[pad_amount..]);
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    #[cfg(target_endian = "little")]
+    fn test_serialization_round_trip_7() {
+        prng_test_harness(100, |rnd| {
+            // Uses a u16 for MSB buckets.
+            serialization_round_trip::<GeoDiffConfig7>(rnd);
+        });
+    }
+
+    #[test]
+    #[cfg(target_endian = "little")]
+    fn test_serialization_round_trip_13() {
+        prng_test_harness(100, |rnd| {
+            // Uses a u32 for MSB buckets.
+            serialization_round_trip::<GeoDiffConfig13>(rnd);
+        });
     }
 }

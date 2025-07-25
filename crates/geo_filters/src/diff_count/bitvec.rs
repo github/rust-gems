@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::mem::{size_of, size_of_val};
-use std::ops::{Index, Range};
+use std::ops::{Deref as _, Index, Range};
 
-use crate::config::BitChunk;
 use crate::config::IsBucketType;
 use crate::config::BITS_PER_BLOCK;
+use crate::config::{BitChunk, BYTES_PER_BLOCK};
 
 /// A bit vector where every bit occupies exactly one bit (in contrast to `Vec<bool>` where each
 /// bit consumes 1 byte). It only implements the minimum number of operations that we need for our
@@ -72,6 +72,10 @@ impl BitVec<'_> {
         self.num_bits
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.num_bits() == 0
+    }
+
     /// Tests the bit specified by the provided zero-based bit position.
     pub fn test_bit(&self, index: usize) -> bool {
         assert!(index < self.num_bits);
@@ -132,6 +136,53 @@ impl BitVec<'_> {
     pub fn bytes_in_memory(&self) -> usize {
         let Self { num_bits, blocks } = self;
         size_of_val(num_bits) + blocks.len() * size_of::<u64>()
+    }
+
+    #[cfg(target_endian = "little")]
+    pub fn from_bytes(mut buf: &[u8]) -> Self {
+        if buf.is_empty() {
+            return Self::default();
+        }
+        // The first byte of the serialized BitVec is used to indicate how many
+        // of the bits in the left-most u64 block are *unoccupied*.
+        // See [`BitVec::write`] implementation for how this is done.
+        assert!(
+            buf[0] < 64,
+            "Number of unoccupied bits should be <64, got {}",
+            buf[0]
+        );
+        let num_bits = (buf.len() - 1) * 8 - buf[0] as usize;
+        buf = &buf[1..];
+        assert_eq!(
+            buf.len() % BYTES_PER_BLOCK,
+            0,
+            "buffer should be a multiple of 8 bytes, got {}",
+            buf.len()
+        );
+        let blocks = unsafe {
+            std::mem::transmute::<&[u8], &[u64]>(std::slice::from_raw_parts(
+                buf.as_ptr(),
+                buf.len() / BYTES_PER_BLOCK,
+            ))
+        };
+        let blocks = Cow::Borrowed(blocks);
+        Self { num_bits, blocks }
+    }
+
+    #[cfg(target_endian = "little")]
+    pub fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<usize> {
+        if self.is_empty() {
+            return Ok(0);
+        }
+        // First serialize the number of unoccupied bits in the last block as one byte.
+        let unoccupied_bits = 63 - ((self.num_bits - 1) % 64) as u8;
+        writer.write_all(&[unoccupied_bits])?;
+        let blocks = self.blocks.deref();
+        let block_bytes = unsafe {
+            std::slice::from_raw_parts(blocks.as_ptr() as *const u8, blocks.len() * BYTES_PER_BLOCK)
+        };
+        writer.write_all(block_bytes)?;
+        Ok(block_bytes.len() + 1)
     }
 }
 
