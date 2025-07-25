@@ -18,6 +18,7 @@ mod sim_hash;
 
 use bitvec::*;
 pub use config::{GeoDiffConfig13, GeoDiffConfig7};
+pub use sim_hash::SimHash;
 
 /// Diff count filter with a relative error standard deviation of ~0.125.
 pub type GeoDiffCount7<'a> = GeoDiffCount<'a, GeoDiffConfig7>;
