@@ -338,6 +338,20 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         bytes_written += self.lsb.write(writer)?;
         Ok(bytes_written)
     }
+
+    #[cfg(test)]
+    pub fn from_ones(config: C, ones: impl IntoIterator<Item = C::BucketType>) -> Self {
+        let mut result = Self::new(config);
+        for one in ones {
+            result.xor_bit(one);
+        }
+        result
+    }
+
+    #[cfg(test)]
+    pub fn iter_ones(&self) -> impl Iterator<Item = C::BucketType> + '_ {
+        iter_ones(self.bit_chunks().peekable()).map(C::BucketType::from_usize)
+    }
 }
 
 /// Applies a repeated bit mask to the underlying filter.
@@ -423,7 +437,7 @@ mod tests {
 
     use crate::{
         build_hasher::UnstableDefaultBuildHasher,
-        config::{iter_ones, tests::test_estimate, FixedConfig},
+        config::{tests::test_estimate, FixedConfig},
         test_rng::prng_test_harness,
     };
 
@@ -624,20 +638,6 @@ mod tests {
         a.xor_bit(17);
         a.xor_bit(11);
         assert_eq!(vec![17, 11, 7], a.msb.iter().copied().collect_vec());
-    }
-
-    impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
-        fn from_ones(config: C, ones: impl IntoIterator<Item = C::BucketType>) -> Self {
-            let mut result = Self::new(config);
-            for one in ones {
-                result.xor_bit(one);
-            }
-            result
-        }
-
-        fn iter_ones(&self) -> impl Iterator<Item = C::BucketType> + '_ {
-            iter_ones(self.bit_chunks().peekable()).map(C::BucketType::from_usize)
-        }
     }
 
     #[test]
