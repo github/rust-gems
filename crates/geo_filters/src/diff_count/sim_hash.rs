@@ -12,9 +12,9 @@ use crate::Diff;
 use super::BitVec;
 
 /// Number of bits covered by each SimHash bucket.
-pub(crate) const SIM_BUCKET_SIZE: usize = 6;
+pub const SIM_BUCKET_SIZE: usize = 6;
 /// Number of consecutive SimHash buckets used for searching.
-pub(crate) const SIM_BUCKETS: usize = 20;
+pub const SIM_BUCKETS: usize = 20;
 
 pub type BucketId = usize;
 
