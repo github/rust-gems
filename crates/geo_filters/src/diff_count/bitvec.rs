@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::iter::Peekable;
 use std::mem::{size_of, size_of_val};
 use std::ops::{Index, Range};
 
@@ -37,13 +36,7 @@ impl BitVec<'_> {
     /// Takes an iterator of `BitChunk` items as input and returns the corresponding `BitVec`.
     /// The order of `BitChunk`s doesn't matter for this function and `BitChunk` may be hitting
     /// the same block. In this case, the function will simply xor them together.
-    ///
-    /// NOTE: If the bitchunks iterator is empty, the result is NOT sized to `num_bits` but will
-    ///       be EMPTY instead.
-    pub fn from_bit_chunks<I: Iterator<Item = BitChunk>>(
-        chunks: Peekable<I>,
-        num_bits: usize,
-    ) -> Self {
+    pub fn from_bit_chunks<I: Iterator<Item = BitChunk>>(chunks: I, num_bits: usize) -> Self {
         let mut result = Self::default();
         result.resize(num_bits);
         let blocks = result.blocks.to_mut();
