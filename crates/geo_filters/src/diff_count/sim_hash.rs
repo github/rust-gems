@@ -21,6 +21,8 @@ pub type BucketId = usize;
 /// SimHash is a hash computed over a continuous range of bits from a GeoDiffCount.
 /// It is used to quickly find similar sets with a reverse index.
 #[derive(Copy, Clone, Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct SimHash(pub u64);
 
 impl SimHash {
