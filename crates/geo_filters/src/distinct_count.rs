@@ -225,7 +225,7 @@ fn or<C: GeoConfig<Distinct>>(
 
     GeoDistinctCount::<'static, C>::from_bit_chunks(
         a.config.clone(),
-        or_bit_chunks(a.bit_chunks(), b.bit_chunks()).peekable(),
+        or_bit_chunks(a.bit_chunks(), b.bit_chunks()),
     )
 }
 

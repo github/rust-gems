@@ -553,10 +553,8 @@ mod tests {
             for _ in 0..1000 {
                 expected.push_hash(rnd.next_u64());
             }
-            let actual = GeoDiffCount::from_bit_chunks(
-                expected.config.clone(),
-                expected.bit_chunks().peekable(),
-            );
+            let actual =
+                GeoDiffCount::from_bit_chunks(expected.config.clone(), expected.bit_chunks());
             assert_eq!(expected, actual);
         });
     }
