@@ -308,21 +308,23 @@ mod tests {
 
     #[test]
     fn test_estimate_fast() {
-        let (avg_precision, avg_var) = test_estimate(GeoDistinctCount7::default);
-        println!(
-            "avg precision: {} with standard deviation: {}",
-            avg_precision,
-            avg_var.sqrt(),
-        );
-        // Make sure that the estimate converges to the correct value.
-        assert!(avg_precision.abs() < 0.04);
-        // We should theoretically achieve a standard deviation of about 0.065
-        assert!(avg_var.sqrt() < 0.08);
+        prng_test_harness(1, |rnd| {
+            let (avg_precision, avg_var) = test_estimate(rnd, GeoDistinctCount7::default);
+            println!(
+                "avg precision: {} with standard deviation: {}",
+                avg_precision,
+                avg_var.sqrt(),
+            );
+            // Make sure that the estimate converges to the correct value.
+            assert!(avg_precision.abs() < 0.04);
+            // We should theoretically achieve a standard deviation of about 0.065
+            assert!(avg_var.sqrt() < 0.08);
+        })
     }
 
     #[test]
     fn test_estimate_union_size_fast() {
-        prng_test_harness(|rnd| {
+        prng_test_harness(1, |rnd| {
             let mut a = GeoDistinctCount7::default();
             let mut b = GeoDistinctCount7::default();
             for _ in 0..10000 {
@@ -394,19 +396,15 @@ mod tests {
 
     #[test]
     fn test_bit_chunks() {
-        for _ in 0..100 {
-            prng_test_harness(|rnd| {
-                let mut expected = GeoDistinctCount7::default();
-                for _ in 0..1000 {
-                    expected.push_hash(rnd.next_u64());
-                }
-                let actual = GeoDistinctCount::from_bit_chunks(
-                    expected.config.clone(),
-                    expected.bit_chunks(),
-                );
-                assert_eq!(expected, actual);
-            })
-        }
+        prng_test_harness(100, |rnd| {
+            let mut expected = GeoDistinctCount7::default();
+            for _ in 0..1000 {
+                expected.push_hash(rnd.next_u64());
+            }
+            let actual =
+                GeoDistinctCount::from_bit_chunks(expected.config.clone(), expected.bit_chunks());
+            assert_eq!(expected, actual);
+        })
     }
 
     #[test]

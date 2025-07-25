@@ -353,30 +353,31 @@ pub(crate) fn take_ref<I: Iterator>(iter: &mut I, n: usize) -> impl Iterator<Ite
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use rand::RngCore;
+    use rand::{rngs::StdRng, RngCore};
 
-    use crate::{test_rng::prng_test_harness, Count, Method};
+    use crate::{Count, Method};
 
     /// Runs estimation trials and returns the average precision and variance.
-    pub(crate) fn test_estimate<M: Method, C: Count<M>>(f: impl Fn() -> C) -> (f32, f32) {
-        prng_test_harness(|rnd| {
-            let cnt = 10000usize;
-            let mut avg_precision = 0.0;
-            let mut avg_var = 0.0;
-            let trials = 500;
-            for _ in 0..trials {
-                let mut m = f();
-                // Insert cnt many random items.
-                for _ in 0..cnt {
-                    m.push_hash(rnd.next_u64());
-                }
-                // Compute the relative error between estimate and actually inserted items.
-                let high_precision = m.size() / cnt as f32 - 1.0;
-                // Take the average over trials many attempts.
-                avg_precision += high_precision / trials as f32;
-                avg_var += high_precision.powf(2.0) / trials as f32;
+    pub(crate) fn test_estimate<M: Method, C: Count<M>>(
+        rnd: &mut StdRng,
+        f: impl Fn() -> C,
+    ) -> (f32, f32) {
+        let cnt = 10000usize;
+        let mut avg_precision = 0.0;
+        let mut avg_var = 0.0;
+        let trials = 500;
+        for _ in 0..trials {
+            let mut m = f();
+            // Insert cnt many random items.
+            for _ in 0..cnt {
+                m.push_hash(rnd.next_u64());
             }
-            (avg_precision, avg_var)
-        })
+            // Compute the relative error between estimate and actually inserted items.
+            let high_precision = m.size() / cnt as f32 - 1.0;
+            // Take the average over trials many attempts.
+            avg_precision += high_precision / trials as f32;
+            avg_var += high_precision.powf(2.0) / trials as f32;
+        }
+        (avg_precision, avg_var)
     }
 }
