@@ -353,13 +353,15 @@ pub(crate) fn take_ref<I: Iterator>(iter: &mut I, n: usize) -> impl Iterator<Ite
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use rand::{RngCore, SeedableRng};
+    use rand::{rngs::StdRng, RngCore};
 
     use crate::{Count, Method};
 
     /// Runs estimation trials and returns the average precision and variance.
-    pub(crate) fn test_estimate<M: Method, C: Count<M>>(f: impl Fn() -> C) -> (f32, f32) {
-        let mut rnd = rand::rngs::StdRng::from_os_rng();
+    pub(crate) fn test_estimate<M: Method, C: Count<M>>(
+        rnd: &mut StdRng,
+        f: impl Fn() -> C,
+    ) -> (f32, f32) {
         let cnt = 10000usize;
         let mut avg_precision = 0.0;
         let mut avg_var = 0.0;
