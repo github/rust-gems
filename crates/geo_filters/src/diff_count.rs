@@ -95,21 +95,17 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
     /// having to construct another iterator with the remaining `BitChunk`s.
     fn from_bit_chunks<I: Iterator<Item = BitChunk>>(config: C, chunks: I) -> Self {
         let mut ones = iter_ones::<C::BucketType, _>(chunks.peekable());
-
         let mut msb = Vec::default();
         take_ref(&mut ones, config.max_msb_len() - 1).for_each(|bucket| {
             msb.push(bucket);
         });
         let smallest_msb = ones
             .next()
-            .map(|bucket| {
-                msb.push(bucket);
-                bucket
+            .inspect(|bucket| {
+                msb.push(*bucket);
             })
             .unwrap_or_default();
-
         let lsb = BitVec::from_bit_chunks(ones.into_bitchunks(), smallest_msb.into_usize());
-
         let result = Self {
             config,
             msb: Cow::from(msb),
@@ -214,17 +210,16 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
             match msb.binary_search_by(|k| bucket.cmp(k)) {
                 Ok(idx) => {
                     msb.remove(idx);
-                    let (first, second) = {
+                    let first = {
                         let mut lsb = iter_ones(self.lsb.bit_chunks().peekable());
-                        (lsb.next(), lsb.next())
+                        lsb.next()
                     };
-                    let new_smallest = if let Some(smallest) = first {
+                    if let Some(smallest) = first {
                         msb.push(C::BucketType::from_usize(smallest));
-                        second.map(|_| smallest).unwrap_or(0)
+                        self.lsb.resize(smallest);
                     } else {
-                        0
+                        self.lsb.resize(0);
                     };
-                    self.lsb.resize(new_smallest);
                 }
                 Err(idx) => {
                     msb.insert(idx, bucket);
@@ -240,6 +235,12 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
                             .into_usize();
                         self.lsb.resize(new_smallest);
                         self.lsb.toggle(smallest);
+                    } else if msb.len() == self.config.max_msb_len() {
+                        let smallest = msb
+                            .last()
+                            .expect("should have at least one element")
+                            .into_usize();
+                        self.lsb.resize(smallest);
                     }
                 }
             }
@@ -360,11 +361,12 @@ impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use rand::{RngCore, SeedableRng};
+    use rand::RngCore;
 
     use crate::{
         build_hasher::UnstableDefaultBuildHasher,
         config::{iter_ones, tests::test_estimate, FixedConfig},
+        test_rng::prng_test_harness,
     };
 
     use super::*;
@@ -435,57 +437,62 @@ mod tests {
 
     #[test]
     fn test_estimate_fast() {
-        let (avg_precision, avg_var) = test_estimate(GeoDiffCount7::default);
-        println!(
-            "avg precision: {} with standard deviation: {}",
-            avg_precision,
-            avg_var.sqrt(),
-        );
-        // Make sure that the estimate converges to the correct value.
-        assert!(avg_precision.abs() < 0.04);
-        // We should theoretically achieve a standard deviation of about 0.12
-        assert!(avg_var.sqrt() < 0.14);
+        prng_test_harness(1, |rnd| {
+            let (avg_precision, avg_var) = test_estimate(rnd, GeoDiffCount7::default);
+            println!(
+                "avg precision: {} with standard deviation: {}",
+                avg_precision,
+                avg_var.sqrt(),
+            );
+            // Make sure that the estimate converges to the correct value.
+            assert!(avg_precision.abs() < 0.04);
+            // We should theoretically achieve a standard deviation of about 0.12
+            assert!(avg_var.sqrt() < 0.14);
+        })
     }
 
     #[test]
     fn test_estimate_fast_low_precision() {
-        let (avg_precision, avg_var) = test_estimate(GeoDiffCount7_50::default);
-        println!(
-            "avg precision: {} with standard deviation: {}",
-            avg_precision,
-            avg_var.sqrt(),
-        );
-        // Make sure that the estimate converges to the correct value.
-        assert!(avg_precision.abs() < 0.15);
-        // We should theoretically achieve a standard deviation of about 0.25
-        assert!(avg_var.sqrt() < 0.4);
+        prng_test_harness(1, |rnd| {
+            let (avg_precision, avg_var) = test_estimate(rnd, GeoDiffCount7_50::default);
+            println!(
+                "avg precision: {} with standard deviation: {}",
+                avg_precision,
+                avg_var.sqrt(),
+            );
+            // Make sure that the estimate converges to the correct value.
+            assert!(avg_precision.abs() < 0.15);
+            // We should theoretically achieve a standard deviation of about 0.25
+            assert!(avg_var.sqrt() < 0.4);
+        });
     }
 
     #[test]
     fn test_estimate_diff_size_fast() {
-        let mut rnd = rand::rngs::StdRng::from_os_rng();
-        let mut a_p = GeoDiffCount7_50::default();
-        let mut a_hp = GeoDiffCount7::default();
-        let mut b_p = GeoDiffCount7_50::default();
-        let mut b_hp = GeoDiffCount7::default();
-        for _ in 0..10000 {
-            let hash = rnd.next_u64();
-            a_p.push_hash(hash);
-            a_hp.push_hash(hash);
-        }
-        for _ in 0..1000 {
-            let hash = rnd.next_u64();
-            b_p.push_hash(hash);
-            b_hp.push_hash(hash);
-        }
-        let c_p = xor(&a_p, &b_p);
-        let c_hp = xor(&a_hp, &b_hp);
+        prng_test_harness(1, |rnd| {
+            let mut a_p = GeoDiffCount7_50::default();
+            let mut a_hp = GeoDiffCount7::default();
+            let mut b_p = GeoDiffCount7_50::default();
+            let mut b_hp = GeoDiffCount7::default();
+            for _ in 0..10000 {
+                let hash = rnd.next_u64();
+                a_p.push_hash(hash);
+                a_hp.push_hash(hash);
+            }
+            for _ in 0..1000 {
+                let hash = rnd.next_u64();
+                b_p.push_hash(hash);
+                b_hp.push_hash(hash);
+            }
+            let c_p = xor(&a_p, &b_p);
+            let c_hp = xor(&a_hp, &b_hp);
 
-        assert_eq!(c_p.size(), a_p.size_with_sketch(&b_p));
-        assert_eq!(c_p.size(), b_p.size_with_sketch(&a_p));
+            assert_eq!(c_p.size(), a_p.size_with_sketch(&b_p));
+            assert_eq!(c_p.size(), b_p.size_with_sketch(&a_p));
 
-        assert_eq!(c_hp.size(), a_hp.size_with_sketch(&b_hp));
-        assert_eq!(c_hp.size(), b_hp.size_with_sketch(&a_hp));
+            assert_eq!(c_hp.size(), a_hp.size_with_sketch(&b_hp));
+            assert_eq!(c_hp.size(), b_hp.size_with_sketch(&a_hp));
+        });
     }
 
     #[test]
@@ -517,45 +524,39 @@ mod tests {
 
     #[test]
     fn test_xor_plus_mask() {
-        let mut rnd = rand::rngs::StdRng::from_os_rng();
-        let mask_size = 12;
-        let mask = 0b100001100000;
-        let mut a = GeoDiffCount7::default();
-        for _ in 0..10000 {
-            a.xor_bit(a.config.hash_to_bucket(rnd.next_u64()));
-        }
-        let mut expected = GeoDiffCount7::default();
-        let mut b = a.clone();
-        for _ in 0..1000 {
-            let hash = rnd.next_u64();
-            b.xor_bit(b.config.hash_to_bucket(hash));
-            expected.xor_bit(expected.config.hash_to_bucket(hash));
-            assert_eq!(expected, xor(&a, &b));
-
-            let masked_a = masked(&a, mask, mask_size);
-            let masked_b = masked(&b, mask, mask_size);
-            let masked_expected = masked(&expected, mask, mask_size);
-            // FIXME: test failed once with:
-            // left: ~12.37563 (msb: [390, 334, 263, 242, 222, 215, 164, 148, 100, 97, 66, 36], |lsb|: 36)
-            // right: ~12.37563 (msb: [390, 334, 263, 242, 222, 215, 164, 148, 100, 97, 66, 36], |lsb|: 0)
-            assert_eq!(masked_expected, xor(&masked_a, &masked_b));
-        }
+        prng_test_harness(10, |rnd| {
+            let mask_size = 12;
+            let mask = 0b100001100000;
+            let mut a = GeoDiffCount7::default();
+            for _ in 0..10000 {
+                a.xor_bit(a.config.hash_to_bucket(rnd.next_u64()));
+            }
+            let mut expected = GeoDiffCount7::default();
+            let mut b = a.clone();
+            for _ in 0..1000 {
+                let hash = rnd.next_u64();
+                b.xor_bit(b.config.hash_to_bucket(hash));
+                expected.xor_bit(expected.config.hash_to_bucket(hash));
+                assert_eq!(expected, xor(&a, &b));
+                let masked_a = masked(&a, mask, mask_size);
+                let masked_b = masked(&b, mask, mask_size);
+                let masked_expected = masked(&expected, mask, mask_size);
+                assert_eq!(masked_expected, xor(&masked_a, &masked_b));
+            }
+        });
     }
 
     #[test]
     fn test_bit_chunks() {
-        let mut rnd = rand::rngs::StdRng::from_os_rng();
-        for _ in 0..100 {
+        prng_test_harness(100, |rnd| {
             let mut expected = GeoDiffCount7::default();
             for _ in 0..1000 {
                 expected.push_hash(rnd.next_u64());
             }
-            let actual = GeoDiffCount::from_bit_chunks(
-                expected.config.clone(),
-                expected.bit_chunks().peekable(),
-            );
+            let actual =
+                GeoDiffCount::from_bit_chunks(expected.config.clone(), expected.bit_chunks());
             assert_eq!(expected, actual);
-        }
+        });
     }
 
     #[test]
