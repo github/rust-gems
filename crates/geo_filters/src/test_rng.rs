@@ -12,7 +12,7 @@ use rand::{rngs::StdRng, SeedableRng as _};
 /// is only ran once with this seed.
 pub fn prng_test_harness<F>(iterations: usize, mut test_fn: F)
 where
-    F: FnMut(&mut StdRng) -> (),
+    F: FnMut(&mut StdRng),
 {
     let maybe_manual_seed = std::env::var("TEST_SEED")
         .map(|s| s.parse::<u64>().expect("Parse TEST_SEED to u64"))
