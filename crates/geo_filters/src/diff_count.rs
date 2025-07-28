@@ -353,6 +353,20 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     pub fn iter_ones(&self) -> impl Iterator<Item = C::BucketType> + '_ {
         iter_ones(self.bit_chunks().peekable()).map(C::BucketType::from_usize)
     }
+
+    /// Generate a pseudo-random filter. For a given number of items
+    #[cfg(test)]
+    pub fn pseudorandom_filter(config: C, items: usize) -> Self {
+        use rand::RngCore;
+        use rand_chacha::rand_core::SeedableRng;
+
+        let mut rng = rand_chacha::ChaCha12Rng::seed_from_u64(items as u64);
+        let mut filter = Self::new(config);
+        for _ in 0..items {
+            filter.push_hash(rng.next_u64());
+        }
+        filter
+    }
 }
 
 /// Applies a repeated bit mask to the underlying filter.
@@ -434,7 +448,8 @@ mod tests {
     use std::io::Write;
 
     use itertools::Itertools;
-    use rand::{rngs::StdRng, seq::IteratorRandom, RngCore};
+    use rand::{seq::IteratorRandom, RngCore};
+    use rand_chacha::ChaCha12Rng;
 
     use crate::{
         build_hasher::UnstableDefaultBuildHasher,
@@ -658,7 +673,7 @@ mod tests {
     // This helper exists in order to easily test serializing types with different
     // bucket types in the MSB sparse bit field representation. See tests below.
     #[cfg(target_endian = "little")]
-    fn serialization_round_trip<C: GeoConfig<Diff> + Default>(rnd: &mut StdRng) {
+    fn serialization_round_trip<C: GeoConfig<Diff> + Default>(rnd: &mut ChaCha12Rng) {
         // Run 100 simulations of random values being put into
         // a diff counter. "Serializing" to a vector to emulate
         // writing to a disk, and then deserializing and asserting
