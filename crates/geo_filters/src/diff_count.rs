@@ -340,7 +340,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         Ok(bytes_written)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn from_ones(config: C, ones: impl IntoIterator<Item = C::BucketType>) -> Self {
         let mut result = Self::new(config);
         for one in ones {
@@ -349,13 +349,13 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         result
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn iter_ones(&self) -> impl Iterator<Item = C::BucketType> + '_ {
         iter_ones(self.bit_chunks().peekable()).map(C::BucketType::from_usize)
     }
 
     /// Generate a pseudo-random filter. For a given number of items
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn pseudorandom_filter(config: C, items: usize) -> Self {
         use rand::RngCore;
         use rand_chacha::rand_core::SeedableRng;
