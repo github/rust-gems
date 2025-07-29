@@ -354,7 +354,9 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         iter_ones(self.bit_chunks().peekable()).map(C::BucketType::from_usize)
     }
 
-    /// Generate a pseudo-random filter. For a given number of items
+    /// Generate a pseudo-random filter. The RNG used to build the filter
+    /// is seeded using the number of items so for a given number of items
+    /// the resulting geofilter should always be the same.
     #[cfg(any(test, feature = "test-support"))]
     pub fn pseudorandom_filter(config: C, items: usize) -> Self {
         use rand::RngCore;
