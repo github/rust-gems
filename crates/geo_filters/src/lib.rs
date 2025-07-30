@@ -73,12 +73,11 @@ pub trait Count<M: Method> {
 fn debug_assert_f32s_in_range(v: f32) {
     // The geometric filter should never produce these values.
     // These assertions failing indicates that there is a bug.
-    debug_assert!(v.is_finite(), "Estimated size must be finite, got {}", v);
-    debug_assert!(v >= 0.0, "Estimated size must be non-negative, got {}", v);
+    debug_assert!(v.is_finite(), "Estimated size must be finite, got {v}");
+    debug_assert!(v >= 0.0, "Estimated size must be non-negative, got {v}");
     debug_assert!(
         v <= usize::MAX as f32,
-        "Estimated size {} exceeds usize::MAX",
-        v
+        "Estimated size {v} exceeds usize::MAX",
     );
 }
 
