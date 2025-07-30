@@ -14,6 +14,8 @@ bench = false
 
 [features]
 default = []
+test-support = ["dep:rand", "dep:rand_chacha"]
+serde = ["dep:serde"]
 evaluation = [
     "dep:clap",
     "dep:hyperloglogplus",
@@ -31,6 +33,8 @@ once_cell = "1.18"
 rand = { version = "0.9", optional = true }
 rayon = { version = "1.7", optional = true }
 regex = { version = "1", optional = true }
+serde = { version = "1.0", default-features = false, optional = true }
+rand_chacha = { version = "0.9", optional = true }
 
 [dev-dependencies]
 criterion = "0.7"

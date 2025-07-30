@@ -1,6 +1,7 @@
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 
-use rand::{rngs::StdRng, SeedableRng as _};
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha12Rng;
 
 /// Provides a seeded random number generator to tests which require some
 /// degree of randomization. If the test panics the harness will print the
@@ -12,7 +13,7 @@ use rand::{rngs::StdRng, SeedableRng as _};
 /// is only ran once with this seed.
 pub fn prng_test_harness<F>(iterations: usize, mut test_fn: F)
 where
-    F: FnMut(&mut StdRng),
+    F: FnMut(&mut ChaCha12Rng),
 {
     let maybe_manual_seed = std::env::var("TEST_SEED")
         .map(|s| s.parse::<u64>().expect("Parse TEST_SEED to u64"))
@@ -21,12 +22,12 @@ where
     let maybe_panic = catch_unwind(AssertUnwindSafe(|| {
         if let Some(manual_seed) = maybe_manual_seed {
             seed = manual_seed;
-            let mut rng = StdRng::seed_from_u64(seed);
+            let mut rng = ChaCha12Rng::seed_from_u64(seed);
             test_fn(&mut rng);
         } else {
             for _ in 0..iterations {
                 seed = rand::random();
-                let mut rng = StdRng::seed_from_u64(seed);
+                let mut rng = ChaCha12Rng::seed_from_u64(seed);
                 test_fn(&mut rng);
             }
         }

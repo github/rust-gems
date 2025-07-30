@@ -45,7 +45,8 @@ impl HashToBucketLookup {
 
 #[cfg(test)]
 mod tests {
-    use rand::{rngs::StdRng, RngCore};
+    use rand::RngCore;
+    use rand_chacha::ChaCha12Rng;
 
     use crate::{
         config::{hash_to_bucket, phi_f64},
@@ -70,7 +71,7 @@ mod tests {
         });
     }
 
-    fn lookup_random_hashes_variance<const B: usize>(rnd: &mut StdRng, n: u64) -> f64 {
+    fn lookup_random_hashes_variance<const B: usize>(rnd: &mut ChaCha12Rng, n: u64) -> f64 {
         let phi = phi_f64(B);
         let buckets = HashToBucketLookup::new(B);
 
