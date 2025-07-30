@@ -49,6 +49,11 @@ impl SimHash {
 }
 
 impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
+    /// TODO document, and maybe get better name
+    pub fn min_matches(&self) -> usize {
+        SIM_BUCKETS / 2
+    }
+
     /// Given the expected size of a diff, this function returns the range of bucket ids which should
     /// be searched for in order to find geometric filters of the desired similarity. If at least half
     /// of the buckets in the range match, one found a match that has the expected diff size (or better).
