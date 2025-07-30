@@ -32,7 +32,7 @@ let mut c2 = GeoDistinctCount13::default();
 c2.push(2);
 c2.push(3);
 
-let estimated_size = c1.size_with_sketch(&c2);
+let estimated_size = c1.size_with_sketch_real(&c2);
 assert!(estimated_size >= 3.0_f32 * 0.9 &&
         estimated_size <= 3.0_f32 * 1.1);
 ```
