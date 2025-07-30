@@ -303,7 +303,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
 
     /// Create a new [`GeoDiffCount`] from a slice of bytes
     #[cfg(target_endian = "little")]
-    pub fn from_bytes(c: C, buf: &'a [u8]) -> Self {
+    pub fn from_bytes_with_config(c: C, buf: &'a [u8]) -> Self {
         if buf.is_empty() {
             return Self::new(c);
         }
@@ -341,7 +341,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn from_ones(config: C, ones: impl IntoIterator<Item = C::BucketType>) -> Self {
+    pub fn from_ones_with_config(config: C, ones: impl IntoIterator<Item = C::BucketType>) -> Self {
         let mut result = Self::new(config);
         for one in ones {
             result.xor_bit(one);
@@ -358,7 +358,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     /// is seeded using the number of items so for a given number of items
     /// the resulting geofilter should always be the same.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn pseudorandom_filter(config: C, items: usize) -> Self {
+    pub fn pseudorandom_filter_with_config(config: C, items: usize) -> Self {
         use rand::RngCore;
         use rand_chacha::rand_core::SeedableRng;
 
@@ -368,6 +368,23 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
             filter.push_hash(rng.next_u64());
         }
         filter
+    }
+}
+
+impl<'a, C: GeoConfig<Diff> + Default> GeoDiffCount<'a, C> {
+    #[cfg(target_endian = "little")]
+    pub fn from_bytes(buf: &'a [u8]) -> Self {
+        Self::from_bytes_with_config(C::default(), buf)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_ones(ones: impl IntoIterator<Item = C::BucketType>) -> Self {
+        Self::from_ones_with_config(C::default(), ones)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pseudorandom_filter(items: usize) -> Self {
+        Self::pseudorandom_filter_with_config(C::default(), items)
     }
 }
 
@@ -490,8 +507,8 @@ mod tests {
 
     #[test]
     fn test_xor() {
-        let a = GeoDiffCount7::from_ones(Default::default(), 0..1000);
-        let b = GeoDiffCount7::from_ones(Default::default(), 10..1010);
+        let a = GeoDiffCount7::from_ones(0..1000);
+        let b = GeoDiffCount7::from_ones(10..1010);
         let c = xor(&a, &b);
         let d = xor(&a, &b);
         assert_eq!(a.iter_ones().count(), 1000);
@@ -511,7 +528,7 @@ mod tests {
         m.xor_bit(10);
         assert!(m.iter_ones().collect_vec().is_empty());
 
-        let mut m = GeoDiffCount7::from_ones(Default::default(), 0..100);
+        let mut m = GeoDiffCount7::from_ones(0..100);
         assert_eq!(m.iter_ones().count(), 100);
         m.xor_bit(10);
         assert_eq!(m.iter_ones().count(), 99);
@@ -593,20 +610,19 @@ mod tests {
         // masked bitset                 : 010000 100100 000000
         // after compression             : 01 0   10 1   00 0
         // bitset of the returned filter :           010 101000
-        let m = GeoDiffCount7::from_ones(Default::default(), [16, 15, 13, 11, 9, 8, 6, 3, 1]);
+        let m = GeoDiffCount7::from_ones([16, 15, 13, 11, 9, 8, 6, 3, 1]);
         let n = masked(&m, 0b110100, 6);
         assert_eq!(n.iter_ones().collect_vec(), vec![16, 11, 8]);
 
         for i in 0..100 {
-            let m = GeoDiffCount7::from_ones(Default::default(), (0..i).collect_vec());
+            let m = GeoDiffCount7::from_ones((0..i).collect_vec());
             let n = masked(&m, 0b111, 3);
             assert_eq!(m, n);
         }
 
         for i in 0..300 {
-            let m = GeoDiffCount7::from_ones(Default::default(), (0..i).collect_vec());
-            let slow =
-                GeoDiffCount::from_ones(Default::default(), masked(&m, 0b110, 3).iter_ones());
+            let m = GeoDiffCount7::from_ones((0..i).collect_vec());
+            let slow = GeoDiffCount::from_ones(masked(&m, 0b110, 3).iter_ones());
             let n = masked(&m, 0b110, 3);
             assert_eq!(slow, n, "in iteration: {i}");
         }
@@ -667,7 +683,7 @@ mod tests {
 
         assert_eq!(writer.len(), 0);
 
-        let after = GeoDiffCount7::from_bytes(before.config.clone(), &writer);
+        let after = GeoDiffCount7::from_bytes_with_config(before.config.clone(), &writer);
 
         assert_eq!(before, after);
     }
@@ -694,7 +710,10 @@ mod tests {
         let pad_amount = (0..8).choose(rnd).unwrap();
         writer.write_all(&padding[..pad_amount]).unwrap();
         before.write(&mut writer).unwrap();
-        let after = GeoDiffCount::<'_, C>::from_bytes(before.config.clone(), &writer[pad_amount..]);
+        let after = GeoDiffCount::<'_, C>::from_bytes_with_config(
+            before.config.clone(),
+            &writer[pad_amount..],
+        );
         assert_eq!(before, after);
     }
 

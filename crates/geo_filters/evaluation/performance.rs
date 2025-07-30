@@ -1,4 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, Criterion};
 use geo_filters::build_hasher::UnstableDefaultBuildHasher;
 use geo_filters::config::VariableConfig;
 use geo_filters::diff_count::{GeoDiffCount, GeoDiffCount13};
