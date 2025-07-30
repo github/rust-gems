@@ -12,13 +12,13 @@ use crate::Diff;
 use super::BitVec;
 
 // TODO migrate these const values to be defined in configuration
-// The current values are only really appropriate for smaller
-// configurations
+// The current values are only really appropriate for the smaller
+// diff configuration.
 
 /// Number of bits covered by each SimHash bucket.
-pub const SIM_BUCKET_SIZE: usize = 6;
+const SIM_BUCKET_SIZE: usize = 6;
 /// Number of consecutive SimHash buckets used for searching.
-pub const SIM_BUCKETS: usize = 20;
+const SIM_BUCKETS: usize = 20;
 
 pub type BucketId = usize;
 
