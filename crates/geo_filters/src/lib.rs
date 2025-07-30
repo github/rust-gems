@@ -45,25 +45,25 @@ pub trait Count<M: Method> {
 
     /// Return the estimated set size rounded to the nearest unsigned integer.
     fn size(&self) -> usize {
-        let size = self.size_real().round();
+        let size = self.size_f32().round();
         debug_assert_f32s_in_range(size);
         size as usize
     }
 
     /// Return the estimated set size as a real number.
-    fn size_real(&self) -> f32;
+    fn size_f32(&self) -> f32;
 
     /// Return the estimated set size when combined with the given sketch rounded to the nearest unsigned integer.
     /// If the combined set itself is not going to be used, this method is more efficient than using [`Self::push_sketch`] and [`Self::size`].
     fn size_with_sketch(&self, other: &Self) -> usize {
-        let size = self.size_with_sketch_real(other).round();
+        let size = self.size_with_sketch_f32(other).round();
         debug_assert_f32s_in_range(size);
         size as usize
     }
 
     /// Return the estimated set size when combined with the given sketch as a real number.
     /// If the combined set itself is not going to be used, this method is more efficient than using [`Self::push_sketch`] and [`Self::size`].
-    fn size_with_sketch_real(&self, other: &Self) -> f32;
+    fn size_with_sketch_f32(&self, other: &Self) -> f32;
 
     /// Returns the number of bytes in memory used to represent this filter.
     fn bytes_in_memory(&self) -> usize;

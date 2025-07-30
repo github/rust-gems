@@ -374,7 +374,7 @@ pub(crate) mod tests {
                 m.push_hash(rnd.next_u64());
             }
             // Compute the relative error between estimate and actually inserted items.
-            let high_precision = m.size_real() / cnt as f32 - 1.0;
+            let high_precision = m.size_f32() / cnt as f32 - 1.0;
             // Take the average over trials many attempts.
             avg_precision += high_precision / trials as f32;
             avg_var += high_precision.powf(2.0) / trials as f32;
