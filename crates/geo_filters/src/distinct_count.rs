@@ -143,7 +143,7 @@ impl<C: GeoConfig<Distinct>> Count<Distinct> for GeoDistinctCount<'_, C> {
         *self = or(self, other)
     }
 
-    fn size(&self) -> f32 {
+    fn size_real(&self) -> f32 {
         let lowest_bucket = self.lsb.bit_range().start;
         let total = self.msb.len()
             + self
@@ -159,7 +159,7 @@ impl<C: GeoConfig<Distinct>> Count<Distinct> for GeoDistinctCount<'_, C> {
         }
     }
 
-    fn size_with_sketch(&self, other: &Self) -> f32 {
+    fn size_with_sketch_real(&self, other: &Self) -> f32 {
         assert!(
             self.config == other.config,
             "combined filters must have the same configuration"
@@ -272,7 +272,7 @@ mod tests {
         ] {
             let mut geo_count = GeoDistinctCount13::default();
             (0..n).for_each(|i| geo_count.push(i));
-            assert_eq!(result, geo_count.size());
+            assert_eq!(result, geo_count.size_real());
         }
     }
 

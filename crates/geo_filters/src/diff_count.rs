@@ -443,11 +443,11 @@ impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
         *self = xor(self, other);
     }
 
-    fn size(&self) -> f32 {
+    fn size_real(&self) -> f32 {
         self.estimate_size()
     }
 
-    fn size_with_sketch(&self, other: &Self) -> f32 {
+    fn size_with_sketch_real(&self, other: &Self) -> f32 {
         assert!(
             self.config == other.config,
             "combined filters must have the same configuration"
@@ -501,7 +501,7 @@ mod tests {
             let mut geo_count = GeoDiffCount13::default();
 
             (0..n).for_each(|i| geo_count.push(i));
-            assert_eq!(result, geo_count.size());
+            assert_eq!(result, geo_count.size_real());
         }
     }
 

@@ -43,15 +43,43 @@ pub trait Count<M: Method> {
     /// If only the size of the combined set is needed, [`Self::size_with_sketch`] is more efficient and should be used.
     fn push_sketch(&mut self, other: &Self);
 
-    /// Return the estimated set size.
-    fn size(&self) -> f32;
+    /// Return the estimated set size rounded to the nearest unsigned integer.
+    fn size(&self) -> usize {
+        let size = self.size_real().round();
+        debug_assert_f32s_in_range(size);
+        size as usize
+    }
 
-    /// Return the estimated set size when combined with the given sketch.
+    /// Return the estimated set size as a real number.
+    fn size_real(&self) -> f32;
+
+    /// Return the estimated set size when combined with the given sketch rounded to the nearest unsigned integer.
     /// If the combined set itself is not going to be used, this method is more efficient than using [`Self::push_sketch`] and [`Self::size`].
-    fn size_with_sketch(&self, other: &Self) -> f32;
+    fn size_with_sketch(&self, other: &Self) -> usize {
+        let size = self.size_with_sketch_real(other).round();
+        debug_assert_f32s_in_range(size);
+        size as usize
+    }
+
+    /// Return the estimated set size when combined with the given sketch as a real number.
+    /// If the combined set itself is not going to be used, this method is more efficient than using [`Self::push_sketch`] and [`Self::size`].
+    fn size_with_sketch_real(&self, other: &Self) -> f32;
 
     /// Returns the number of bytes in memory used to represent this filter.
     fn bytes_in_memory(&self) -> usize;
+}
+
+#[inline]
+fn debug_assert_f32s_in_range(v: f32) {
+    // The geometric filter should never produce these values.
+    // These assertions failing indicates that there is a bug.
+    debug_assert!(v.is_finite(), "Estimated size must be finite, got {}", v);
+    debug_assert!(v >= 0.0, "Estimated size must be non-negative, got {}", v);
+    debug_assert!(
+        v <= usize::MAX as f32,
+        "Estimated size {} exceeds usize::MAX",
+        v
+    );
 }
 
 #[doc = include_str!("../README.md")]

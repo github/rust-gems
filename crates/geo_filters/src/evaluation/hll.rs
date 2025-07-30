@@ -126,11 +126,11 @@ impl<C: HllConfig> Count<Distinct> for Hll<C> {
         unimplemented!()
     }
 
-    fn size(&self) -> f32 {
+    fn size_real(&self) -> f32 {
         self.inner.borrow_mut().count() as f32
     }
 
-    fn size_with_sketch(&self, _other: &Self) -> f32 {
+    fn size_with_sketch_real(&self, _other: &Self) -> f32 {
         unimplemented!()
     }
 
