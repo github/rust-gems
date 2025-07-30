@@ -25,7 +25,7 @@ impl<C: GeoConfig<Diff> + Clone> SimulationCount for GeoDiffCount<'_, C> {
         <Self as Count<_>>::push_hash(self, hash)
     }
     fn size(&self) -> f32 {
-        <Self as Count<_>>::size(self)
+        <Self as Count<_>>::size_f32(self)
     }
     fn bytes_in_memory(&self) -> usize {
         <Self as Count<_>>::bytes_in_memory(self)
@@ -36,7 +36,7 @@ impl<C: GeoConfig<Distinct>> SimulationCount for GeoDistinctCount<'_, C> {
         <Self as Count<_>>::push_hash(self, hash)
     }
     fn size(&self) -> f32 {
-        <Self as Count<_>>::size(self)
+        <Self as Count<_>>::size_f32(self)
     }
     fn bytes_in_memory(&self) -> usize {
         <Self as Count<_>>::bytes_in_memory(self)
@@ -47,7 +47,7 @@ impl<C: HllConfig> SimulationCount for Hll<C> {
         <Self as Count<_>>::push_hash(self, hash)
     }
     fn size(&self) -> f32 {
-        <Self as Count<_>>::size(self)
+        <Self as Count<_>>::size_f32(self)
     }
     fn bytes_in_memory(&self) -> usize {
         <Self as Count<_>>::bytes_in_memory(self)

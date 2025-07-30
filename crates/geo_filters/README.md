@@ -33,8 +33,7 @@ c2.push(2);
 c2.push(3);
 
 let estimated_size = c1.size_with_sketch(&c2);
-assert!(estimated_size >= 3.0_f32 * 0.9 &&
-        estimated_size <= 3.0_f32 * 1.1);
+assert_eq!(estimated_size, 3);
 ```
 
 ## Background
