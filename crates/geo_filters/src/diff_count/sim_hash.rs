@@ -96,7 +96,7 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
     /// the expected diff size.
     ///
     /// The geo_filter can be used to do an "exact" search by setting expected_diff_size to zero.
-    /// in this case, all the buckets must match. Similarly, small differences can be found by
+    /// In this case, all the buckets must match. Similarly, small differences can be found by
     /// requiring (SIM_BUCKETS - expected_diff_size) many buckets to match. For larger differences
     /// SIM_BUCKETS / 2 many buckets have to match.
     pub fn sim_hashes_search(
