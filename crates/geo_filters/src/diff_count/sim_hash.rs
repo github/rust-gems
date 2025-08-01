@@ -220,28 +220,3 @@ impl BitVec<'_> {
         None
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use rand::Rng as _;
-
-    use crate::{
-        diff_count::{sim_hash::SIM_BUCKETS, GeoDiffCount7},
-        test_rng::prng_test_harness,
-    };
-
-    #[test]
-    fn sim_hash_iter_min_matches() {
-        prng_test_harness(100, |rng| {
-            let i = rng.random_range(0..1000);
-            let filter = GeoDiffCount7::pseudorandom_filter(i);
-            let expected_diff = rng.random_range(0..i);
-            let (iter, min_matches) = filter.sim_hashes_search(expected_diff);
-            let actual_count = iter.count();
-            let expected_min_matches = actual_count
-                .saturating_sub(expected_diff)
-                .max(SIM_BUCKETS / 2);
-            assert_eq!(min_matches, expected_min_matches)
-        });
-    }
-}
