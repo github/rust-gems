@@ -12,13 +12,13 @@ use crate::Diff;
 use super::BitVec;
 
 // TODO migrate these const values to be defined in configuration
-// The current values are only really appropriate for smaller
-// configurations
+// The current values are only really appropriate for the smaller
+// diff configuration.
 
 /// Number of bits covered by each SimHash bucket.
-pub const SIM_BUCKET_SIZE: usize = 6;
+const SIM_BUCKET_SIZE: usize = 6;
 /// Number of consecutive SimHash buckets used for searching.
-pub const SIM_BUCKETS: usize = 20;
+const SIM_BUCKETS: usize = 20;
 
 pub type BucketId = usize;
 
@@ -77,7 +77,7 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
     /// The first argument in the tuple is the bucket id of the `SimHash` which can be used
     /// to select a certain subset of `SimHashes`. SimHashes are returned in decreasing order
     /// of bucket ids, since that's their natural construction order.
-    pub fn sim_hashes(&self) -> impl Iterator<Item = (BucketId, SimHash)> + '_ {
+    pub fn sim_hashes(&self) -> impl ExactSizeIterator<Item = (BucketId, SimHash)> + '_ {
         SimHashIterator::new(self)
     }
 
@@ -89,15 +89,29 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
             .map(|(_, sim_hash)| sim_hash)
     }
 
+    /// Get the `SimHash`es for this filter for the purpose of performing a search.
+    ///
+    /// Returns an iterator of the `SimHash`es and a number representing the minimum number
+    /// of matches required to consider this filter a match to a given filter, given
+    /// the expected diff size.
+    ///
+    /// The geo_filter can be used to do an "exact" search by setting expected_diff_size to zero.
+    /// In this case, all the buckets must match. Similarly, small differences can be found by
+    /// requiring (SIM_BUCKETS - expected_diff_size) many buckets to match. For larger differences
+    /// SIM_BUCKETS / 2 many buckets have to match.
     pub fn sim_hashes_search(
         &self,
         expected_diff_size: usize,
-    ) -> impl Iterator<Item = SimHash> + '_ {
+    ) -> (impl Iterator<Item = SimHash> + '_, usize) {
         let range = self.sim_hash_range(expected_diff_size);
-        self.sim_hashes()
+        let sim_hash_iter = self.sim_hashes();
+        let n = range.len().min(sim_hash_iter.len());
+        let min_matches = n.saturating_sub(expected_diff_size).max(SIM_BUCKETS / 2);
+        let filtered_iter = sim_hash_iter
             .skip_while(move |(bucket_id, _)| *bucket_id >= range.end)
             .take_while(move |(bucket_id, _)| *bucket_id >= range.start)
-            .map(|(_, sim_hash)| sim_hash)
+            .map(|(_, sim_hash)| sim_hash);
+        (filtered_iter, min_matches)
     }
 }
 
@@ -152,7 +166,13 @@ impl<C: GeoConfig<Diff>> Iterator for SimHashIterator<'_, C> {
             SimHash::new(self.prev_bucket_id, self.sim_hash[bucket]),
         ))
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.prev_bucket_id, Some(self.prev_bucket_id))
+    }
 }
+
+impl<C: GeoConfig<Diff>> ExactSizeIterator for SimHashIterator<'_, C> {}
 
 impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
     /// n specifies the desired zero-based index of the most significant one.
