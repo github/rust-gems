@@ -104,12 +104,10 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
         expected_diff_size: usize,
     ) -> (impl Iterator<Item = SimHash> + '_, usize) {
         let range = self.sim_hash_range(expected_diff_size);
-        let min_matches = range
-            .len()
-            .saturating_sub(expected_diff_size)
-            .max(SIM_BUCKETS / 2);
-        let filtered_iter = self
-            .sim_hashes()
+        let sim_hash_iter = self.sim_hashes();
+        let n = range.len().min(sim_hash_iter.len());
+        let min_matches = n.saturating_sub(expected_diff_size).max(SIM_BUCKETS / 2);
+        let filtered_iter = sim_hash_iter
             .skip_while(move |(bucket_id, _)| *bucket_id >= range.end)
             .take_while(move |(bucket_id, _)| *bucket_id >= range.start)
             .map(|(_, sim_hash)| sim_hash);
