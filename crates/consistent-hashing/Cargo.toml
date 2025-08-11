@@ -1,0 +1,17 @@
+[package]
+name = "consistent-hashing"
+version = "0.1.0"
+edition = "2021"
+description = "Constant time consistent hashing algorithms."
+repository = "https://github.com/github/rust-gems"
+license = "MIT"
+keywords = ["probabilistic", "algorithm", "consistent hashing", "jump hashing", "rendezvous hashing"]
+categories = ["algorithms", "data-structures", "mathematics", "science"]
+
+[lib]
+crate-type = ["lib", "staticlib"]
+bench = false
+
+[dependencies]
+
+[dev-dependencies]
