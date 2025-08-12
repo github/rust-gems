@@ -43,7 +43,7 @@ We define the consistent `n-choose-rk` replication as follows:
 3. when `n` increases by one, exactly one node in the chosen set will be changed with probability `k/(n+1)`.
 
 For simplicity, nodes are represented by integers `0..n`.
-Given `k` independent consistent hash functions `h_i(n)` for a given key, the following algorithm will have the desired properties:
+Given `k` independent consistent hash functions `consistent_hash(key, k, n)` for a given `key`, the following algorithm will have the desired properties:
 
 ```
 fn consistent_choose_k<Key>(key: Key, k: usize, n: usize) -> Vec<usize> {
