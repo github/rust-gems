@@ -36,25 +36,45 @@ Why replication matters
 
 ## N-Choose-R replication
 
-We define the consistent `n-choose-rk` replication as follows:
+We define the consistent `n-choose-k` replication as follows:
 
-1. for a given number `n` of nodes, choose `k` distinct nodes `S`.
-2. for a given `key` the chosen set of nodes must be uniformly chosen from all possible sets of size `k`.
-3. when `n` increases by one, exactly one node in the chosen set will be changed with probability `k/(n+1)`.
+1. For a given number `n` of nodes, choose `k` distinct nodes `S`.
+2. For a given `key` the chosen set of nodes must be uniformly chosen from all possible sets of size `k`.
+3. When `n` increases by one, exactly one node in the chosen set will be changed.
+4. and the node will be changed with probability `k/(n+1)`.
 
 For simplicity, nodes are represented by integers `0..n`.
 Given `k` independent consistent hash functions `consistent_hash(key, k, n)` for a given `key`, the following algorithm will have the desired properties:
 
 ```
 fn consistent_choose_k<Key>(key: Key, k: usize, n: usize) -> Vec<usize> {
-    (0..k).rev().scan(n, |n, k| Some(consistent_choose_next(key, k, n))).collect()
+    (0..k).rev().scan(n, |n, k| Some(consistent_choose_max(key, k + 1, n))).collect()
 }
 
-fn consistent_choose_next<Key>(key: Key, k: usize, n: usize) -> usize {
+fn consistent_choose_max<Key>(key: Key, k: usize, n: usize) -> usize {
     (0..k).map(|k| consistent_hash(key, k, n - k) + k).max()
 }
 
-fn consistent_hash<Key>(key: Key, k: usize, n: usize) -> usize {
-    // compute the k-th independent consistent hash for `key` and `n` nodes.
+fn consistent_hash<Key>(key: Key, i: usize, n: usize) -> usize {
+    // compute the i-th independent consistent hash for `key` and `n` nodes.
 }
 ```
+
+Let's define `M(k,n) = consistent_choose_max(_, k, n)` and `S(k, n) := consistent_choose_k(_, k, n)` as short-cuts for some arbitrary fixed `key`.
+
+Since `M(k, n) < n` and `S(k, n) = {M(k, n)} ∪ S(k - 1, M(k, n))` for `k > 1`, `S(k, n)` constructs a strictly monotonically decreasing sequence. The sequence outputs exactly `k` elements which therefore must all be distinct which proves property 1 for `k <= n`.
+
+Properties 2, 3, and 4 can be proven via induction as follows.
+
+`k = 1`: We expect that `consistent_hash` returns a single uniformly distributed node index which is consistent in `n`, i.e. changes the hash value with probability `1/(n+1)`, when `n` increments by one. In our implementation, we use an `O(1)` implementation of the jump-hash algorithm. For `k=1`, `consistent_choose_k(key, 1, n)` becomes a single function call to `consistent_choose_max(key, 1, n)` which in turn calls `consistent_hash(key, 0, n)`. I.e. `consistent_choose_k` inherits the all the desired properties from `consistent_hash` for `k=1` and all `n>=1`.
+
+`k -> k+1`: `M(k+1, n+1) = M(k+1, n)` iff `M(k, n+1) < n` and `consistent_hash(_, k, n+1-k) < n - k`. The probability for this is `(n+1-k)/(n+1)` for the former by induction and `(n-k)/(n+1-k)` by the assumption that `consistent_hash` is a proper consistent hash function. Since both these probabilities are assumed to be independent, the probability that our initial value changes is `1 - (n+1-k)/(n+1) * (n-k)/(n+1-k) = 1 - (n-k)/(n+1) = (k+1)/(n+1)` proving property 4.
+
+Property 3 is trivially satisfied if `S(k+1, n+1) = S(k+1, n)`. So, we focus on the case where `S(k+1, n+1) != S(k+1, n)`, which implies that `n ∈ S(k+1, n+1)` as largest element.
+We know that `S(k+1, n) = {m} ∪ S(k, m)` for some `m` by definition and `S(k, n) = S(k, u) ∖ {v} ∪ {w}` by induction for some `u`, `v`, and `w`. Thus far we have `S(k+1, n+1) = {n} ∪ S(k, n) = {n} ∪ S(k, u) ∖ {v} ∪ {w}`.
+
+If `u == m`, then `S(k+1, n) = {m} ∪ S(k, m) ∖ {v} ∪ {w}` and `S(k+1, n+1) = {n} ∪ S(k, n) = {n} ∪ S(k, m) ∖ {v} ∪ {w}` and the two differ exaclty in the elemetns `m` and `n` proving property 3.
+
+If `u != m`, then `consistent_hash(_, k, n) = m`, since that's the only way how the largest values in `S(k+1, n)` and `S(k, n)` can differ. In this case, `m ∉ S(k+1, n+1)`, since `n` (and not `m`) is the largest element of `S(k+1, n+1)`. Furthermore, `S(k, n) = S(k, m)`, since `consistent_hash(_, i, n) < m` for all `i < k` (otherwise there is a contradiction).
+Putting it together leads to `S(k+1, n+1) = {n} ∪ S(k, m)` and `S(k+1, n) = {m} ∪ S(k, m)` which differ exactly in the elements `n` and `m` which concludes the proof.
+

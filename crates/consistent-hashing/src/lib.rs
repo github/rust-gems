@@ -157,14 +157,14 @@ impl ConsistentHasher {
         Self { key }
     }
 
-    pub fn prev(&self, n: usize) -> usize {
+    pub fn prev(&self, n: usize) -> Option<usize> {
         let mut sampler = ConsistentHashRevIterator::new(self.key, n);
-        sampler.next().expect("n must be > 0!")
+        sampler.next()
     }
 
-    pub fn next(&self, n: usize) -> usize {
+    pub fn next(&self, n: usize) -> Option<usize> {
         let mut sampler = ConsistentHashIterator::new(self.key, n);
-        sampler.next().expect("Exceeded iterator bounds :(")
+        sampler.next()
     }
 }
 
@@ -217,8 +217,8 @@ mod tests {
             let sampler = ConsistentHasher::new(k);
             for n in 0..1000 {
                 assert!(sampler.prev(n + 1) <= sampler.prev(n + 2));
-                let next = sampler.next(n);
-                assert_eq!(next, sampler.prev(next + 1));
+                let next = sampler.next(n).unwrap();
+                assert_eq!(next, sampler.prev(next + 1).unwrap());
             }
             let mut iter_rev: Vec<_> = ConsistentHashIterator::new(k, 0)
                 .take_while(|x| *x < 1000)
@@ -230,7 +230,7 @@ mod tests {
         let mut stats = vec![0; 13];
         for i in 0..100000 {
             let sampler = ConsistentHasher::new(i);
-            let x = sampler.prev(stats.len());
+            let x = sampler.prev(stats.len()).unwrap();
             stats[x] += 1;
         }
         println!("{stats:?}");
