@@ -5,7 +5,7 @@ Consistent hashing maps keys to a changing set of nodes (shards, servers) so tha
 Common algorithms
 - [Consistent hashing](https://en.wikipedia.org/wiki/Consistent_hashing) (hash ring with virtual nodes)
 - [Rendezvous hashing](https://en.wikipedia.org/wiki/Rendezvous_hashing)
-- [Jump consistent hash](https://en.wikipedia.org/wiki/Jump_consistent_hash)
+- [Jump consistent hash](https://arxiv.org/pdf/1406.2294)
 - [Maglev hashing](https://research.google/pubs/pub44824) 
 - [AnchorHash: A Scalable Consistent Hash](https://arxiv.org/abs/1812.09674)
 - [DXHash](https://arxiv.org/abs/2107.07930)
@@ -24,7 +24,7 @@ where `N` is the number of nodes and `R` is the number of replicas.
 | AnchorHash              | O(1) expected       | O(1)?                                  | O(N)?                     | Not native                          |
 | DXHash                  | O(1) expected       | O(1)?                                  | O(N)?                     | Not native                          |
 | JumpBackHash            | O(1) expected       | 0                                      | O(1)                      | Not native                          |
-| $$ConsistentChooseK$$   | $$O(1) expected$$   | $$0$$                                  | $$O(1)$$                  | $$O(R^2)$$; $$O(R log(R))$$: using heap |
+| **ConsistentChooseK**   | **O(1) expected**   | **0**                                  | **O(1)**                  | **O(R^2)**; **O(R log(R))**: using heap |
 
 Replication of keys
 - Hash ring: replicate by walking clockwise to the next R distinct nodes. Virtual nodes help spread replicas more evenly. Replicas are not independently distributed. 
@@ -64,7 +64,7 @@ With this optimization, the complexity reduces to `O(k log k)`.
 With some probabilistic bucketing strategy, it should be possible to reduce the expected runtime to `O(k)`.
 For small `k` neither optimization is probably improving the actual performance though.
 
-The next section proves why this simple code works.
+The next section proves the correctness of this algorithm.
 
 ## N-Choose-R replication
 
@@ -91,8 +91,8 @@ Properties 2, 3, and 4 can be proven via induction as follows.
 Property 3 is trivially satisfied if `S(k+1, n+1) = S(k+1, n)`. So, we focus on the case where `S(k+1, n+1) != S(k+1, n)`, which implies that `n ∈ S(k+1, n+1)` as largest element.
 We know that `S(k+1, n) = {m} ∪ S(k, m)` for some `m` by definition and `S(k, n) = S(k, u) ∖ {v} ∪ {w}` by induction for some `u`, `v`, and `w`. Thus far we have `S(k+1, n+1) = {n} ∪ S(k, n) = {n} ∪ S(k, u) ∖ {v} ∪ {w}`.
 
-If `u == m`, then `S(k+1, n) = {m} ∪ S(k, m) ∖ {v} ∪ {w}` and `S(k+1, n+1) = {n} ∪ S(k, n) = {n} ∪ S(k, m) ∖ {v} ∪ {w}` and the two differ exaclty in the elemetns `m` and `n` proving property 3.
+If `u = m`, then `S(k+1, n) = {m} ∪ S(k, m) ∖ {v} ∪ {w}` and `S(k+1, n+1) = {n} ∪ S(k, n) = {n} ∪ S(k, m) ∖ {v} ∪ {w}` and the two differ exaclty in the elemetns `m` and `n` proving property 3.
 
-If `u != m`, then `consistent_hash(_, k, n) = m`, since that's the only way how the largest values in `S(k+1, n)` and `S(k, n)` can differ. In this case, `m ∉ S(k+1, n+1)`, since `n` (and not `m`) is the largest element of `S(k+1, n+1)`. Furthermore, `S(k, n) = S(k, m)`, since `consistent_hash(_, i, n) < m` for all `i < k` (otherwise there is a contradiction).
+If `u ≠ m`, then `consistent_hash(_, k, n) = m`, since that's the only way how the largest values in `S(k+1, n)` and `S(k, n)` can differ. In this case, `m ∉ S(k+1, n+1)`, since `n` (and not `m`) is the largest element of `S(k+1, n+1)`. Furthermore, `S(k, n) = S(k, m)`, since `consistent_hash(_, i, n) < m` for all `i < k` (otherwise there is a contradiction).
 Putting it together leads to `S(k+1, n+1) = {n} ∪ S(k, m)` and `S(k+1, n) = {m} ∪ S(k, m)` which differ exactly in the elements `n` and `m` which concludes the proof.
 
