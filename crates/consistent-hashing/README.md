@@ -24,7 +24,7 @@ where `N` is the number of nodes and `R` is the number of replicas.
 | AnchorHash              | O(1) expected       | O(1)?                                  | O(N)?                     | Not native                          |
 | DXHash                  | O(1) expected       | O(1)?                                  | O(N)?                     | Not native                          |
 | JumpBackHash            | O(1) expected       | 0                                      | O(1)                      | Not native                          |
-| $ConsistentChooseK$     | $O(1) expected$     | $0$                                    | $O(1)$                    | $O(R^2)$; $O(R log(R))$: using heap |
+| $$ConsistentChooseK$$   | $$O(1) expected$$   | $$0$$                                  | $$O(1)$$                  | $$O(R^2)$$; $$O(R log(R))$$: using heap |
 
 Replication of keys
 - Hash ring: replicate by walking clockwise to the next R distinct nodes. Virtual nodes help spread replicas more evenly. Replicas are not independently distributed. 
