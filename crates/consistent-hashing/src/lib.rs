@@ -256,6 +256,8 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::DefaultHasher;
+
     use super::*;
 
     fn hasher_for_key(key: u64) -> DefaultHasher {
