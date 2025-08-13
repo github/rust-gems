@@ -20,16 +20,17 @@ where `N` is the number of nodes and `R` is the number of replicas.
 |-------------------------|---------------------|----------------------------------------|---------------------------|-------------------------------------|
 | Hash ring (with vnodes) | O(log N): binary search over N points; O(1): with specialized structures | O(log N) | O(N) | O(log N + R): Take next R distinct successors |
 | Rendezvous              | O(N): max score     | O(1)                                   | O(N) node list            | O(N log R): pick top R scores       |
-| Jump consistent hash    | O(log(N)) expected  | 0                                      | O(1)                      | Not native                          |
-| AnchorHash              | O(1) expected       | O(1)?                                  | O(N)?                     | Not native                          |
-| DXHash                  | O(1) expected       | O(1)?                                  | O(N)?                     | Not native                          |
+| Jump consistent hash    | O(log(N)) expected  | 0                                      | O(1)                      | O(R log N)                          |
+| AnchorHash              | O(1) expected       | O(1)                                   | O(N)                      | Not native                          |
+| DXHash                  | O(1) expected       | O(1)                                   | O(N)                      | Not native                          |
 | JumpBackHash            | O(1) expected       | 0                                      | O(1)                      | Not native                          |
 | **ConsistentChooseK**   | **O(1) expected**   | **0**                                  | **O(1)**                  | **O(R^2)**; **O(R log(R))**: using heap |
 
 Replication of keys
 - Hash ring: replicate by walking clockwise to the next R distinct nodes. Virtual nodes help spread replicas more evenly. Replicas are not independently distributed. 
 - Rendezvous hashing: replicate by selecting the top R nodes by score for the key. This naturally yields R distinct owners and supports weights.
-- Jump consistent hash and variatns: the base function returns one bucket. Replication can be achieved by hashing (key, replica_index) and collecting R distinct buckets; this is simple but loses the consistency property!
+- Jump consistent hash: the base function doesn't support replication. But the math can be easily modified to support consistent replication.
+- JumpBackHash and variants: The trick of Jump consistent hash to support replication won't work here due to the additional state introduced.
 - ConsistentChooseK: Faster and more memory efficient than all other solutions.
 
 Why replication matters
