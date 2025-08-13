@@ -1,7 +1,7 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// One building block for the consistent hashing algorithm is a consistent
-/// hash iterator which enumerates all the hashes for a given for a specific bucket.
+/// hash iterator which enumerates all the hashes for a specific bucket.
 /// A bucket covers the range `(1<<bit)..(2<<bit)`.
 #[derive(Default)]
 struct BucketIterator {
