@@ -15,36 +15,33 @@ Common algorithms
 
 where `N` is the number of nodes and `R` is the number of replicas.
 
-| Algorithm               | Lookup per key       | Node add/remove                        | Memory                    | Replication support                              |
-|-------------------------|----------------------|----------------------------------------|---------------------------|--------------------------------------------------|
-| Hash ring (with vnodes) | O(log N) binary search over N points; O(1) with specialized structures | O(log N) to insert/remove points         | O(N) points               | Yes: take next R distinct successors; O(log N + R) |
-| Rendezvous              | O(N) score per node; top-1 | O(1) (no state to rebalance)     | O(N) node list            | Yes: pick top R scores; O(N log R) |
-| Jump consistent hash    | O(log(N))            | O(1)                                   | O(1)                      | Not native               |
-| AnchorHash              | O(1) expected        | O(1) expected/amortized                | O(N)                      | Not native               |
-| DXHash                  | O(1) expected        | O(1) expected                          | O(N)                      | Not native               |
-| JumpBackHash            | O(1)                 | O(1) expected                          | O(1)                      | Not native               |
+| Algorithm               | Lookup per key      | Node add/remove                        | Memory                    | Lookup with replication             |
+|                         | (no replication)    |                                        |                           |                                     |
+|-------------------------|---------------------|----------------------------------------|---------------------------|-------------------------------------|
+| Hash ring (with vnodes) | O(log N): binary search over N points; O(1): with specialized structures | O(log N) | O(N) | O(log N + R): Take next R distinct successors |
+| Rendezvous              | O(N): max score     | O(1)                                   | O(N) node list            | O(N log R): pick top R scores       |
+| Jump consistent hash    | O(log(N)) expected  | 0                                      | O(1)                      | Not native                          |
+| AnchorHash              | O(1) expected       | O(1)?                                  | O(N)?                     | Not native                          |
+| DXHash                  | O(1) expected       | O(1)?                                  | O(N)?                     | Not native                          |
+| JumpBackHash            | O(1) expected       | 0                                      | O(1)                      | Not native                          |
+| $ConsistentChooseK$     | $O(1) expected$     | $0$                                    | $O(1)$                    | $O(R^2)$; $O(R log(R))$: using heap |
 
 Replication of keys
-- Hash ring: replicate by walking clockwise to the next R distinct nodes. Virtual nodes help spread replicas evenly and avoid hotspots.
+- Hash ring: replicate by walking clockwise to the next R distinct nodes. Virtual nodes help spread replicas more evenly. Replicas are not independently distributed. 
 - Rendezvous hashing: replicate by selecting the top R nodes by score for the key. This naturally yields R distinct owners and supports weights.
-- Jump consistent hash: the base function returns one bucket. Replication can be achieved by hashing (key, replica_index) and collecting R distinct buckets; this is simple but lacks the single-pass global ranking HRW provides.
+- Jump consistent hash and variatns: the base function returns one bucket. Replication can be achieved by hashing (key, replica_index) and collecting R distinct buckets; this is simple but loses the consistency property!
+- ConsistentChooseK: Faster and more memory efficient than all other solutions.
 
 Why replication matters
 - Tolerates node failures and maintenance without data unavailability.
 - Distributes read/write load across multiple owners, reducing hotspots.
 - Enables fast recovery and higher tail-latency resilience.
 
-## N-Choose-R replication
+## ConsistentChooseK algorithm
 
-We define the consistent `n-choose-k` replication as follows:
-
-1. For a given number `n` of nodes, choose `k` distinct nodes `S`.
-2. For a given `key` the chosen set of nodes must be uniformly chosen from all possible sets of size `k`.
-3. When `n` increases by one, exactly one node in the chosen set will be changed.
-4. and the node will be changed with probability `k/(n+1)`.
-
-For simplicity, nodes are represented by integers `0..n`.
-Given `k` independent consistent hash functions `consistent_hash(key, k, n)` for a given `key`, the following algorithm will have the desired properties:
+The following functions summarize the core algorithmic innovation as a minimal Rust excerpt.
+`n` is the number of nodes and `k` is the number of desired replica.
+The chosen nodes are returned as distinct integers in the range `0..n`.
 
 ```
 fn consistent_choose_k<Key>(key: Key, k: usize, n: usize) -> Vec<usize> {
@@ -60,7 +57,28 @@ fn consistent_hash<Key>(key: Key, i: usize, n: usize) -> usize {
 }
 ```
 
+`consistent_choose_k` makes `k` calls to `consistent_choose_max` which calls `consistent_hash` another `k` times.
+In total, `consistent_hash` is called `k * (k+1) / 2` Utilizing a `O(1)` solution for `consistent_hash` leads to a `O(k^2)` runtime.
+This runtime can be further improved by replacing the max operation with a heap where popped elements are updated according to the new arguments `n` and `k`.
+With this optimization, the complexity reduces to `O(k log k)`.
+With some probabilistic bucketing strategy, it should be possible to reduce the expected runtime to `O(k)`.
+For small `k` neither optimization is probably improving the actual performance though.
+
+The next section proves why this simple code works.
+
+## N-Choose-R replication
+
+We define the consistent `n-choose-k` replication as follows:
+
+1. For a given number `n` of nodes, choose `k` distinct nodes `S`.
+2. For a given `key` the chosen set of nodes must be uniformly chosen from all possible sets of size `k`.
+3. When `n` increases by one, exactly one node in the chosen set will be changed.
+4. and the node will be changed with probability `k/(n+1)`.
+
+In the remainder of this section we prove that the `consistent_choose_k` algorithm satisfies those properties.
+
 Let's define `M(k,n) = consistent_choose_max(_, k, n)` and `S(k, n) := consistent_choose_k(_, k, n)` as short-cuts for some arbitrary fixed `key`.
+We assume that `consistent_hash(key, k, n)` computes `k` independent consistent hash functions.
 
 Since `M(k, n) < n` and `S(k, n) = {M(k, n)} ∪ S(k - 1, M(k, n))` for `k > 1`, `S(k, n)` constructs a strictly monotonically decreasing sequence. The sequence outputs exactly `k` elements which therefore must all be distinct which proves property 1 for `k <= n`.
 
