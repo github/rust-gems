@@ -15,16 +15,15 @@ Common algorithms
 
 where `N` is the number of nodes and `R` is the number of replicas.
 
-| Algorithm               | Lookup per key      | Node add/remove                        | Memory                    | Lookup with replication             |
-|                         | (no replication)    |                                        |                           |                                     |
-|-------------------------|---------------------|----------------------------------------|---------------------------|-------------------------------------|
-| Hash ring (with vnodes) | O(log N): binary search over N points; O(1): with specialized structures | O(log N) | O(N) | O(log N + R): Take next R distinct successors |
-| Rendezvous              | O(N): max score     | O(1)                                   | O(N) node list            | O(N log R): pick top R scores       |
-| Jump consistent hash    | O(log(N)) expected  | 0                                      | O(1)                      | O(R log N)                          |
-| AnchorHash              | O(1) expected       | O(1)                                   | O(N)                      | Not native                          |
-| DXHash                  | O(1) expected       | O(1)                                   | O(N)                      | Not native                          |
-| JumpBackHash            | O(1) expected       | 0                                      | O(1)                      | Not native                          |
-| **ConsistentChooseK**   | **O(1) expected**   | **0**                                  | **O(1)**                  | **O(R^2)**; **O(R log(R))**: using heap |
+| Algorithm               | Lookup per key<br>(no replication)                                       | Node add/remove | Memory         | Lookup with replication                       |
+|-------------------------|--------------------------------------------------------------------------|-----------------|----------------|-----------------------------------------------|
+| Hash ring (with vnodes) | O(log N): binary search over N points; O(1): with specialized structures | O(log N)        | O(N)           | O(log N + R): Take next R distinct successors |
+| Rendezvous              | O(N): max score                                                          | O(1)            | O(N) node list | O(N log R): pick top R scores                 |
+| Jump consistent hash    | O(log(N)) expected                                                       | 0               | O(1)           | O(R log N)                                    |
+| AnchorHash              | O(1) expected                                                            | O(1)            | O(N)           | Not native                                    |
+| DXHash                  | O(1) expected                                                            | O(1)            | O(N)           | Not native                                    |
+| JumpBackHash            | O(1) expected                                                            | 0               | O(1)           | Not native                                    |
+| **ConsistentChooseK**   | **O(1) expected**                                                        | **0**           | **O(1)**       | **O(R^2)**; **O(R log(R))**: using heap       |
 
 Replication of keys
 - Hash ring: replicate by walking clockwise to the next R distinct nodes. Virtual nodes help spread replicas more evenly. Replicas are not independently distributed. 
