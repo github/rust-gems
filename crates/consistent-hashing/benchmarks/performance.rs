@@ -40,7 +40,9 @@ fn throughput_benchmark(c: &mut Criterion) {
                         for key in keys {
                             let mut h = DefaultHasher::default();
                             key.hash(&mut h);
-                            black_box(ConsistentChooseKHasher::new(h, k).prev_with_vec(*n + k, &mut res));
+                            black_box(
+                                ConsistentChooseKHasher::new(h, k).prev_with_vec(*n + k, &mut res),
+                            );
                         }
                     },
                     criterion::BatchSize::SmallInput,
