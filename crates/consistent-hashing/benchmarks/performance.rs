@@ -1,12 +1,12 @@
 use std::{
-    hash::{DefaultHasher, Hash},
+    hash::{DefaultHasher, Hash, Hasher},
     hint::black_box,
     time::Duration,
 };
 
 use consistent_hashing::{ConsistentChooseKHasher, ConsistentHasher};
 use criterion::{
-    criterion_group, criterion_main, AxisScale, Bencher, BenchmarkId, Criterion, PlotConfiguration,
+    criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
     Throughput,
 };
 use rand::{rng, Rng};
@@ -23,7 +23,7 @@ fn throughput_benchmark(c: &mut Criterion) {
                 || &keys,
                 |keys| {
                     for key in keys {
-                        let mut h = DefaultHasher::new();
+                        let mut h = DefaultHasher::default();
                         key.hash(&mut h);
                         black_box(ConsistentHasher::new(h).prev(*n + 1));
                     }
@@ -38,9 +38,9 @@ fn throughput_benchmark(c: &mut Criterion) {
                     |keys| {
                         let mut res = Vec::with_capacity(k);
                         for key in keys {
-                            let mut h = DefaultHasher::new();
+                            let mut h = DefaultHasher::default();
                             key.hash(&mut h);
-                            black_box(ConsistentChooseKHasher::new(h, k).prev(*n + k, &mut res));
+                            black_box(ConsistentChooseKHasher::new(h, k).prev_with_vec(*n + k, &mut res));
                         }
                     },
                     criterion::BatchSize::SmallInput,

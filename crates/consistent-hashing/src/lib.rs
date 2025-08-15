@@ -12,6 +12,7 @@ pub trait HashSequence {
 pub trait HashSeqBuilder {
     type Seq: HashSequence;
 
+    /// Returns a bit mask indicating which buckets have at least one hash.
     fn bit_mask(&self) -> u64;
     /// Return a HashSequence instance which is seeded with the given bit position
     /// and the seed of this builder.
@@ -66,7 +67,7 @@ struct BucketIterator<H: HashSequence> {
     hasher: H,
     n: usize,
     is_first: bool,
-    bit: u64,  // A bitmask with a single bit set.
+    bit: u64, // A bitmask with a single bit set.
 }
 
 impl<H: HashSequence> BucketIterator<H> {
@@ -199,19 +200,29 @@ pub struct ConsistentHasher<H: HashSeqBuilder> {
     builder: H,
 }
 
-impl<H: HashSeqBuilder + Clone> ConsistentHasher<H> {
+impl<H: HashSeqBuilder> ConsistentHasher<H> {
     pub fn new(builder: H) -> Self {
         Self { builder }
     }
 
-    pub fn prev(&self, n: usize) -> Option<usize> {
+    pub fn prev(&self, n: usize) -> Option<usize>
+    where
+        H: Clone,
+    {
         let mut sampler = ConsistentHashRevIterator::new(n, self.builder.clone());
         sampler.next()
     }
 
-    pub fn next(&self, n: usize) -> Option<usize> {
+    pub fn next(&self, n: usize) -> Option<usize>
+    where
+        H: Clone,
+    {
         let mut sampler = ConsistentHashIterator::new(n, self.builder.clone());
         sampler.next()
+    }
+
+    pub fn into_prev(self, n: usize) -> Option<usize> {
+        ConsistentHashRevIterator::new(n, self.builder).next()
     }
 }
 
@@ -231,26 +242,37 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
         Self { builder, k }
     }
 
-    // TODO: Implement this as an iterator!
-    pub fn prev(&self, mut n: usize, samples: &mut Vec<usize>)  {
-        let mut samplers: Vec<_> = (0..self.k)
-            .map(|i| ConsistentHashRevIterator::new(n - i, self.builder.seq_builder(i)).peekable())
-            .collect();
+    pub fn prev(&self, n: usize) -> Vec<usize> {
+        let mut res = Vec::with_capacity(self.k);
+        self.prev_with_vec(n, &mut res);
+        res
+    }
+
+    pub fn prev_with_vec(&self, mut n: usize, samples: &mut Vec<usize>) {
+        assert!(n >= self.k, "n must be at least k");
         samples.clear();
+        for i in 0..self.k {
+            samples.push(
+                ConsistentHasher::new(self.builder.seq_builder(i))
+                    .into_prev(n - i)
+                    .expect("must not fail")
+                    + i,
+            );
+        }
         for i in (0..self.k).rev() {
-            let mut max = 0;
-            for k in 0..=i {
-                while samplers[k].peek() >= Some(&(n - k)) && n - k > 0 {
-                    samplers[k].next();
+            n = samples[0..=i].iter().copied().max().expect("");
+            samples[i] = n;
+            for j in 0..i {
+                if samples[j] == n {
+                    samples[j] = ConsistentHasher::new(self.builder.seq_builder(j))
+                        .into_prev(n - j)
+                        .expect("must not fail")
+                        + j;
                 }
-                max = max.max(samplers[k].peek().unwrap() + k);
             }
-            samples.push(max);
-            n = max;
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -327,6 +349,7 @@ mod tests {
             }
         }
         println!("{stats:?}");
+        assert_eq!(stats, vec![10, 12, 6, 6, 6, 5, 9, 10]);
         // Test consistency when increasing k!
         for k in 1..10 {
             for n in k + 1..20 {
