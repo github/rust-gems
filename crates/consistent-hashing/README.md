@@ -59,7 +59,7 @@ fn consistent_hash<Key>(key: Key, i: usize, n: usize) -> usize {
 ```
 
 `consistent_choose_k` makes `k` calls to `consistent_choose_max` which calls `consistent_hash` another `k` times.
-In total, `consistent_hash` is called `k * (k+1) / 2` Utilizing a `O(1)` solution for `consistent_hash` leads to a `O(k^2)` runtime.
+In total, `consistent_hash` is called `k * (k+1) / 2` many times. Utilizing a `O(1)` solution for `consistent_hash` leads to a `O(k^2)` runtime.
 This runtime can be further improved by replacing the max operation with a heap where popped elements are updated according to the new arguments `n` and `k`.
 With this optimization, the complexity reduces to `O(k log k)`.
 With some probabilistic bucketing strategy, it should be possible to reduce the expected runtime to `O(k)`.
