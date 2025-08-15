@@ -262,9 +262,9 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
         for i in (0..self.k).rev() {
             n = samples[0..=i].iter().copied().max().expect("");
             samples[i] = n;
-            for j in 0..i {
-                if samples[j] == n {
-                    samples[j] = ConsistentHasher::new(self.builder.seq_builder(j))
+            for (j, sample) in samples[0..i].iter_mut().enumerate() {
+                if *sample == n {
+                    *sample = ConsistentHasher::new(self.builder.seq_builder(j))
                         .into_prev(n - j)
                         .expect("must not fail")
                         + j;
