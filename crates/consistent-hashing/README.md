@@ -98,7 +98,7 @@ Properties 2, 3, and 4 can be proven via induction as follows.
 Property 3 is trivially satisfied if `S(k+1, n+1) = S(k+1, n)`. So, we focus on the case where `S(k+1, n+1) != S(k+1, n)`, which implies that `n ∈ S(k+1, n+1)` as largest element.
 We know that `S(k+1, n) = {m} ∪ S(k, m)` for some `m` by definition and `S(k, n) = S(k, u) ∖ {v} ∪ {w}` by induction for some `u`, `v`, and `w`. Thus far we have `S(k+1, n+1) = {n} ∪ S(k, n) = {n} ∪ S(k, u) ∖ {v} ∪ {w}`.
 
-If `u = m`, then `S(k+1, n) = {m} ∪ S(k, m) ∖ {v} ∪ {w}` and `S(k+1, n+1) = {n} ∪ S(k, n) = {n} ∪ S(k, m) ∖ {v} ∪ {w}` and the two differ exaclty in the elemetns `m` and `n` proving property 3.
+If `u = m`, then `S(k+1, n) = {m} ∪ S(k, m) ∖ {v} ∪ {w}` and `S(k+1, n+1) = {n} ∪ S(k, n) = {n} ∪ S(k, m) ∖ {v} ∪ {w}` and the two differ exactly in the elemetns `m` and `n` proving property 3.
 
 If `u ≠ m`, then `consistent_hash(_, k, n) = m`, since that's the only way how the largest values in `S(k+1, n)` and `S(k, n)` can differ. In this case, `m ∉ S(k+1, n+1)`, since `n` (and not `m`) is the largest element of `S(k+1, n+1)`. Furthermore, `S(k, n) = S(k, m)`, since `consistent_hash(_, i, n) < m` for all `i < k` (otherwise there is a contradiction).
 Putting it together leads to `S(k+1, n+1) = {n} ∪ S(k, m)` and `S(k+1, n) = {m} ∪ S(k, m)` which differ exactly in the elements `n` and `m` which concludes the proof.
