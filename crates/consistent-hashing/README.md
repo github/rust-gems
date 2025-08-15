@@ -28,8 +28,8 @@ where `N` is the number of nodes and `R` is the number of replicas.
 Replication of keys
 - Hash ring: replicate by walking clockwise to the next R distinct nodes. Virtual nodes help spread replicas more evenly. Replicas are not independently distributed. 
 - Rendezvous hashing: replicate by selecting the top R nodes by score for the key. This naturally yields R distinct owners and supports weights.
-- Jump consistent hash: the base function doesn't support replication. But the math can be easily modified to support consistent replication.
-- JumpBackHash and variants: The trick of Jump consistent hash to support replication won't work here due to the additional state introduced.
+- Jump consistent hash: the base function doesn't support replication. While the math can be modified to support consistent replication, it cannot be efficiently solved for large k and even for small k (=2 or =3), a quadratic or cubic equation has to be solved.
+- JumpBackHash and variants: The trick of Jump consistent hash to support replication won't work here due to the introduction of additional state.
 - ConsistentChooseK: Faster and more memory efficient than all other solutions.
 
 Why replication matters
