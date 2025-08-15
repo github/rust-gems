@@ -232,11 +232,11 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
     }
 
     // TODO: Implement this as an iterator!
-    pub fn prev(&self, mut n: usize) -> Vec<usize> {
-        let mut samples = Vec::with_capacity(self.k);
+    pub fn prev(&self, mut n: usize, samples: &mut Vec<usize>)  {
         let mut samplers: Vec<_> = (0..self.k)
             .map(|i| ConsistentHashRevIterator::new(n - i, self.builder.seq_builder(i)).peekable())
             .collect();
+        samples.clear();
         for i in (0..self.k).rev() {
             let mut max = 0;
             for k in 0..=i {
@@ -248,8 +248,6 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
             samples.push(max);
             n = max;
         }
-        samples.sort();
-        samples
     }
 }
 
