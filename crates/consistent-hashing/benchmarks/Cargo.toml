@@ -1,0 +1,15 @@
+[package]
+name = "consistent-hashing-benchmarks"
+edition = "2021"
+
+[[bench]]
+name = "performance"
+path = "performance.rs"
+harness = false
+test = false
+
+[dependencies]
+consistent-hashing = { path = "../" }
+
+criterion = { version = "0.7", features = ["csv_output"] }
+rand = "0.9"
