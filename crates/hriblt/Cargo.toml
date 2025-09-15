@@ -1,0 +1,12 @@
+[package]
+name = "hriblt"
+version = "0.1.0"
+edition = "2024"
+description = "Algorithm for rateless set reconciliation"
+repository = "https://github.com/github/rust-gems"
+license = "MIT"
+keywords = ["set-reconciliation", "sync", "algorithm", "probabilistic"]
+categories = ["algorithms", "data-structures", "mathematics", "science"]
+
+[dependencies]
+thiserror = "2"
