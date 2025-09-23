@@ -20,19 +20,18 @@ impl<'a> TebIterator<'a> {
 
     pub fn decode_batch(&mut self) {
         let mut data = self.data[(self.bit_pos / 64) as usize];
-        //while data != 0 {
-        for _ in 0..13 {
+        while data != 0 {
+        //for _ in 0..13 {
             let level = self.index.trailing_zeros();
             let d = data as u32;
-            let a = d ^ d.overflowing_sub(1).0;
-            let down = 32 - a.leading_zeros();
-            let end = self.index + (1 << (level + 1 - down));
-            let b = (d >> down) & 1;
+            let down = d.trailing_zeros();
+            let end = self.index + (1 << (level - down));
+            let b = (d >> (down + 1)) & 1;
             self.ranges[self.range_idx as usize] = self.index;
             self.range_idx += (self.range_idx & 1) ^ b;
-            self.bit_pos += down + 1;
+            self.bit_pos += down + 2;
             self.index = end;
-            data >>= down + 1;
+            data >>= down + 2;
         }
     }
 }
