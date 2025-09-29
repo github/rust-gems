@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(&iter.ranges[..iter.range_idx as usize], &seq);
 
         let start = std::time::Instant::now();
-        let iterations = 1000;
+        let iterations = 1000000;
         for _ in 0..iterations {
             std::hint::black_box({
                 let mut iter = TebIterator::new(&data);
