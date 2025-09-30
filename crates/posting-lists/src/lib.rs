@@ -24,7 +24,7 @@ impl<'a> TebIterator<'a> {
         let mut range_idx = self.range_idx;
         let mut data = self.data[(bit_pos / 64) as usize];
         while data != 0 {
-            let level = (index).trailing_zeros();
+            let level = index.trailing_zeros();
             let d = data as u32;
             let b = d & 1;
             //let down = ((d >> 1)).trailing_zeros().min(level);
