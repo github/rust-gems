@@ -24,16 +24,15 @@ impl<'a> TebIterator<'a> {
         let mut range_idx = self.range_idx;
         let mut data = self.data[(bit_pos / 64) as usize];
         while data != 0 {
-            // let level = (index | 0x8000000).trailing_zeros();
             let level = (index).trailing_zeros();
             let d = data as u32;
             let b = d & 1;
-            //let down = ((d >> 1) | (1 << level)).trailing_zeros();
-            let down = ((d >> 1)).trailing_zeros();
+            //let down = ((d >> 1)).trailing_zeros().min(level);
+            let down = (d >> 1).trailing_zeros();
             let end = index + (1 << (level - down));
             unsafe { *self.ranges.get_unchecked_mut(range_idx as usize) = index & !0x80000000};
             range_idx += (range_idx & 1) ^ b;
-            //let bits = down + 1 + (down != level) as u32;
+            // let bits = down + 1 + (down != level) as u32;
             let bits = down + 2;
             bit_pos += bits;
             index = end;
