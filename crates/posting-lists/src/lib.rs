@@ -11,7 +11,7 @@ impl<'a> TebIterator<'a> {
     pub fn new(data: &'a [u64]) -> Self {
         Self {
             data,
-            index: Default::default(),
+            index: 0x80000000,
             bit_pos: Default::default(),
             ranges: Default::default(),
             range_idx: Default::default(),
@@ -24,16 +24,20 @@ impl<'a> TebIterator<'a> {
         let mut range_idx = self.range_idx;
         let mut data = self.data[(bit_pos / 64) as usize];
         while data != 0 {
-            let level = index.trailing_zeros();
+            // let level = (index | 0x8000000).trailing_zeros();
+            let level = (index).trailing_zeros();
             let d = data as u32;
-            let down = d.trailing_zeros();
+            let b = d & 1;
+            //let down = ((d >> 1) | (1 << level)).trailing_zeros();
+            let down = ((d >> 1)).trailing_zeros();
             let end = index + (1 << (level - down));
-            let b = (d >> (down + 1)) & 1;
-            self.ranges[range_idx as usize] = index;
+            unsafe { *self.ranges.get_unchecked_mut(range_idx as usize) = index & !0x80000000};
             range_idx += (range_idx & 1) ^ b;
-            bit_pos += down + 2;
+            //let bits = down + 1 + (down != level) as u32;
+            let bits = down + 2;
+            bit_pos += bits;
             index = end;
-            data >>= down + 2;
+            data >>= bits;
         }
         self.index = index;
         self.bit_pos = bit_pos;
@@ -90,23 +94,29 @@ struct Encoder {
 impl Encoder {
     fn new() -> Self {
         Encoder {
-            index: 0,
+            index: 0x80000000,
             out: BitStream::new(),
         }
     }
 
     fn encode_till(&mut self, end: u32, flag: bool) {
-        let mask = ((flag as u32) << 1) | 1;
+        let end = end | 0x80000000;
         while self.index < end {
-            let level = self.index.trailing_zeros();
+            // let level = (self.index | 0x8000000).trailing_zeros();
+            let level = (self.index).trailing_zeros();
             let rest = self.index ^ end;
-            if level < 32 && rest >= (1 << level) {
-                self.out.push(mask, 2);
+            let shift = if level < 32 && rest >= (1 << level) {
                 self.index += 1 << level;
+                0
             } else {
                 let down = 31 - rest.leading_zeros();
                 self.index += 1 << down;
-                self.out.push(mask << (level - down), level - down + 2);
+                level - down
+            };
+            if false && level == shift {
+                self.out.push(flag as u32, shift + 1);
+            } else {
+                self.out.push((2 << shift) | (flag as u32), shift + 2);
             }
         }
     }
@@ -116,6 +126,7 @@ impl Encoder {
             self.encode_till(*start, false);
             self.encode_till(*end, true);
         }
+        self.index &= !0x80000000;
         self.encode_till(1 << 31, false);
         self.out.finish()
     }
@@ -129,6 +140,7 @@ mod tests {
     fn test_encoding() {
         let encoder = Encoder::new();
         let seq = [2, 3, 5, 7, 10, 15];
+        //let seq = [1002, 1003, 1005, 1007];
         let postings = seq.as_chunks().0.iter().map(|[a, b]| *b - *a).sum::<u32>();
         let (data, _) = encoder.encode(&seq);
         println!("{:064b} {:064b}", data[1], data[0]);
