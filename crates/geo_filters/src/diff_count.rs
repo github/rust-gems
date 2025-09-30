@@ -393,8 +393,6 @@ impl<'a, C: GeoConfig<Diff> + Default> GeoDiffCount<'a, C> {
 /// bitset of the geometric filter: 011010 101101 001010
 /// repeated bit mask             : 110100 110100 110100
 /// masked bitset                 : 010000 100100 000000
-/// after compression             : 01 0   10 1   00 0
-/// bitset of the returned filter :           010 101000
 #[cfg(test)]
 pub(crate) fn masked<C: GeoConfig<Diff>>(
     diff_count: &GeoDiffCount<'_, C>,
@@ -608,8 +606,6 @@ mod tests {
         // bitset of the geometric filter: 011010 101101 001010
         // repeated bit mask             : 110100 110100 110100
         // masked bitset                 : 010000 100100 000000
-        // after compression             : 01 0   10 1   00 0
-        // bitset of the returned filter :           010 101000
         let m = GeoDiffCount7::from_ones([16, 15, 13, 11, 9, 8, 6, 3, 1]);
         let n = masked(&m, 0b110100, 6);
         assert_eq!(n.iter_ones().collect_vec(), vec![16, 11, 8]);
