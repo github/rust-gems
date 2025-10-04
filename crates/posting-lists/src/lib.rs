@@ -31,7 +31,7 @@ impl<'a> TebIterator<'a> {
             let down = (d >> 1).trailing_zeros();
             let end = index + (1 << (level - down));
             unsafe { *self.ranges.get_unchecked_mut(range_idx as usize) = index & !0x80000000};
-            range_idx += (range_idx & 1) ^ b;
+            range_idx += b;
             // let bits = down + 1 + (down != level) as u32;
             let bits = down + 2;
             bit_pos += bits;
@@ -98,8 +98,9 @@ impl Encoder {
         }
     }
 
-    fn encode_till(&mut self, end: u32, flag: bool) {
+    fn encode_till(&mut self, end: u32) {
         let end = end | 0x80000000;
+        let mut first = 1;
         while self.index < end {
             // let level = (self.index | 0x8000000).trailing_zeros();
             let level = (self.index).trailing_zeros();
@@ -113,20 +114,21 @@ impl Encoder {
                 level - down
             };
             if false && level == shift {
-                self.out.push(flag as u32, shift + 1);
+                self.out.push(first, shift + 1);
             } else {
-                self.out.push((2 << shift) | (flag as u32), shift + 2);
+                self.out.push((2 << shift) | first, shift + 2);
             }
+            first = 0;
         }
     }
 
     fn encode(mut self, ranges: &[u32]) -> (Vec<u64>, u32) {
         for [start, end] in ranges.as_chunks().0 {
-            self.encode_till(*start, false);
-            self.encode_till(*end, true);
+            self.encode_till(*start);
+            self.encode_till(*end);
         }
         self.index &= !0x80000000;
-        self.encode_till(1 << 31, false);
+        self.encode_till(1 << 31);
         self.out.finish()
     }
 }
@@ -146,7 +148,7 @@ mod tests {
 
         let mut iter = TebIterator::new(&data);
         iter.decode_batch();
-        assert_eq!(&iter.ranges[..iter.range_idx as usize], &seq);
+        assert_eq!(&iter.ranges[1..iter.range_idx as usize], &seq);
 
         let start = std::time::Instant::now();
         let iterations = 1000000;
