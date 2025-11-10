@@ -22,5 +22,5 @@ bpe = { path = "../../bpe", features = ["rand", "tiktoken"] }
 bpe-openai = { path = "../../bpe-openai" }
 criterion = "0.7"
 rand = "0.9"
-tiktoken-rs = "0.7"
+tiktoken-rs = "0.9"
 tokenizers = { version = "0.22", features = ["http"] }
