@@ -28,9 +28,9 @@ impl BitStream {
 }
 
 pub struct EliasFano {
-    bits_per_value: u32,
-    high_bits: Vec<u64>,
-    low_bits: Vec<u64>,
+    pub(crate) bits_per_value: u32,
+    pub(crate) high_bits: Vec<u64>,
+    pub(crate) low_bits: Vec<u64>,
 }
 
 impl EliasFano {
@@ -71,20 +71,20 @@ impl EliasFano {
 }
 
 pub struct EliasFanoDecoder<'a> {
-    bits_per_value: u32,
-    high_bits: BitReader<'a>,
-    low_bits: BitReader<'a>,
-    value_idx: u32,
-    bit_pos: u32,
-    current_word: u64,
+    pub(crate) bits_per_value: u32,
+    pub(crate) high_bits: BitReader<'a>,
+    pub(crate) low_bits: BitReader<'a>,
+    pub(crate) value_idx: u32,
+    pub(crate) bit_pos: u32,
+    pub(crate) current_word: u64,
 }
 
-struct BitReader<'a> {
+pub(crate) struct BitReader<'a> {
     data: &'a [u64],
 }
 
 impl<'a> BitReader<'a> {
-    fn new(data: &'a [u64]) -> Self {
+    pub(crate) fn new(data: &'a [u64]) -> Self {
         Self { data }
     }
 
@@ -92,11 +92,11 @@ impl<'a> BitReader<'a> {
         self.data[index as usize / 64] & (1 << (index % 64)) != 0
     }
 
-    fn get_word(&self, index: u32) -> u64 {
-        self.data[index as usize]
+    pub(crate) fn get_word(&self, index: u32) -> u64 {
+        unsafe { *self.data.get_unchecked(index as usize) }
     }
 
-    fn get_bits(&self, index: u32, num_bits: u32) -> u32 {
+    pub(crate) fn get_bits(&self, index: u32, num_bits: u32) -> u32 {
         let start = index / 64;
         let end = (index + num_bits) / 64;
         let mut temp = self.data[start as usize] >> (index % 64);
@@ -106,7 +106,7 @@ impl<'a> BitReader<'a> {
         (temp as u32) & !(!0 << num_bits)
     }
 
-    fn len(&self) -> u32 {
+    pub(crate) fn len(&self) -> u32 {
         (self.data.len() * 64) as u32
     }
 }

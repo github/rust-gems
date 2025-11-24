@@ -1,9 +1,9 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use pef::EliasFano;
+use pef::{EFBatchDecoder, EliasFano};
 use rand::prelude::*;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let size = 10_000_000;
+    let size = 100_000;
     
     // Generate random sorted data with clustered gaps using a Markov chain
     let mut data = Vec::with_capacity(size as usize);
@@ -36,6 +36,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             for val in elias_fano.iter() {
                 black_box(val);
+            }
+        })
+    });
+
+    group.bench_function("batch_decode", |b| {
+        let mut buffer = [0u32; 128];
+        b.iter(|| {
+            let mut batch_decoder = EFBatchDecoder::new(&elias_fano);
+            while let Some(count) = batch_decoder.decode_batch(&mut buffer) {
+                black_box(&buffer[..count]);
             }
         })
     });
