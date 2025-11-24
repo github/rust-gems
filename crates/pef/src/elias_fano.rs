@@ -146,17 +146,22 @@ impl<'a> Iterator for EliasFanoDecoder<'a> {
         loop {
             let zeros = current_word.trailing_zeros();
             if zeros < 64 {
-                self.current_word = current_word >> (zeros + 1);
+                current_word >>= zeros;
+                current_word >>= 1;
+                self.current_word = current_word;
                 let bucket_id = bit_pos + zeros - self.value_idx;
                 let value = self.low_bits.get_bits(self.value_idx * self.bits_per_value, self.bits_per_value);
                 self.bit_pos = bit_pos + zeros + 1;
                 self.value_idx += 1;
+                if self.bit_pos & 63 == 0 {
+                    self.bit_pos -= 1;
+                }
                 return Some(value | (bucket_id << self.bits_per_value));
             } else if bit_pos + 64 >= self.high_bits.len() {
                 return None;
             } else {
-                current_word = self.high_bits.get_word(bit_pos / 64 + 1);
-                bit_pos = (bit_pos / 64 + 1) * 64;
+                bit_pos = (bit_pos + 64) & !63;
+                current_word = self.high_bits.get_word(bit_pos / 64);
             }
         }
     }
@@ -183,7 +188,9 @@ impl<'a, I: Iterator<Item = u32>> Iterator for IntersectingIterator<'a, I> {
             loop {
                 let zeros = current_word.trailing_zeros();
                 if zeros < 64 {
-                    self.current_word = current_word >> (zeros + 1);
+                    current_word >>= zeros;
+                    current_word >>= 1;
+                    self.current_word = current_word;
                     let bucket_id = bit_pos + zeros - self.value_idx;
                     // FIXME: subtract value_idx from values everywhere!
                     let lower_bound = (bucket_id << self.bits_per_value); // + self.value_idx;
@@ -265,6 +272,8 @@ fn optimal_bits_per_value(max: u32, len: u32) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
+    use rand::prelude::*;
+
     use super::*;
 
     #[test]
@@ -279,6 +288,24 @@ mod tests {
         for value in data {
             assert_eq!(decoder.next(), Some(value));
         }
+    }
+
+      #[test]
+    fn test_elias_fano_decoder() {
+        let mut rng = StdRng::seed_from_u64(12345);
+        let mut data = Vec::new();
+        let mut current = 0;
+        for _ in 0..1000 {
+            current += (rng.random::<u32>() % 10) + 1;
+            data.push(current);
+        }
+        let max = *data.last().unwrap() + 1;
+        let ef = EliasFano::new(data.iter().copied(), max, data.len() as u32);
+        
+        let decoder = ef.iter();
+        let decoded = decoder.collect::<Vec<_>>();
+        
+        assert_eq!(decoded, data);
     }
 
     #[test]
