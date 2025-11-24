@@ -1,6 +1,6 @@
 [package]
 name = "pef"
-version = "0.1.1"
+version = "0.1.0"
 edition = "2021"
 description = "Partitioned Elias Fano Variation."
 repository = "https://github.com/github/rust-gems"
@@ -15,3 +15,11 @@ bench = false
 [dependencies]
 itertools = "0.14"
 rand = { version = "0.9", optional = true }
+
+[dev-dependencies]
+criterion = "0.5"
+rand = "0.9"
+
+[[bench]]
+name = "elias_fano_bench"
+harness = false

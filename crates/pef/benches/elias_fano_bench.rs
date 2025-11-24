@@ -1,0 +1,46 @@
+use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use pef::EliasFano;
+use rand::prelude::*;
+
+fn criterion_benchmark(c: &mut Criterion) {
+    let size = 10_000_000;
+    
+    // Generate random sorted data with clustered gaps using a Markov chain
+    let mut data = Vec::with_capacity(size as usize);
+    let mut current = 0;
+    let mut rng = StdRng::seed_from_u64(123456789);
+    
+    // State 0: Dense cluster (small gaps, mostly 1)
+    // State 1: Sparse region (larger gaps)
+    let mut state = 0; 
+    
+    for _ in 0..size {
+        let gap = if state == 0 {
+            if rng.random_bool(0.1) { state = 1; } // Transition to sparse
+            if rng.random_bool(0.9) { 1 } else { (rng.random::<u32>() % 5) + 1 }
+        } else {
+            if rng.random_bool(0.1) { state = 0; } // Transition to dense
+            (rng.random::<u32>() % 100) + 1
+        };
+        
+        current += gap;
+        data.push(current);
+    }
+    let max = current + 1;
+
+    let elias_fano = EliasFano::new(data.iter().copied(), max, size);
+
+    let mut group = c.benchmark_group("elias_fano");
+    group.throughput(Throughput::Elements(size as u64));
+    group.bench_function("iter", |b| {
+        b.iter(|| {
+            for val in elias_fano.iter() {
+                black_box(val);
+            }
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(benches, criterion_benchmark);
+criterion_main!(benches);
