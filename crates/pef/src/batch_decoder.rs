@@ -35,7 +35,7 @@ impl<'a> EFBatchDecoder<'a> {
         let mut value_idx = self.value_idx;
         let mut count = 0;
         loop {
-            let current_word =  self.high_bits.get_word_unaligned(bit_pos / 8);
+            let current_word = self.high_bits.get_word_unaligned(bit_pos / 8);
             let total_ones = (current_word >> (bit_pos % 8)).count_ones();
             let ones = total_ones.min((BATCH_SIZE - count) as u32);
             bit_pos = self.process_word_dispatch(ones, current_word, bit_pos, value_idx, count);
@@ -118,7 +118,8 @@ impl<'a> EFBatchDecoder<'a> {
                 .low_bits
                 .get_bits((value_idx + i) * self.bits_per_value, self.bits_per_value);
             unsafe {
-                *self.buffer.get_unchecked_mut(count + i as usize) = low | (bucket_id << self.bits_per_value);
+                *self.buffer.get_unchecked_mut(count + i as usize) =
+                    low | (bucket_id << self.bits_per_value);
             }
         }
         bucket_id + value_idx + N
@@ -136,10 +137,33 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(12345);
         let mut data = Vec::new();
         let mut current = 0;
-        for _ in 0..1000 {
+        /*for _ in 0..32 * 32 {
             current += (rng.random::<u32>() % 10) + 1;
             data.push(current);
+        }*/
+
+        let mut state = 0;
+        for _ in 0..32*32 {
+            let gap = if state == 0 {
+                if rng.random_bool(0.1) {
+                    state = 1;
+                } // Transition to sparse
+                if rng.random_bool(0.9) {
+                    1
+                } else {
+                    (rng.random::<u32>() % 5) + 1
+                }
+            } else {
+                if rng.random_bool(0.1) {
+                    state = 0;
+                } // Transition to dense
+                (rng.random::<u32>() % 100) + 1
+            };
+
+            current += gap;
+            data.push(current);
         }
+
         let max = *data.last().unwrap() + 1;
         let ef = EliasFano::new(data.iter().copied(), max, data.len() as u32);
 
@@ -157,4 +181,3 @@ mod tests {
         assert_eq!(decoded, data);
     }
 }
-
