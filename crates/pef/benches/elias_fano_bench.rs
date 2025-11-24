@@ -41,11 +41,14 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     group.bench_function("batch_decode", |b| {
-        let mut buffer = [0u32; 128];
         b.iter(|| {
             let mut batch_decoder = EFBatchDecoder::new(&elias_fano);
-            while let Some(count) = batch_decoder.decode_batch(&mut buffer) {
-                black_box(&buffer[..count]);
+            loop {
+                let batch = batch_decoder.decode_batch();
+                if batch.is_empty() {
+                    break;
+                }
+                black_box(batch);
             }
         })
     });

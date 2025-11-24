@@ -48,7 +48,7 @@ impl EliasFano {
             let high = value >> bits_per_value;
             let low = value & !(!0 << bits_per_value);
             high_bits.set_bit(high + i as u32);
-            low_bits.set_bits(i as u32, low, bits_per_value);
+            low_bits.set_bits((i as u32) * bits_per_value, low, bits_per_value);
         }
         EliasFano {
             bits_per_value,
@@ -148,7 +148,7 @@ impl<'a> Iterator for EliasFanoDecoder<'a> {
             if zeros < 64 {
                 self.current_word = current_word >> (zeros + 1);
                 let bucket_id = bit_pos + zeros - self.value_idx;
-                let value = self.low_bits.get_bits(self.value_idx, self.bits_per_value);
+                let value = self.low_bits.get_bits(self.value_idx * self.bits_per_value, self.bits_per_value);
                 self.bit_pos = bit_pos + zeros + 1;
                 self.value_idx += 1;
                 return Some(value | (bucket_id << self.bits_per_value));
@@ -196,7 +196,7 @@ impl<'a, I: Iterator<Item = u32>> Iterator for IntersectingIterator<'a, I> {
                         // potential match
                         let value = self
                             .low_bits
-                            .get_bits(self.value_idx - 1, self.bits_per_value);
+                            .get_bits((self.value_idx - 1) * self.bits_per_value, self.bits_per_value);
                         let value = value | (bucket_id << self.bits_per_value);
                         if value == next_value {
                             // found it!
