@@ -1,12 +1,14 @@
 use crate::elias_fano::{BitReader, EliasFano};
 
+const BATCH_SIZE: usize = 8;
+
 pub struct EFBatchDecoder<'a> {
     bits_per_value: u32,
     high_bits: BitReader<'a>,
     low_bits: BitReader<'a>,
     value_idx: u32,
     bit_pos: u32,
-    buffer: [u32; 32],
+    buffer: [u32; BATCH_SIZE],
 }
 
 impl<'a> EFBatchDecoder<'a> {
@@ -18,7 +20,7 @@ impl<'a> EFBatchDecoder<'a> {
             low_bits: BitReader::new(&ef.low_bits),
             value_idx: 0,
             bit_pos: 0,
-            buffer: [0; 32],
+            buffer: [0; BATCH_SIZE],
         }
     }
 
@@ -35,11 +37,11 @@ impl<'a> EFBatchDecoder<'a> {
         loop {
             let current_word =  self.high_bits.get_word_unaligned(bit_pos / 8);
             let total_ones = (current_word >> (bit_pos % 8)).count_ones();
-            let ones = total_ones.min(32 - count as u32);
+            let ones = total_ones.min((BATCH_SIZE - count) as u32);
             bit_pos = self.process_word_dispatch(ones, current_word, bit_pos, value_idx, count);
             value_idx += ones;
             count += ones as usize;
-            if count == 32 {
+            if count == BATCH_SIZE {
                 break;
             }
             if bit_pos >= high_bits_len {
@@ -61,7 +63,7 @@ impl<'a> EFBatchDecoder<'a> {
         count: usize,
     ) -> u32 {
         match ones {
-            0 => (bit_pos + 64) & !63,
+            0 => (bit_pos + 64) & !7,
             1 => self.process_word::<1>(current_word, bit_pos, value_idx, count),
             2 => self.process_word::<2>(current_word, bit_pos, value_idx, count),
             3 => self.process_word::<3>(current_word, bit_pos, value_idx, count),
@@ -70,7 +72,7 @@ impl<'a> EFBatchDecoder<'a> {
             6 => self.process_word::<6>(current_word, bit_pos, value_idx, count),
             7 => self.process_word::<7>(current_word, bit_pos, value_idx, count),
             8 => self.process_word::<8>(current_word, bit_pos, value_idx, count),
-            9 => self.process_word::<9>(current_word, bit_pos, value_idx, count),
+            /*9 => self.process_word::<9>(current_word, bit_pos, value_idx, count),
             10 => self.process_word::<10>(current_word, bit_pos, value_idx, count),
             11 => self.process_word::<11>(current_word, bit_pos, value_idx, count),
             12 => self.process_word::<12>(current_word, bit_pos, value_idx, count),
@@ -93,7 +95,7 @@ impl<'a> EFBatchDecoder<'a> {
             29 => self.process_word::<29>(current_word, bit_pos, value_idx, count),
             30 => self.process_word::<30>(current_word, bit_pos, value_idx, count),
             31 => self.process_word::<31>(current_word, bit_pos, value_idx, count),
-            32 => self.process_word::<32>(current_word, bit_pos, value_idx, count),
+            32 => self.process_word::<32>(current_word, bit_pos, value_idx, count),*/
             _ => unreachable!(),
         }
     }
