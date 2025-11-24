@@ -98,7 +98,7 @@ impl<'a> BitReader<'a> {
 
     pub(crate) fn get_bits(&self, index: u32, num_bits: u32) -> u32 {
         let start = index / 64;
-        let end = (index + num_bits) / 64;
+        let end = (index + num_bits - 1) / 64;
         let mut temp = self.data[start as usize] >> (index % 64);
         if start != end {
             temp |= self.data[(start + 1) as usize] << (64 - (index % 64));

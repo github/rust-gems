@@ -26,7 +26,6 @@ impl<'a> EFBatchDecoder<'a> {
 
     #[inline]
     pub fn decode_batch(&mut self) -> &[u32] {
-        let mut count = 0;
         let mut current_word = self.current_word;
         let mut bit_pos = self.bit_pos;
         let mut value_idx = self.value_idx;
@@ -35,37 +34,38 @@ impl<'a> EFBatchDecoder<'a> {
         let bits_per_value = self.bits_per_value;
         let high_bits_len = self.high_bits.len();
 
-        while count < 32 {
-            let zeros = current_word.trailing_zeros();
-            if zeros < 64 {
-                current_word >>= zeros + 1;
-                let bucket_id = bit_pos + zeros - value_idx;
-                let low = self.low_bits.get_bits(value_idx * bits_per_value, bits_per_value);
-                
-                unsafe { *self.buffer.get_unchecked_mut(count) = low | (bucket_id << bits_per_value) };
-                count += 1;
-                
-                bit_pos += zeros + 1;
-                value_idx += 1;
-
-                if bit_pos % 64 == 0 {
-                    if bit_pos >= high_bits_len {
-                        current_word = 0;
-                        break;
-                    }
-                    current_word = self.high_bits.get_word(bit_pos / 64);
-                }
-            } else {
-                // Skip to next word
+        for count in 0..32 {
+            while current_word == 0 {
                 let next_word_idx = bit_pos / 64 + 1;
                 let next_bit_pos = next_word_idx * 64;
                 
                 if next_bit_pos >= high_bits_len {
-                    current_word = 0;
-                    break;
+                    self.current_word = 0;
+                    self.bit_pos = next_bit_pos;
+                    self.value_idx = value_idx;
+                    return &self.buffer[..count];
                 }
                 current_word = self.high_bits.get_word(next_word_idx);
                 bit_pos = next_bit_pos;
+            }
+
+            let zeros = current_word.trailing_zeros();
+            current_word >>= zeros + 1;
+            
+            let bucket_id = bit_pos + zeros - value_idx;
+            let low = self.low_bits.get_bits(value_idx * bits_per_value, bits_per_value);
+            
+            unsafe { *self.buffer.get_unchecked_mut(count) = low | (bucket_id << bits_per_value) };
+            
+            bit_pos += zeros + 1;
+            value_idx += 1;
+
+            if bit_pos % 64 == 0 {
+                if bit_pos >= high_bits_len {
+                    current_word = 0;
+                } else {
+                    current_word = self.high_bits.get_word(bit_pos / 64);
+                }
             }
         }
 
@@ -73,7 +73,7 @@ impl<'a> EFBatchDecoder<'a> {
         self.bit_pos = bit_pos;
         self.value_idx = value_idx;
         
-        &self.buffer[..count]
+        &self.buffer
     }
 }
 
