@@ -33,8 +33,8 @@ impl<'a> EFBatchDecoder<'a> {
         let mut value_idx = self.value_idx;
         let mut count = 0;
         loop {
-            let current_word =  self.high_bits.get_word(bit_pos / 64);
-            let total_ones = (current_word >> (bit_pos % 64)).count_ones();
+            let current_word =  self.high_bits.get_word_unaligned(bit_pos / 8);
+            let total_ones = (current_word >> (bit_pos % 8)).count_ones();
             let ones = total_ones.min(32 - count as u32);
             bit_pos = self.process_word_dispatch(ones, current_word, bit_pos, value_idx, count);
             value_idx += ones;
@@ -107,7 +107,7 @@ impl<'a> EFBatchDecoder<'a> {
         count: usize,
     ) -> u32 {
         let mut bucket_id = bit_pos - value_idx;
-        current_word >>= bit_pos % 64;
+        current_word >>= bit_pos % 8;
         for i in 0..N {
             let zeros = current_word.trailing_zeros();
             current_word >>= zeros + 1;

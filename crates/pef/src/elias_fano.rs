@@ -96,6 +96,13 @@ impl<'a> BitReader<'a> {
         unsafe { *self.data.get_unchecked(index as usize) }
     }
 
+    pub(crate) fn get_word_unaligned(&self, byte_pos: u32) -> u64 {
+        unsafe {
+            let ptr = self.data.as_ptr() as *const u8;
+            std::ptr::read_unaligned(ptr.add(byte_pos as usize) as *const u64)
+        }
+    }
+
     pub(crate) fn get_bits(&self, index: u32, num_bits: u32) -> u32 {
         let start = index / 64;
         let end = (index + num_bits - 1) / 64;
