@@ -45,6 +45,64 @@ impl<'a, const BITS: u32> AvxBatchDecoder<'a, BITS> {
         }
     }
 
+    #[inline(always)]
+    unsafe fn get_low_bits(&self) -> __m512i {
+        if BITS == 4 {
+            let byte_idx = (self.value_idx / 2) as usize;
+            let nibble_offset = (self.value_idx & 1) as u32; // 0 or 1 (which nibble in the first byte)
+
+            let ptr = self.low_bits.as_ptr() as *const u8;
+            
+            // We need 16 nibbles = 64 bits of data
+            // If nibble_offset == 0, we need exactly 8 bytes
+            // If nibble_offset == 1, we need 8.5 bytes (9 bytes total)
+            // Load 16 bytes to be safe, then combine
+            let w0 = (ptr.add(byte_idx) as *const u64).read_unaligned();
+            let w1 = (ptr.add(byte_idx + 1) as *const u64).read_unaligned();
+            
+            // If nibble_offset == 1, shift right by 4 bits to align
+            // This requires combining bits from w0 and w1
+            let aligned = w0 >> (nibble_offset * 4) | w1 << (8 - nibble_offset * 4);
+            
+            // Now 'aligned' contains 16 nibbles in the lower 64 bits
+            // Put the 8 bytes into a vector
+            let v_bytes = _mm_cvtsi64_si128(aligned as i64);
+            
+            // We need to separate low and high nibbles of each byte
+            // Byte layout: [n1 n0] [n3 n2] [n5 n4] [n7 n6] [n9 n8] [n11 n10] [n13 n12] [n15 n14]
+            // We want: n0, n1, n2, n3, ..., n15
+            
+            // Simpler: mask low nibbles and high nibbles separately, then interleave
+            let mask_0f = _mm_set1_epi8(0x0F);
+            let lo_nibbles = _mm_and_si128(v_bytes, mask_0f);  // n0, n2, n4, n6, n8, n10, n12, n14
+            let hi_nibbles = _mm_and_si128(_mm_srli_epi16(v_bytes, 4), mask_0f); // n1, n3, n5, n7, n9, n11, n13, n15
+            
+            // Interleave: we want n0, n1, n2, n3, ...
+            // unpacklo_epi8 interleaves bytes from lo and hi
+            let interleaved = _mm_unpacklo_epi8(lo_nibbles, hi_nibbles);
+            // Result: n0, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12, n13, n14, n15
+            
+            // Now expand 16 bytes to 16 32-bit integers
+            return _mm512_cvtepu8_epi32(interleaved);
+        }
+
+        let mut low_vals = [0i32; 16];
+        let mut bit_idx = self.value_idx * BITS;
+        for i in 0..16 {
+            // Inline get_bits logic for simplicity and performance
+            let start = bit_idx / 64;
+            let end = (bit_idx + BITS - 1) / 64;
+            let offset = bit_idx % 64;
+            let mut val = self.low_bits.get_unchecked(start as usize) >> offset;
+            if start != end {
+                val |= self.low_bits.get_unchecked((start + 1) as usize) << (64 - offset);
+            }
+            low_vals[i] = (val as u32 & !(!0 << BITS)) as i32;
+            bit_idx += BITS;
+        }
+        _mm512_loadu_si512(low_vals.as_ptr() as *const _)
+    }
+
     /// Decodes a batch of 16 values using AVX-512 instructions.
     ///
     /// # Safety
@@ -148,21 +206,7 @@ impl<'a, const BITS: u32> AvxBatchDecoder<'a, BITS> {
         let high_parts = _mm512_add_epi32(high_parts_base, correction_vec);
 
         // 2. Prepare Low Bits
-        let mut low_vals = [0i32; 16];
-        let mut bit_idx = self.value_idx * BITS;
-        for i in 0..16 {
-            // Inline get_bits logic for simplicity and performance
-            let start = bit_idx / 64;
-            let end = (bit_idx + BITS - 1) / 64;
-            let offset = bit_idx % 64;
-            let mut val = self.low_bits.get_unchecked(start as usize) >> offset;
-            if start != end {
-                val |= self.low_bits.get_unchecked((start + 1) as usize) << (64 - offset);
-            }
-            low_vals[i] = (val as u32 & !(!0 << BITS)) as i32;
-            bit_idx += BITS;
-        }
-        let low_bits_vec = _mm512_loadu_si512(low_vals.as_ptr() as *const _);
+        let low_bits_vec = self.get_low_bits();
 
         // 3. Combine
         let shifted_high = _mm512_slli_epi32(high_parts, BITS);
