@@ -5,9 +5,8 @@ pub struct AvxBatchDecoder<'a> {
     high_bits: &'a [u64],
     low_bits: &'a [u64],
     bits_per_value: u32,
-    current_word: u64,
-    high_idx: usize,
-    value_idx: usize,
+    high_idx: u32,
+    value_idx: u32,
 }
 
 impl<'a> AvxBatchDecoder<'a> {
@@ -16,7 +15,6 @@ impl<'a> AvxBatchDecoder<'a> {
             high_bits: &ef.high_bits,
             low_bits: &ef.low_bits,
             bits_per_value: ef.bits_per_value,
-            current_word: 0,
             high_idx: 0,
             value_idx: 0,
         }
@@ -67,16 +65,39 @@ impl<'a> AvxBatchDecoder<'a> {
         enable = "popcnt"
     )]
     pub unsafe fn decode_batch(&mut self, output: &mut [u32]) -> usize {
-        // Ensure we have a non-zero current word
-        while self.current_word == 0 {
-            if self.high_idx >= self.high_bits.len() {
+        let mut current_word;
+        let mut byte_idx;
+
+        loop {
+            byte_idx = self.high_idx / 8;
+            let bit_offset = self.high_idx % 8;
+            if byte_idx as usize >= self.high_bits.len() * 8 {
                 return 0;
             }
-            self.current_word = *self.high_bits.get_unchecked(self.high_idx);
-            self.high_idx += 1;
+            let ptr = self.high_bits.as_ptr() as *const u8;
+            // Handle potential out-of-bounds read at the very end of the slice
+            if (byte_idx as usize) + 8 > self.high_bits.len() * 8 {
+                let mut word = 0u64;
+                let len = self.high_bits.len() * 8 - byte_idx as usize;
+                std::ptr::copy_nonoverlapping(
+                    ptr.add(byte_idx as usize),
+                    &mut word as *mut u64 as *mut u8,
+                    len,
+                );
+                current_word = word;
+            } else {
+                current_word = ptr.add(byte_idx as usize).cast::<u64>().read_unaligned();
+            }
+            // Clear bits that have already been processed
+            current_word &= !0u64 << bit_offset;
+            if current_word != 0 {
+                break;
+            }
+            // Skip the zeros in this window
+            self.high_idx = (self.high_idx + 64) & !7;
         }
 
-        let k = _popcnt64(self.current_word as i64) as usize;
+        let k = _popcnt64(current_word as i64) as usize;
         let count = k.min(16);
 
         // 1. Prepare High Bits
@@ -85,14 +106,14 @@ impl<'a> AvxBatchDecoder<'a> {
             41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20,
             19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
         );
-        let compressed_indices = _mm512_maskz_compress_epi8(self.current_word, identity);
+        let compressed_indices = _mm512_maskz_compress_epi8(current_word, identity);
         let first_16_indices = _mm512_castsi512_si128(compressed_indices);
         let expanded_indices = _mm512_cvtepu8_epi32(first_16_indices);
 
         // Calculate high parts: (position - rank_in_batch) + correction
         // correction = base_position - global_rank_start
-        // base_position = (high_idx - 1) * 64
-        let base_position = (self.high_idx - 1) as i32 * 64;
+        // base_position = byte_idx * 8
+        let base_position = (byte_idx * 8) as i32;
         let correction = base_position - self.value_idx as i32;
 
         let range_0_15 = _mm512_set_epi32(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
@@ -104,8 +125,8 @@ impl<'a> AvxBatchDecoder<'a> {
 
         // 2. Prepare Low Bits
         let mut low_vals = [0i32; 16];
-        let mut bit_idx = self.value_idx as u32 * self.bits_per_value;
-        for i in 0..count {
+        let mut bit_idx = self.value_idx * self.bits_per_value;
+        for i in 0..16 {
             // Inline get_bits logic for simplicity and performance
             let start = bit_idx / 64;
             let end = (bit_idx + self.bits_per_value - 1) / 64;
@@ -130,7 +151,7 @@ impl<'a> AvxBatchDecoder<'a> {
         output[..count].copy_from_slice(&temp_output[..count]);
 
         // 5. Update State
-        // Find position of the last processed bit to clear bits in current_word
+        // Find position of the last processed bit to update high_idx
         // We want the value at index (count - 1) from compressed_indices.
         // compressed_indices contains byte indices in the lower 128 bits (since count <= 16).
         let lower_128 = _mm512_castsi512_si128(compressed_indices);
@@ -146,10 +167,8 @@ impl<'a> AvxBatchDecoder<'a> {
             (val >> shift) as u32 & 0xFF
         };
 
-        let mask = (!0u64 << 1) << last_pos;
-        self.current_word &= mask;
-
-        self.value_idx += count;
+        self.high_idx = byte_idx * 8 + last_pos + 1;
+        self.value_idx += count as u32;
         count
     }
 }

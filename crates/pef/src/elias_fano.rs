@@ -42,7 +42,8 @@ impl EliasFano {
         // The question is how to store the starting positions of each partition
         // most efficiently...
         let mut high_bits = BitStream::new(((max >> bits_per_value) + 1) + len);
-        let mut low_bits = BitStream::new(bits_per_value * len);
+        // Note: add some buffer, so that we don't have to worry about out-of-bounds reads!
+        let mut low_bits = BitStream::new(bits_per_value * (len + 15));
         for (i, value) in iter.enumerate() {
             assert!(value < max);
             let high = value >> bits_per_value;
