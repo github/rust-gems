@@ -1,20 +1,45 @@
 use crate::elias_fano::EliasFano;
 use std::arch::x86_64::*;
 
-pub struct AvxBatchDecoder<'a> {
+pub trait BatchDecoder {
+    /// Decodes up to 16 values from the Elias-Fano representation.
+    ///
+    /// Updates internal state.
+    /// Writes decoded values to `output` and returns the number of values written.
+    ///
+    /// # Safety
+    /// This function requires AVX-512 features.
+    fn decode_batch(&mut self, output: &mut [u32]) -> usize;
+}
+
+pub fn new_decoder<'a>(ef: &'a EliasFano) -> Box<dyn BatchDecoder + 'a> {
+    macro_rules! dispatch {
+        ($($b:literal),*) => {
+            match ef.bits_per_value {
+                $( $b => Box::new(AvxBatchDecoder::<$b>::new(ef)), )*
+                _ => panic!("Unsupported bits per value: {}", ef.bits_per_value),
+            }
+        }
+    }
+    dispatch!(
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+        25, 26, 27, 28, 29, 30, 31, 32
+    )
+}
+
+pub struct AvxBatchDecoder<'a, const BITS: u32> {
     high_bits: &'a [u64],
     low_bits: &'a [u64],
-    bits_per_value: u32,
     high_idx: u32,
     value_idx: u32,
 }
 
-impl<'a> AvxBatchDecoder<'a> {
+impl<'a, const BITS: u32> AvxBatchDecoder<'a, BITS> {
     pub fn new(ef: &'a EliasFano) -> Self {
+        assert_eq!(ef.bits_per_value, BITS);
         Self {
             high_bits: &ef.high_bits,
             low_bits: &ef.low_bits,
-            bits_per_value: ef.bits_per_value,
             high_idx: 0,
             value_idx: 0,
         }
@@ -25,7 +50,7 @@ impl<'a> AvxBatchDecoder<'a> {
     /// # Safety
     /// This function requires AVX-512F, AVX-512VBMI2, and AVX-512BW features.
     #[target_feature(enable = "avx512f", enable = "avx512vbmi2", enable = "avx512bw")]
-    pub unsafe fn decode(high_bits: u64, low_bits: __m512i, bits_per_value: u32) -> __m512i {
+    pub unsafe fn decode(high_bits: u64, low_bits: __m512i) -> __m512i {
         // Identity indices 0..63 for the byte positions
         let identity = _mm512_set_epi8(
             63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42,
@@ -47,8 +72,7 @@ impl<'a> AvxBatchDecoder<'a> {
         let high_parts = _mm512_sub_epi32(expanded_indices, range_0_15);
 
         // Shift each value by bits_per_value.
-        let shift_count = _mm_cvtsi32_si128(bits_per_value as i32);
-        let shifted_high = _mm512_sll_epi32(high_parts, shift_count);
+        let shifted_high = _mm512_slli_epi32(high_parts, BITS);
 
         // Add the expanded low bits.
         _mm512_add_epi32(shifted_high, low_bits)
@@ -64,7 +88,7 @@ impl<'a> AvxBatchDecoder<'a> {
         enable = "avx512bw",
         enable = "popcnt"
     )]
-    pub unsafe fn decode_batch(&mut self, output: &mut [u32]) -> usize {
+    pub unsafe fn decode_batch_impl(&mut self, output: &mut [u32]) -> usize {
         let mut current_word;
         let mut byte_idx;
 
@@ -125,30 +149,27 @@ impl<'a> AvxBatchDecoder<'a> {
 
         // 2. Prepare Low Bits
         let mut low_vals = [0i32; 16];
-        let mut bit_idx = self.value_idx * self.bits_per_value;
+        let mut bit_idx = self.value_idx * BITS;
         for i in 0..16 {
             // Inline get_bits logic for simplicity and performance
             let start = bit_idx / 64;
-            let end = (bit_idx + self.bits_per_value - 1) / 64;
+            let end = (bit_idx + BITS - 1) / 64;
             let offset = bit_idx % 64;
             let mut val = self.low_bits.get_unchecked(start as usize) >> offset;
             if start != end {
                 val |= self.low_bits.get_unchecked((start + 1) as usize) << (64 - offset);
             }
-            low_vals[i] = (val as u32 & !(!0 << self.bits_per_value)) as i32;
-            bit_idx += self.bits_per_value;
+            low_vals[i] = (val as u32 & !(!0 << BITS)) as i32;
+            bit_idx += BITS;
         }
         let low_bits_vec = _mm512_loadu_si512(low_vals.as_ptr() as *const _);
 
         // 3. Combine
-        let shift_count = _mm_cvtsi32_si128(self.bits_per_value as i32);
-        let shifted_high = _mm512_sll_epi32(high_parts, shift_count);
+        let shifted_high = _mm512_slli_epi32(high_parts, BITS);
         let result_vec = _mm512_add_epi32(shifted_high, low_bits_vec);
 
         // 4. Store Result
-        let mut temp_output = [0u32; 16];
-        _mm512_storeu_si512(temp_output.as_mut_ptr() as *mut _, result_vec);
-        output[..count].copy_from_slice(&temp_output[..count]);
+        _mm512_storeu_si512(output.as_mut_ptr() as *mut _, result_vec);
 
         // 5. Update State
         // Find position of the last processed bit to update high_idx
@@ -170,6 +191,12 @@ impl<'a> AvxBatchDecoder<'a> {
         self.high_idx = byte_idx * 8 + last_pos + 1;
         self.value_idx += count as u32;
         count
+    }
+}
+
+impl<'a, const BITS: u32> BatchDecoder for AvxBatchDecoder<'a, BITS> {
+    fn decode_batch(&mut self, output: &mut [u32]) -> usize {
+        unsafe { self.decode_batch_impl(output) }
     }
 }
 
@@ -201,7 +228,7 @@ mod tests {
             let low_vals: [i32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
             let low_bits = _mm512_loadu_si512(low_vals.as_ptr() as *const _);
 
-            let bits_per_value = 3;
+            const BITS: u32 = 3;
 
             // Calculate expected result
             let mut expected = [0i32; 16];
@@ -209,11 +236,11 @@ mod tests {
                 let p = positions[i];
                 let rank = i as i32;
                 let high_part = (p as i32) - rank;
-                expected[i] = (high_part << bits_per_value) + low_vals[i];
+                expected[i] = (high_part << BITS) + low_vals[i];
             }
 
             // Decode
-            let result_vec = AvxBatchDecoder::<'_>::decode(high_bits, low_bits, bits_per_value);
+            let result_vec = AvxBatchDecoder::<'_, BITS>::decode(high_bits, low_bits);
 
             // Store result
             let mut result = [0i32; 16];
@@ -242,7 +269,7 @@ mod tests {
         let ef = EliasFano::new(data.iter().copied(), max, data.len() as u32);
 
         unsafe {
-            let mut decoder = AvxBatchDecoder::new(&ef);
+            let mut decoder = new_decoder(&ef);
             let mut decoded = Vec::new();
             let mut buffer = [0u32; 16];
 

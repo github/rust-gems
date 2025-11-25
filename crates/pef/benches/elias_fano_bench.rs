@@ -1,28 +1,37 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use pef::{avx_batch_decoder::AvxBatchDecoder, EFBatchDecoder, EliasFano};
+use pef::avx_batch_decoder::{new_decoder, BatchDecoder, AvxBatchDecoder};
+use pef::{EFBatchDecoder, EliasFano};
 use rand::prelude::*;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let size = 100_000;
-    
+
     // Generate random sorted data with clustered gaps using a Markov chain
     let mut data = Vec::with_capacity(size as usize);
     let mut current = 0;
     let mut rng = StdRng::seed_from_u64(123456789);
-    
+
     // State 0: Dense cluster (small gaps, mostly 1)
     // State 1: Sparse region (larger gaps)
-    let mut state = 0; 
-    
+    let mut state = 0;
+
     for _ in 0..size {
         let gap = if state == 0 {
-            if rng.random_bool(0.1) { state = 1; } // Transition to sparse
-            if rng.random_bool(0.9) { 1 } else { (rng.random::<u32>() % 5) + 1 }
+            if rng.random_bool(0.1) {
+                state = 1;
+            } // Transition to sparse
+            if rng.random_bool(0.9) {
+                1
+            } else {
+                (rng.random::<u32>() % 5) + 1
+            }
         } else {
-            if rng.random_bool(0.1) { state = 0; } // Transition to dense
+            if rng.random_bool(0.1) {
+                state = 0;
+            } // Transition to dense
             (rng.random::<u32>() % 100) + 1
         };
-        
+
         current += gap;
         data.push(current);
     }
@@ -41,16 +50,15 @@ fn criterion_benchmark(c: &mut Criterion) {
     {
         group.bench_function("avx_batch_decode", |b| {
             b.iter(|| {
-                unsafe {
-                    let mut decoder = AvxBatchDecoder::new(&elias_fano);
-                    let mut buffer = [0u32; 16];
-                    loop {
-                        let count = decoder.decode_batch(&mut buffer);
-                        if count == 0 {
-                            break;
-                        }
-                        black_box(&buffer[..count]);
+                //let mut decoder = new_decoder(&elias_fano);
+                let mut decoder = AvxBatchDecoder::<4>::new(&elias_fano);
+                let mut buffer = [0u32; 16];
+                loop {
+                    let count = decoder.decode_batch(&mut buffer);
+                    if count == 0 {
+                        break;
                     }
+                    black_box(&buffer[..count]);
                 }
             })
         });
