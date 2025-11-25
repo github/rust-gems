@@ -2,7 +2,7 @@
 name = "pef"
 version = "0.1.0"
 edition = "2021"
-description = "Partitioned Elias Fano Variation."
+description = "Partitioned Elias-Fano Variation."
 repository = "https://github.com/github/rust-gems"
 license = "MIT"
 keywords = ["tokenizer", "algorithm", "encoding", "bpe"]

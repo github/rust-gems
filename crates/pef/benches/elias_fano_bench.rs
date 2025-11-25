@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use pef::{EFBatchDecoder, EliasFano};
+use pef::{avx_batch_decoder::AvxBatchDecoder, EFBatchDecoder, EliasFano};
 use rand::prelude::*;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -32,6 +32,30 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("elias_fano");
     group.throughput(Throughput::Elements(size as u64));
+
+    #[cfg(target_arch = "x86_64")]
+    if std::is_x86_feature_detected!("avx512f")
+        && std::is_x86_feature_detected!("avx512vbmi2")
+        && std::is_x86_feature_detected!("avx512bw")
+        && std::is_x86_feature_detected!("popcnt")
+    {
+        group.bench_function("avx_batch_decode", |b| {
+            b.iter(|| {
+                unsafe {
+                    let mut decoder = AvxBatchDecoder::new(&elias_fano);
+                    let mut buffer = [0u32; 16];
+                    loop {
+                        let count = decoder.decode_batch(&mut buffer);
+                        if count == 0 {
+                            break;
+                        }
+                        black_box(&buffer[..count]);
+                    }
+                }
+            })
+        });
+    }
+
     group.bench_function("iter", |b| {
         b.iter(|| {
             for val in elias_fano.iter() {
@@ -52,6 +76,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             }
         })
     });
+
     group.finish();
 }
 

@@ -278,8 +278,43 @@ fn optimal_bits_per_value(max: u32, len: u32) -> (u32, u32) {
 }
 
 #[cfg(test)]
+pub mod test_utils {
+    use rand::prelude::*;
+
+    pub fn generate_markov_chain_data(len: usize, seed: u64) -> Vec<u32> {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut data = Vec::with_capacity(len);
+        let mut current = 0;
+        let mut state = 0;
+        for _ in 0..len {
+            let gap = if state == 0 {
+                if rng.random_bool(0.1) {
+                    state = 1;
+                } // Transition to sparse
+                if rng.random_bool(0.9) {
+                    1
+                } else {
+                    (rng.random::<u32>() % 5) + 1
+                }
+            } else {
+                if rng.random_bool(0.1) {
+                    state = 0;
+                } // Transition to dense
+                (rng.random::<u32>() % 100) + 1
+            };
+
+            current += gap;
+            data.push(current);
+        }
+        data
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use rand::prelude::*;
+
+    use crate::elias_fano::test_utils::generate_markov_chain_data;
 
     use super::*;
 
@@ -299,13 +334,7 @@ mod tests {
 
       #[test]
     fn test_elias_fano_decoder() {
-        let mut rng = StdRng::seed_from_u64(12345);
-        let mut data = Vec::new();
-        let mut current = 0;
-        for _ in 0..1000 {
-            current += (rng.random::<u32>() % 10) + 1;
-            data.push(current);
-        }
+        let data = generate_markov_chain_data(32 * 32, 12345);
         let max = *data.last().unwrap() + 1;
         let ef = EliasFano::new(data.iter().copied(), max, data.len() as u32);
         
