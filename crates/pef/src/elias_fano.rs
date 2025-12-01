@@ -158,7 +158,9 @@ impl<'a> Iterator for EliasFanoDecoder<'a> {
                 current_word >>= 1;
                 self.current_word = current_word;
                 let bucket_id = bit_pos + zeros - self.value_idx;
-                let value = self.low_bits.get_bits(self.value_idx * self.bits_per_value, self.bits_per_value);
+                let value = self
+                    .low_bits
+                    .get_bits(self.value_idx * self.bits_per_value, self.bits_per_value);
                 self.bit_pos = bit_pos + zeros + 1;
                 self.value_idx += 1;
                 if self.bit_pos & 63 == 0 {
@@ -175,59 +177,53 @@ impl<'a> Iterator for EliasFanoDecoder<'a> {
     }
 }
 
-struct IntersectingIterator<'a, I> {
-    iter: I,
+impl<'a> EliasFanoDecoder<'a> {
+    /// Skips forward to the given target value.
+    /// Returns `Some(value)` if the target exists in the sequence,
+    /// or `Some(next_value)` where `next_value > target` is the next value in the sequence,
+    /// or `None` if there are no more values >= target.
+    pub fn skip_to(&mut self, target: u32) -> Option<u32> {
+        while let Some(value) = self.next() {
+            if value >= target {
+                return Some(value);
+            }
+        }
+        None
+    }
 
-    bits_per_value: u32,
-    high_bits: BitReader<'a>,
-    low_bits: BitReader<'a>,
-    value_idx: u32,
-    bit_pos: u32,
-    current_word: u64,
+    /// Returns an iterator that yields values present in both this sequence
+    /// and the provided iterator. Both must yield values in sorted order.
+    pub fn intersect<I: Iterator<Item = u32>>(self, other: I) -> Intersection<'a, I> {
+        Intersection {
+            ef_decoder: self,
+            other,
+        }
+    }
 }
 
-impl<'a, I: Iterator<Item = u32>> Iterator for IntersectingIterator<'a, I> {
+pub struct Intersection<'a, I> {
+    ef_decoder: EliasFanoDecoder<'a>,
+    other: I,
+}
+
+impl<'a, I: Iterator<Item = u32>> Iterator for Intersection<'a, I> {
     type Item = u32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut current_word = self.current_word;
-        let mut bit_pos = self.bit_pos;
-        while let Some(next_value) = self.iter.next() {
-            loop {
-                let zeros = current_word.trailing_zeros();
-                if zeros < 64 {
-                    current_word >>= zeros;
-                    current_word >>= 1;
-                    self.current_word = current_word;
-                    let bucket_id = bit_pos + zeros - self.value_idx;
-                    // FIXME: subtract value_idx from values everywhere!
-                    let lower_bound = (bucket_id << self.bits_per_value); // + self.value_idx;
-                    let upper_bound = lower_bound + (1 << self.bits_per_value);
-                    bit_pos += zeros + 1;
-                    self.value_idx += 1;
-                    if next_value >= upper_bound {
-                        // keep decoding
-                    } else if next_value >= lower_bound {
-                        // potential match
-                        let value = self
-                            .low_bits
-                            .get_bits((self.value_idx - 1) * self.bits_per_value, self.bits_per_value);
-                        let value = value | (bucket_id << self.bits_per_value);
-                        if value == next_value {
-                            // found it!
-                            self.bit_pos = bit_pos;
-                            return Some(value);
-                        }
-                    } else {
-                        // not found. go to next value.
-                        break;
-                    }
-                } else if bit_pos + 64 >= self.high_bits.len() {
-                    return None;
-                } else {
-                    current_word = self.high_bits.get_word(bit_pos / 64 + 1);
-                    bit_pos = (bit_pos / 64 + 1) * 64;
-                }
+        let mut ef_val = None;
+        while let Some(other_val) = self.other.next() {
+            if Some(other_val) < ef_val {
+                continue;
+            } else if Some(other_val) == ef_val {
+                // Found a match
+                return ef_val;
+            }
+            ef_val = self.ef_decoder.skip_to(other_val);
+            if ef_val == None {
+                return None;
+            } else if ef_val == Some(other_val) {
+                // Found a match
+                return ef_val;
             }
         }
         None
@@ -333,16 +329,106 @@ mod tests {
         }
     }
 
-      #[test]
+    #[test]
     fn test_elias_fano_decoder() {
         let data = generate_markov_chain_data(32 * 32, 12345);
         let max = *data.last().unwrap() + 1;
         let ef = EliasFano::new(data.iter().copied(), max, data.len() as u32);
-        
+
         let decoder = ef.iter();
         let decoded = decoder.collect::<Vec<_>>();
-        
+
         assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_intersect_basic() {
+        let data1 = vec![1, 5, 10, 15, 20, 100, 200, 500];
+        let data2 = vec![2, 5, 10, 12, 20, 50, 200, 300, 500];
+
+        let max = 501;
+        let ef = EliasFano::new(data1.iter().copied(), max, data1.len() as u32);
+
+        let intersection: Vec<u32> = ef.iter().intersect(data2.into_iter()).collect();
+        assert_eq!(intersection, vec![5, 10, 20, 200, 500]);
+    }
+
+    #[test]
+    fn test_intersect_empty_result() {
+        let data1 = vec![1, 3, 5, 7];
+        let data2 = vec![2, 4, 6, 8];
+
+        let max = 10;
+        let ef = EliasFano::new(data1.iter().copied(), max, data1.len() as u32);
+
+        let intersection: Vec<u32> = ef.iter().intersect(data2.into_iter()).collect();
+        assert!(intersection.is_empty());
+    }
+
+    #[test]
+    fn test_intersect_all_match() {
+        let data = vec![1, 5, 10, 15, 20];
+
+        let max = 21;
+        let ef = EliasFano::new(data.iter().copied(), max, data.len() as u32);
+
+        let intersection: Vec<u32> = ef.iter().intersect(data.clone().into_iter()).collect();
+        assert_eq!(intersection, data);
+    }
+
+    #[test]
+    fn test_intersect_two_ef() {
+        let data1 = generate_markov_chain_data(1000, 11111);
+        let data2 = generate_markov_chain_data(500, 22222);
+
+        let max1 = *data1.last().unwrap() + 1;
+        let max2 = *data2.last().unwrap() + 1;
+
+        let ef1 = EliasFano::new(data1.iter().copied(), max1, data1.len() as u32);
+        let ef2 = EliasFano::new(data2.iter().copied(), max2, data2.len() as u32);
+
+        // Compute expected intersection
+        let set1: std::collections::HashSet<u32> = data1.iter().copied().collect();
+        let expected: Vec<u32> = data2.iter().copied().filter(|v| set1.contains(v)).collect();
+
+        let intersection: Vec<u32> = ef1.iter().intersect(ef2.iter()).collect();
+        assert_eq!(intersection, expected);
+    }
+
+    #[test]
+    fn test_intersect_first_empty() {
+        let data1: Vec<u32> = vec![];
+        let data2 = vec![1, 2, 3];
+
+        let max = 10;
+        let ef = EliasFano::new(data1.iter().copied(), max, data1.len() as u32);
+
+        let intersection: Vec<u32> = ef.iter().intersect(data2.into_iter()).collect();
+        assert!(intersection.is_empty());
+    }
+
+    #[test]
+    fn test_intersect_second_empty() {
+        let data1 = vec![1, 2, 3];
+        let data2: Vec<u32> = vec![];
+
+        let max = 10;
+        let ef = EliasFano::new(data1.iter().copied(), max, data1.len() as u32);
+
+        let intersection: Vec<u32> = ef.iter().intersect(data2.into_iter()).collect();
+        assert!(intersection.is_empty());
+    }
+
+    #[test]
+    fn test_intersect_large_gap() {
+        let data1 = vec![1, 1000000];
+        let data2 = vec![1, 500000, 1000000];
+
+        let max = 1000001;
+        let ef = EliasFano::new(data1.iter().copied(), max, data1.len() as u32);
+
+        let intersection: Vec<u32> = ef.iter().intersect(data2.into_iter()).collect();
+        assert_eq!(intersection, vec![1, 1000000]);
     }
 
     #[test]
