@@ -53,6 +53,7 @@ struct Stats {
     total_input_bytes: u64,
     total_ef_bytes: u64,
     total_gef_bytes: u64,
+    total_pef_bytes: u64,
     total_vbyte_bytes: u64,
     total_bp128_bytes: u64,
     total_bp32_bytes: u64,
@@ -93,6 +94,56 @@ fn grouped_elias_fano_bits(postings: &[u32]) -> u32 {
             skiplist.len() as u32,
         )
         .0
+}
+
+/// Compute partitioned Elias-Fano encoding size.
+/// Uses fixed-size partitions (like PISA's PEF implementation).
+/// Each partition stores elements using standard EF relative to partition start.
+/// Partition endpoints are stored in a top-level EF structure.
+fn partitioned_elias_fano_bits(postings: &[u32], partition_size: usize) -> u64 {
+    if postings.is_empty() {
+        return 0;
+    }
+    if postings.len() <= partition_size {
+        // Single partition - just use standard EF
+        return optimal_bits_per_value(
+            postings.last().copied().unwrap_or_default() + 1 - postings.len() as u32,
+            postings.len() as u32,
+        )
+        .0 as u64;
+    }
+
+    let num_partitions = postings.len().div_ceil(partition_size);
+    let mut total_bits: u64 = 0;
+    let mut partition_endpoints = Vec::with_capacity(num_partitions);
+
+    // Encode each partition
+    for (i, chunk) in postings.chunks(partition_size).enumerate() {
+        let base = if i == 0 { 0 } else { postings[i * partition_size - 1] + 1 };
+        let max_in_partition = chunk.last().copied().unwrap_or(base) - base;
+        let n = chunk.len() as u32;
+
+        // Standard EF for this partition: n * (2 + log2(u/n)) where u = max - base + 1
+        let partition_bits = optimal_bits_per_value(max_in_partition + 1 - n, n).0;
+        total_bits += partition_bits as u64;
+
+        // Store endpoint for skip list
+        partition_endpoints.push(*chunk.last().unwrap());
+    }
+
+    // Add skip list overhead (endpoints encoded with EF)
+    let skip_bits = optimal_bits_per_value(
+        partition_endpoints.last().copied().unwrap_or_default() + 1 - num_partitions as u32,
+        num_partitions as u32,
+    )
+    .0;
+    total_bits += skip_bits as u64;
+
+    // Add partition size metadata (log2(partition_size) bits per partition boundary)
+    // In practice, PISA uses fixed sizes so this is minimal
+    total_bits += (num_partitions * 8) as u64; // ~1 byte per partition for metadata
+
+    total_bits
 }
 
 /// Compute bit-packed encoded size for a posting list (d-gaps)
@@ -201,6 +252,10 @@ impl Stats {
         let gef_bits = grouped_elias_fano_bits(postings);
         self.total_gef_bytes += gef_bits.div_ceil(8) as u64;
 
+        // Compute partitioned Elias-Fano encoding size (64 elements per partition)
+        let pef_bits = partitioned_elias_fano_bits(postings, 64);
+        self.total_pef_bytes += pef_bits.div_ceil(8);
+
         // Compute VByte encoding size
         self.total_vbyte_bytes += vbyte_size(postings);
 
@@ -278,6 +333,11 @@ impl Stats {
             self.total_ef_bytes as f64 / 1_000_000.0
         );
         println!(
+            "  Partitioned EF:    {:>10} bytes ({:>6.2} MB)",
+            self.total_pef_bytes,
+            self.total_pef_bytes as f64 / 1_000_000.0
+        );
+        println!(
             "  Grouped EF:        {:>10} bytes ({:>6.2} MB)",
             self.total_gef_bytes,
             self.total_gef_bytes as f64 / 1_000_000.0
@@ -304,11 +364,13 @@ impl Stats {
         let entropy_bytes = (entropy * self.total_postings as f64 / 8.0) as u64;
 
         let ef_ratio = self.total_input_bytes as f64 / self.total_ef_bytes as f64;
+        let pef_ratio = self.total_input_bytes as f64 / self.total_pef_bytes as f64;
         let gef_ratio = self.total_input_bytes as f64 / self.total_gef_bytes as f64;
         let vbyte_ratio = self.total_input_bytes as f64 / self.total_vbyte_bytes as f64;
         let bp128_ratio = self.total_input_bytes as f64 / self.total_bp128_bytes as f64;
         let bp32_ratio = self.total_input_bytes as f64 / self.total_bp32_bytes as f64;
         let ef_bits = (self.total_ef_bytes * 8) as f64 / self.total_postings as f64;
+        let pef_bits = (self.total_pef_bytes * 8) as f64 / self.total_postings as f64;
         let gef_bits = (self.total_gef_bytes * 8) as f64 / self.total_postings as f64;
         let vbyte_bits = (self.total_vbyte_bytes * 8) as f64 / self.total_postings as f64;
         let bp128_bits = (self.total_bp128_bytes * 8) as f64 / self.total_postings as f64;
@@ -325,6 +387,12 @@ impl Stats {
             ef_bits,
             ef_ratio,
             entropy / ef_bits * 100.0
+        );
+        println!(
+            "  Part. EF:  {:>5.2} bits/posting ({:>5.2}x compression, {:.1}% of optimal)",
+            pef_bits,
+            pef_ratio,
+            entropy / pef_bits * 100.0
         );
         println!(
             "  Grouped EF:{:>5.2} bits/posting ({:>5.2}x compression, {:.1}% of optimal)",
