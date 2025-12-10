@@ -20,6 +20,10 @@ rand = { version = "0.9", optional = true }
 criterion = "0.5"
 rand = "0.9"
 
+[[bin]]
+name = "encode_pisa"
+path = "src/bin/encode_pisa.rs"
+
 [[bench]]
 name = "elias_fano_bench"
 harness = false

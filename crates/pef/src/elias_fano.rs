@@ -14,6 +14,9 @@ impl BitStream {
     }
 
     fn set_bits(&mut self, index: u32, value: u32, bits: u32) {
+        if bits == 0 {
+            return;
+        }
         let start = index / 64;
         let end = (index + bits - 1) / 64;
         self.data[start as usize] |= (value as u64) << (index % 64);
@@ -68,6 +71,26 @@ impl EliasFano {
             value_idx: 0,
             bit_pos: 0,
         }
+    }
+
+    /// Returns the number of bits used for encoding low bits of each value.
+    pub fn bits_per_value(&self) -> u32 {
+        self.bits_per_value
+    }
+
+    /// Returns a reference to the high bits data.
+    pub fn high_bits(&self) -> &[u64] {
+        &self.high_bits
+    }
+
+    /// Returns a reference to the low bits data.
+    pub fn low_bits(&self) -> &[u64] {
+        &self.low_bits
+    }
+
+    /// Returns the size in bytes of the encoded data.
+    pub fn size_in_bytes(&self) -> usize {
+        (self.high_bits.len() + self.low_bits.len()) * 8
     }
 }
 
