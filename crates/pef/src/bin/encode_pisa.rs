@@ -48,6 +48,8 @@ struct Stats {
     total_input_bytes: u64,
     total_ef_bytes: u64,
     total_vbyte_bytes: u64,
+    total_bp128_bytes: u64,
+    total_bp32_bytes: u64,
     lists_by_size: [u64; 7], // 1, 2-10, 11-100, 101-1000, 1001-10000, 10001-100000, >100000
 }
 
@@ -71,6 +73,43 @@ fn grouped_elias_fano_bits(postings: &[u32]) -> u32 {
         total += next_bits;
         start = end;
     }
+    total
+}
+
+/// Compute bit-packed encoded size for a posting list (d-gaps)
+/// Packs `group_size` integers at a time with bit-packing.
+/// Each block uses: 1 byte for bit-width + group_size * bit_width / 8 bytes
+/// Leftover integers are stored as raw u32.
+fn bitpacked_size(postings: &[u32], group_size: usize) -> u64 {
+    if postings.is_empty() {
+        return 0;
+    }
+
+    let mut total = 0u64;
+    let mut prev = 0u32;
+    let mut gaps = Vec::with_capacity(postings.len());
+
+    // Compute d-gaps
+    for &doc in postings {
+        gaps.push(doc - prev);
+        prev = doc;
+    }
+
+    // Process blocks of group_size
+    let mut i = 0;
+    while i + group_size <= gaps.len() {
+        let block = &gaps[i..i + group_size];
+        let max_gap = block.iter().copied().max().unwrap_or(0);
+        let bit_width = if max_gap == 0 { 0 } else { 32 - max_gap.leading_zeros() };
+        // 1 byte for bit-width descriptor + packed data
+        total += 1 + (group_size as u64 * bit_width as u64).div_ceil(8);
+        i += group_size;
+    }
+
+    // Leftover integers stored as raw u32
+    let leftover = gaps.len() - i;
+    total += (leftover * 4) as u64;
+
     total
 }
 
@@ -109,6 +148,12 @@ impl Stats {
 
         // Compute VByte encoding size
         self.total_vbyte_bytes += vbyte_size(postings);
+
+        // Compute BP128 encoding size
+        self.total_bp128_bytes += bitpacked_size(postings, 128);
+
+        // Compute BP32 encoding size
+        self.total_bp32_bytes += bitpacked_size(postings, 32);
 
         let bucket = match len {
             1 => 0,
@@ -153,13 +198,29 @@ impl Stats {
             self.total_vbyte_bytes,
             self.total_vbyte_bytes as f64 / 1_000_000.0
         );
+        println!(
+            "  BP128:             {:>10} bytes ({:>6.2} MB)",
+            self.total_bp128_bytes,
+            self.total_bp128_bytes as f64 / 1_000_000.0
+        );
+        println!(
+            "  BP32:              {:>10} bytes ({:>6.2} MB)",
+            self.total_bp32_bytes,
+            self.total_bp32_bytes as f64 / 1_000_000.0
+        );
         println!();
         let ef_ratio = self.total_input_bytes as f64 / self.total_ef_bytes as f64;
         let vbyte_ratio = self.total_input_bytes as f64 / self.total_vbyte_bytes as f64;
+        let bp128_ratio = self.total_input_bytes as f64 / self.total_bp128_bytes as f64;
+        let bp32_ratio = self.total_input_bytes as f64 / self.total_bp32_bytes as f64;
         let ef_bits = (self.total_ef_bytes * 8) as f64 / self.total_postings as f64;
         let vbyte_bits = (self.total_vbyte_bytes * 8) as f64 / self.total_postings as f64;
+        let bp128_bits = (self.total_bp128_bytes * 8) as f64 / self.total_postings as f64;
+        let bp32_bits = (self.total_bp32_bytes * 8) as f64 / self.total_postings as f64;
         println!("Elias-Fano:  {:>5.2}x compression, {:>5.2} bits/posting", ef_ratio, ef_bits);
         println!("VByte:       {:>5.2}x compression, {:>5.2} bits/posting", vbyte_ratio, vbyte_bits);
+        println!("BP128:       {:>5.2}x compression, {:>5.2} bits/posting", bp128_ratio, bp128_bits);
+        println!("BP32:        {:>5.2}x compression, {:>5.2} bits/posting", bp32_ratio, bp32_bits);
     }
 }
 
