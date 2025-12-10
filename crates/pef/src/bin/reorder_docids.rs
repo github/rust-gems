@@ -314,6 +314,84 @@ fn compute_docid_mapping(dfs_order: &[u32]) -> Vec<u32> {
 }
 
 // ============================================================================
+// Sliding Window Refinement
+// ============================================================================
+
+/// Try to improve by swapping adjacent pairs if it reduces cost.
+fn improve_window_adjacent(filters: &[GeoFilter], window: &mut [u32]) -> bool {
+    if window.len() < 3 {
+        return false;
+    }
+    
+    let mut improved = false;
+    
+    // Try swapping adjacent elements (bubble-sort style)
+    for i in 1..window.len() - 1 {
+        // Cost of current arrangement: (i-1,i) + (i,i+1) + (i+1,i+2 if exists)
+        // vs swapped: (i-1,i+1) + (i+1,i) + (i,i+2 if exists)
+        
+        let a = window[i - 1] as usize;
+        let b = window[i] as usize;
+        let c = window[i + 1] as usize;
+        
+        let cost_current = filters[a].size_with_sketch_f32(&filters[b])
+            + filters[b].size_with_sketch_f32(&filters[c]);
+        let cost_swapped = filters[a].size_with_sketch_f32(&filters[c])
+            + filters[c].size_with_sketch_f32(&filters[b]);
+        
+        // Also consider the next pair if it exists
+        if i + 2 < window.len() {
+            let d = window[i + 2] as usize;
+            let cost_current = cost_current + filters[c].size_with_sketch_f32(&filters[d]);
+            let cost_swapped = cost_swapped + filters[b].size_with_sketch_f32(&filters[d]);
+            
+            if cost_swapped < cost_current {
+                window.swap(i, i + 1);
+                improved = true;
+            }
+        } else if cost_swapped < cost_current {
+            window.swap(i, i + 1);
+            improved = true;
+        }
+    }
+    
+    improved
+}
+
+/// Parallel refinement: divide into chunks and refine each chunk using adjacent swaps.
+fn refine_ordering_parallel(filters: &[GeoFilter], order: &mut [u32], window_size: usize) {
+    let n = order.len();
+    if n < window_size {
+        return;
+    }
+    
+    // Multiple passes over the entire array
+    let mut total_improvements = 0;
+    
+    for pass in 1..=10 {
+        let mut improvements = 0u64;
+        
+        // Slide window and try adjacent swaps
+        for start in 0..n.saturating_sub(window_size - 1) {
+            let end = (start + window_size).min(n);
+            if improve_window_adjacent(filters, &mut order[start..end]) {
+                improvements += 1;
+            }
+        }
+        
+        total_improvements += improvements;
+        print!("\r  Pass {}: {} improvements", pass, improvements);
+        std::io::stdout().flush().ok();
+        
+        if improvements == 0 {
+            break;
+        }
+    }
+    
+    println!("\r  Completed with {} total improvements", total_improvements);
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -321,24 +399,29 @@ fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: {} <input.docs> [window_size] [mask_bits]", args[0]);
+        eprintln!("Usage: {} <input.docs> [window_size] [mask_bits] [refine_window]", args[0]);
         eprintln!();
         eprintln!("Reorders document IDs by similarity using MST with masked sorting.");
         eprintln!("Outputs a mapping file next to the input.");
         eprintln!();
         eprintln!("Arguments:");
-        eprintln!("  window_size  - Number of neighbors to consider (default: 32)");
-        eprintln!("  mask_bits    - Number of bits set in masks (default: 3, max: {})", MASK_SIZE);
+        eprintln!("  window_size    - Number of neighbors to consider for MST (default: 32)");
+        eprintln!("  mask_bits      - Number of bits set in masks (default: 3, max: {})", MASK_SIZE);
+        eprintln!("  refine_window  - Window size for local refinement (default: 0 = disabled)");
         std::process::exit(1);
     }
 
     let input_path = &args[1];
     let window_size: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(32);
     let mask_bits: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(3);
+    let refine_window: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
 
     println!("Reading PISA posting lists from: {}", input_path);
     println!("Window size: {}", window_size);
     println!("Mask bits: {} (generates {} masks)", mask_bits, mask_patterns(MASK_SIZE, mask_bits).len());
+    if refine_window > 0 {
+        println!("Refinement window: {}", refine_window);
+    }
 
     let file = File::open(input_path)?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
@@ -404,7 +487,19 @@ fn main() -> std::io::Result<()> {
 
     // Start from document 0 (or the largest document)
     let start_doc = 0u32;
-    let order = dfs_order(&adj, start_doc);
+    let mut order = dfs_order(&adj, start_doc);
+
+    // ========================================================================
+    // Step 3b: Local refinement using sliding window
+    // ========================================================================
+    if refine_window > 0 {
+        println!("\n=== Refining ordering with window size {} ===", refine_window);
+        let start = Instant::now();
+        refine_ordering_parallel(&filters, &mut order, refine_window);
+        let elapsed = start.elapsed();
+        println!("Refinement completed in {:.2}s", elapsed.as_secs_f64());
+    }
+
     let mapping = compute_docid_mapping(&order);
 
     // ========================================================================
