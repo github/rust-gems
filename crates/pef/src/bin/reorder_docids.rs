@@ -317,48 +317,56 @@ fn compute_docid_mapping(dfs_order: &[u32]) -> Vec<u32> {
 // Sliding Window Refinement
 // ============================================================================
 
-/// Try to improve by swapping adjacent pairs if it reduces cost.
-fn improve_window_adjacent(filters: &[GeoFilter], window: &mut [u32]) -> bool {
+/// Compute the cost contribution of an element at position i in the window.
+/// This is the sum of distances to its neighbors (i-1 and i+1 if they exist).
+#[inline]
+fn element_cost(filters: &[GeoFilter], window: &[u32], i: usize) -> f32 {
+    let mut cost = 0.0f32;
+    let doc = window[i] as usize;
+    if i > 0 {
+        cost += filters[window[i - 1] as usize].size_with_sketch_f32(&filters[doc]);
+    }
+    if i + 1 < window.len() {
+        cost += filters[doc].size_with_sketch_f32(&filters[window[i + 1] as usize]);
+    }
+    cost
+}
+
+/// Try to improve by exchanging any pair of elements if it reduces total cost.
+/// This is more thorough than adjacent swaps and can escape local minima.
+fn improve_window_pairwise(filters: &[GeoFilter], window: &mut [u32]) -> bool {
     if window.len() < 3 {
         return false;
     }
     
     let mut improved = false;
     
-    // Try swapping adjacent elements (bubble-sort style)
+    // Try all pairs of positions (not just adjacent)
     for i in 1..window.len() - 1 {
-        // Cost of current arrangement: (i-1,i) + (i,i+1) + (i+1,i+2 if exists)
-        // vs swapped: (i-1,i+1) + (i+1,i) + (i,i+2 if exists)
-        
-        let a = window[i - 1] as usize;
-        let b = window[i] as usize;
-        let c = window[i + 1] as usize;
-        
-        let cost_current = filters[a].size_with_sketch_f32(&filters[b])
-            + filters[b].size_with_sketch_f32(&filters[c]);
-        let cost_swapped = filters[a].size_with_sketch_f32(&filters[c])
-            + filters[c].size_with_sketch_f32(&filters[b]);
-        
-        // Also consider the next pair if it exists
-        if i + 2 < window.len() {
-            let d = window[i + 2] as usize;
-            let cost_current = cost_current + filters[c].size_with_sketch_f32(&filters[d]);
-            let cost_swapped = cost_swapped + filters[b].size_with_sketch_f32(&filters[d]);
+        for j in i + 1..window.len() - 1 {
+            // Compute cost before swap (only affected edges)
+            let cost_before = element_cost(filters, window, i) + element_cost(filters, window, j);
             
-            if cost_swapped < cost_current {
-                window.swap(i, i + 1);
+            // Swap elements
+            window.swap(i, j);
+            
+            // Compute cost after swap
+            let cost_after = element_cost(filters, window, i) + element_cost(filters, window, j);
+            
+            if cost_after < cost_before {
+                // Keep the swap
                 improved = true;
+            } else {
+                // Swap back
+                window.swap(i, j);
             }
-        } else if cost_swapped < cost_current {
-            window.swap(i, i + 1);
-            improved = true;
         }
     }
     
     improved
 }
 
-/// Parallel refinement: divide into chunks and refine each chunk using adjacent swaps.
+/// Parallel refinement: divide into chunks and refine each chunk using pairwise exchange.
 fn refine_ordering_parallel(filters: &[GeoFilter], order: &mut [u32], window_size: usize) {
     let n = order.len();
     if n < window_size {
@@ -371,10 +379,10 @@ fn refine_ordering_parallel(filters: &[GeoFilter], order: &mut [u32], window_siz
     for pass in 1..=10 {
         let mut improvements = 0u64;
         
-        // Slide window and try adjacent swaps
+        // Slide window and try pairwise exchanges
         for start in 0..n.saturating_sub(window_size - 1) {
             let end = (start + window_size).min(n);
-            if improve_window_adjacent(filters, &mut order[start..end]) {
+            if improve_window_pairwise(filters, &mut order[start..end]) {
                 improvements += 1;
             }
         }
