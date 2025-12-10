@@ -15,6 +15,9 @@ bench = false
 [dependencies]
 itertools = "0.14"
 rand = { version = "0.9", optional = true }
+geo_filters = { path = "../geo_filters", optional = true }
+ordered-float = { version = "4", optional = true }
+rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
@@ -23,6 +26,11 @@ rand = "0.9"
 [[bin]]
 name = "encode_pisa"
 path = "src/bin/encode_pisa.rs"
+
+[[bin]]
+name = "reorder_docids"
+path = "src/bin/reorder_docids.rs"
+required-features = ["geo_filters", "ordered-float", "rayon"]
 
 [[bench]]
 name = "elias_fano_bench"
