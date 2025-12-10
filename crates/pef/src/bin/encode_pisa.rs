@@ -11,10 +11,10 @@
 
 use std::env;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::time::Instant;
 
-use pef::EliasFano;
+use pef::optimal_bits_per_value;
 
 /// Read a u32 from a reader (little-endian)
 fn read_u32<R: Read>(reader: &mut R) -> std::io::Result<u32> {
@@ -46,18 +46,69 @@ struct Stats {
     num_lists: u64,
     total_postings: u64,
     total_input_bytes: u64,
-    total_high_bits: u64,
-    total_low_bits: u64,
+    total_ef_bytes: u64,
+    total_vbyte_bytes: u64,
     lists_by_size: [u64; 7], // 1, 2-10, 11-100, 101-1000, 1001-10000, 10001-100000, >100000
 }
 
+fn grouped_elias_fano_bits(postings: &[u32]) -> u32 {
+    let mut start = 0;
+    let mut total = 0;
+    const LIMIT: u32 = 8 * 8;
+    while start < postings.len() {
+        let mut end = start + 1;
+        let mut next_bits = 0;
+        while end < postings.len() {
+            let max = postings[end] - postings[start] + 1;
+            let len = (end - start) as u32;
+            next_bits = 4 + optimal_bits_per_value(max - len, len).0;
+            if next_bits > LIMIT {
+                next_bits = LIMIT;
+                break;
+            }
+            end += 1;
+        }
+        total += next_bits;
+        start = end;
+    }
+    total
+}
+
+/// Compute VByte encoded size for a posting list (d-gaps)
+fn vbyte_size(postings: &[u32]) -> u64 {
+    if postings.is_empty() {
+        return 0;
+    }
+    let mut total = 0u64;
+    let mut prev = 0u32;
+    for &doc in postings {
+        let gap = doc - prev;
+        prev = doc;
+        // VByte: 7 bits per byte, continue bit in MSB
+        total += match gap {
+            0..=127 => 1,
+            128..=16383 => 2,
+            16384..=2097151 => 3,
+            2097152..=268435455 => 4,
+            _ => 5,
+        };
+    }
+    total
+}
+
 impl Stats {
-    fn add_list(&mut self, len: usize, ef: &EliasFano) {
+    fn add_list(&mut self, postings: &[u32]) {
+        let len = postings.len();
         self.num_lists += 1;
         self.total_postings += len as u64;
         self.total_input_bytes += (len * 4) as u64;
-        self.total_high_bits += (ef.high_bits().len() * 8) as u64;
-        self.total_low_bits += (ef.low_bits().len() * 8) as u64;
+
+        // Compute Elias-Fano encoding size
+        let ef_bits = grouped_elias_fano_bits(postings);
+        self.total_ef_bytes += ef_bits.div_ceil(8) as u64;
+
+        // Compute VByte encoding size
+        self.total_vbyte_bytes += vbyte_size(postings);
 
         let bucket = match len {
             1 => 0,
@@ -77,7 +128,9 @@ impl Stats {
         println!("Total postings:      {:>12}", self.total_postings);
         println!();
         println!("List size distribution:");
-        let buckets = ["1", "2-10", "11-100", "101-1K", "1K-10K", "10K-100K", ">100K"];
+        let buckets = [
+            "1", "2-10", "11-100", "101-1K", "1K-10K", "10K-100K", ">100K",
+        ];
         for (i, &name) in buckets.iter().enumerate() {
             let count = self.lists_by_size[i];
             let pct = 100.0 * count as f64 / self.num_lists as f64;
@@ -90,27 +143,23 @@ impl Stats {
             self.total_input_bytes,
             self.total_input_bytes as f64 / 1_000_000.0
         );
-        let ef_total = self.total_high_bits + self.total_low_bits;
         println!(
-            "  EF high bits:      {:>10} bytes ({:>6.2} MB)",
-            self.total_high_bits,
-            self.total_high_bits as f64 / 1_000_000.0
+            "  Elias-Fano:        {:>10} bytes ({:>6.2} MB)",
+            self.total_ef_bytes,
+            self.total_ef_bytes as f64 / 1_000_000.0
         );
         println!(
-            "  EF low bits:       {:>10} bytes ({:>6.2} MB)",
-            self.total_low_bits,
-            self.total_low_bits as f64 / 1_000_000.0
-        );
-        println!(
-            "  EF total:          {:>10} bytes ({:>6.2} MB)",
-            ef_total,
-            ef_total as f64 / 1_000_000.0
+            "  VByte:             {:>10} bytes ({:>6.2} MB)",
+            self.total_vbyte_bytes,
+            self.total_vbyte_bytes as f64 / 1_000_000.0
         );
         println!();
-        let compression_ratio = self.total_input_bytes as f64 / ef_total as f64;
-        let bits_per_posting = (ef_total * 8) as f64 / self.total_postings as f64;
-        println!("Compression ratio:   {:>10.2}x", compression_ratio);
-        println!("Bits per posting:    {:>10.2}", bits_per_posting);
+        let ef_ratio = self.total_input_bytes as f64 / self.total_ef_bytes as f64;
+        let vbyte_ratio = self.total_input_bytes as f64 / self.total_vbyte_bytes as f64;
+        let ef_bits = (self.total_ef_bytes * 8) as f64 / self.total_postings as f64;
+        let vbyte_bits = (self.total_vbyte_bytes * 8) as f64 / self.total_postings as f64;
+        println!("Elias-Fano:  {:>5.2}x compression, {:>5.2} bits/posting", ef_ratio, ef_bits);
+        println!("VByte:       {:>5.2}x compression, {:>5.2} bits/posting", vbyte_ratio, vbyte_bits);
     }
 }
 
@@ -118,21 +167,13 @@ fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: {} <input.docs> [--output <output.ef>]", args[0]);
+        eprintln!("Usage: {} <input.docs>", args[0]);
         eprintln!();
         eprintln!("Encodes PISA posting lists with Elias-Fano encoding.");
-        eprintln!();
-        eprintln!("Options:");
-        eprintln!("  --output <file>  Write encoded data to file (optional)");
         std::process::exit(1);
     }
 
     let input_path = &args[1];
-    let output_path = args
-        .iter()
-        .position(|x| x == "--output")
-        .map(|i| args.get(i + 1))
-        .flatten();
 
     println!("Reading PISA posting lists from: {}", input_path);
 
@@ -146,7 +187,6 @@ fn main() -> std::io::Result<()> {
     println!("Number of documents: {}", header2);
 
     let mut stats = Stats::default();
-    let mut encoded_data: Vec<EliasFano> = Vec::new();
 
     let start = Instant::now();
     let mut last_report = Instant::now();
@@ -157,19 +197,9 @@ fn main() -> std::io::Result<()> {
             continue;
         }
 
-        // PISA format stores absolute doc IDs (already sorted)
-        // The max value is the last ID (since they're sorted)
-        // Add 1 because EliasFano expects exclusive max
-        let max = postings.last().copied().unwrap_or(0) + 1;
-        let len = postings.len() as u32;
-
         // Encode with Elias-Fano
-        let ef = EliasFano::new(postings.iter().copied(), max, len);
-        stats.add_list(postings.len(), &ef);
-
-        if output_path.is_some() {
-            encoded_data.push(ef);
-        }
+        // let ef = EliasFano::new(postings.iter().copied(), max, len);
+        stats.add_list(&postings);
 
         // Progress report every second
         if last_report.elapsed().as_secs() >= 1 {
@@ -191,35 +221,6 @@ fn main() -> std::io::Result<()> {
     );
 
     stats.print();
-
-    // Optionally write encoded data
-    if let Some(output) = output_path {
-        println!("\nWriting encoded data to: {}", output);
-        let file = File::create(output)?;
-        let mut writer = BufWriter::new(file);
-
-        // Simple format: for each posting list:
-        // - u32: bits_per_value
-        // - u32: high_bits length (in u64s)
-        // - u32: low_bits length (in u64s)
-        // - high_bits data
-        // - low_bits data
-
-        for ef in &encoded_data {
-            writer.write_all(&ef.bits_per_value().to_le_bytes())?;
-            writer.write_all(&(ef.high_bits().len() as u32).to_le_bytes())?;
-            writer.write_all(&(ef.low_bits().len() as u32).to_le_bytes())?;
-            for &word in ef.high_bits() {
-                writer.write_all(&word.to_le_bytes())?;
-            }
-            for &word in ef.low_bits() {
-                writer.write_all(&word.to_le_bytes())?;
-            }
-        }
-
-        writer.flush()?;
-        println!("Done!");
-    }
 
     Ok(())
 }

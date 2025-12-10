@@ -286,7 +286,7 @@ impl<'a, I: Iterator<Item = u32>> Iterator for Intersection<'a, I> {
 
 // TODO: Implement test presence of a value. This requires the rank/select stuff...
 //
-fn optimal_bits_per_value(max: u32, len: u32) -> (u32, u32) {
+pub fn optimal_bits_per_value(max: u32, len: u32) -> (u32, u32) {
     let mut best_cost = (u32::MAX, 0);
     for bits in 0..32 {
         let cost = bits * len as u32 + ((max >> bits) + 1) + len;
