@@ -74,6 +74,7 @@ fn grouped_elias_fano_bits(postings: &[u32]) -> u32 {
         let mut end = start + 1;
         let mut next_bits = 0;
         while end < postings.len() {
+            offset = postings[start];
             let max = postings[end] - offset + 1;
             let len = (end - start) as u32;
             next_bits = 4 + optimal_bits_per_value(max - len, len).0;
@@ -116,10 +117,15 @@ fn partitioned_elias_fano_bits(postings: &[u32], partition_size: usize) -> u64 {
     let num_partitions = postings.len().div_ceil(partition_size);
     let mut total_bits: u64 = 0;
     let mut partition_endpoints = Vec::with_capacity(num_partitions);
+    let mut bit_endpoints = Vec::with_capacity(num_partitions);
 
     // Encode each partition
     for (i, chunk) in postings.chunks(partition_size).enumerate() {
-        let base = if i == 0 { 0 } else { postings[i * partition_size - 1] + 1 };
+        let base = if i == 0 {
+            0
+        } else {
+            postings[i * partition_size - 1] + 1
+        };
         let max_in_partition = chunk.last().copied().unwrap_or(base) - base;
         let n = chunk.len() as u32;
 
@@ -129,6 +135,7 @@ fn partitioned_elias_fano_bits(postings: &[u32], partition_size: usize) -> u64 {
 
         // Store endpoint for skip list
         partition_endpoints.push(*chunk.last().unwrap());
+        bit_endpoints.push(total_bits as u32);
     }
 
     // Add skip list overhead (endpoints encoded with EF)
@@ -138,6 +145,12 @@ fn partitioned_elias_fano_bits(postings: &[u32], partition_size: usize) -> u64 {
     )
     .0;
     total_bits += skip_bits as u64;
+    let offset_bits = optimal_bits_per_value(
+        bit_endpoints.last().copied().unwrap_or_default() + 1 - num_partitions as u32,
+        num_partitions as u32,
+    )
+    .0;
+    total_bits += offset_bits as u64;
 
     // Add partition size metadata (log2(partition_size) bits per partition boundary)
     // In practice, PISA uses fixed sizes so this is minimal
