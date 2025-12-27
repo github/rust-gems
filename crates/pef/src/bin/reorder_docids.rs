@@ -17,15 +17,15 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Instant;
 
-use geo_filters::diff_count::GeoDiffCount7;
+use geo_filters::diff_count::GeoDiffCount13;
 use geo_filters::Count;
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 
-type GeoFilter = GeoDiffCount7<'static>;
+type GeoFilter = GeoDiffCount13<'static>;
 
 /// Mask size for GeoDiffConfig7 (7 bits)
-const MASK_SIZE: usize = 7;
+const MASK_SIZE: usize = 13;
 
 /// Read a u32 from a reader (little-endian)
 fn read_u32<R: Read>(reader: &mut R) -> std::io::Result<u32> {
@@ -130,14 +130,10 @@ fn build_mst(size: usize, mut edges: Vec<Edge>) -> Vec<Edge> {
 
 /// Create edges between documents within a sliding window after sorting.
 /// Uses the optimized approach: pre-allocate and write in parallel.
-fn create_edges_in_window(
-    filters: &[GeoFilter],
-    sorted: &[u32],
-    window_size: usize,
-) -> Vec<Edge> {
+fn create_edges_in_window(filters: &[GeoFilter], sorted: &[u32], window_size: usize) -> Vec<Edge> {
     let len = sorted.len() * window_size;
     let mut edges = Vec::<Edge>::with_capacity(len);
-    
+
     // Use spare_capacity_mut to avoid initializing edges we'll overwrite
     edges.spare_capacity_mut()[..len]
         .par_iter_mut()
@@ -152,7 +148,7 @@ fn create_edges_in_window(
             let cost = a.size_with_sketch_f32(b).into();
             edge.write(Edge { from, to, cost });
         });
-    
+
     unsafe {
         edges.set_len(len);
     }
@@ -189,7 +185,7 @@ where
 {
     let next = AtomicUsize::new(0);
     let results = std::sync::Mutex::new(vec![R::default(); indices.len()]);
-    
+
     rayon::scope(|scope| {
         for _ in 0..parallelism {
             scope.spawn(|_| loop {
@@ -202,7 +198,7 @@ where
             });
         }
     });
-    
+
     results.into_inner().unwrap()
 }
 
@@ -214,24 +210,20 @@ fn compute_multiple_approximate_msts(
     window_size: usize,
 ) -> Vec<Vec<Edge>> {
     let indices: Vec<usize> = (0..masks.len()).collect();
-    
+
     parallelise(
         |idx| {
             let mask = masks[idx];
-            
+
             // Sort documents by masked filter comparison
             let mut sorted: Vec<u32> = (0..filters.len() as u32).collect();
             sorted.par_sort_unstable_by(|&a, &b| {
-                filters[a as usize].cmp_masked(
-                    &filters[b as usize],
-                    mask as u64,
-                    MASK_SIZE,
-                )
+                filters[a as usize].cmp_masked(&filters[b as usize], mask as u64, MASK_SIZE)
             });
-            
+
             // Create edges in window
             let edges = create_edges_in_window(filters, &sorted, window_size);
-            
+
             // Build MST for this projection
             build_mst(filters.len(), edges)
         },
@@ -248,11 +240,19 @@ fn compute_approximate_mst(
 ) -> Vec<Edge> {
     // Generate all mask patterns with num_mask_bits/2 bits set
     let masks = mask_patterns(MASK_SIZE, num_mask_bits);
-    println!("  Using {} mask patterns with {} bits set...", masks.len(), num_mask_bits);
-    
-    println!("  Computing {} approximate MSTs with window size {}...", masks.len(), window_size);
+    println!(
+        "  Using {} mask patterns with {} bits set...",
+        masks.len(),
+        num_mask_bits
+    );
+
+    println!(
+        "  Computing {} approximate MSTs with window size {}...",
+        masks.len(),
+        window_size
+    );
     let msts = compute_multiple_approximate_msts(filters, &masks, window_size);
-    
+
     println!("  Merging {} MSTs...", msts.len());
     merge_msts(filters.len(), msts)
 }
@@ -273,23 +273,23 @@ fn mst_to_adjacency(num_nodes: usize, mst: &[Edge]) -> Vec<Vec<u32>> {
 
 /// DFS traversal of the MST to produce document ordering.
 /// Documents visited close together in DFS order are similar.
-fn dfs_order(adj: &[Vec<u32>], start: u32) -> Vec<u32> {
+fn dfs_order(adj: &[Vec<u32>], start: u32) -> Vec<(u32, u32)> {
     let n = adj.len();
     let mut visited = vec![false; n];
     let mut order = Vec::with_capacity(n);
-    let mut stack = vec![start];
+    let mut stack = vec![(start, start)];
 
-    while let Some(node) = stack.pop() {
+    while let Some((node, parent)) = stack.pop() {
         if visited[node as usize] {
             continue;
         }
         visited[node as usize] = true;
-        order.push(node);
+        order.push((node, parent));
 
         // Add neighbors in reverse order so they're visited in forward order
         for &neighbor in adj[node as usize].iter().rev() {
             if !visited[neighbor as usize] {
-                stack.push(neighbor);
+                stack.push((neighbor, node));
             }
         }
     }
@@ -297,106 +297,11 @@ fn dfs_order(adj: &[Vec<u32>], start: u32) -> Vec<u32> {
     // Handle disconnected components (shouldn't happen with proper MST)
     for i in 0..n {
         if !visited[i] {
-            order.push(i as u32);
+            order.push((i as u32, i as u32));
         }
     }
 
     order
-}
-
-/// Compute the mapping from old doc IDs to new doc IDs.
-fn compute_docid_mapping(dfs_order: &[u32]) -> Vec<u32> {
-    let mut mapping = vec![0u32; dfs_order.len()];
-    for (new_id, &old_id) in dfs_order.iter().enumerate() {
-        mapping[old_id as usize] = new_id as u32;
-    }
-    mapping
-}
-
-// ============================================================================
-// Sliding Window Refinement
-// ============================================================================
-
-/// Compute the cost contribution of an element at position i in the window.
-/// This is the sum of distances to its neighbors (i-1 and i+1 if they exist).
-#[inline]
-fn element_cost(filters: &[GeoFilter], window: &[u32], i: usize) -> f32 {
-    let mut cost = 0.0f32;
-    let doc = window[i] as usize;
-    if i > 0 {
-        cost += filters[window[i - 1] as usize].size_with_sketch_f32(&filters[doc]);
-    }
-    if i + 1 < window.len() {
-        cost += filters[doc].size_with_sketch_f32(&filters[window[i + 1] as usize]);
-    }
-    cost
-}
-
-/// Try to improve by exchanging any pair of elements if it reduces total cost.
-/// This is more thorough than adjacent swaps and can escape local minima.
-fn improve_window_pairwise(filters: &[GeoFilter], window: &mut [u32]) -> bool {
-    if window.len() < 3 {
-        return false;
-    }
-    
-    let mut improved = false;
-    
-    // Try all pairs of positions (not just adjacent)
-    for i in 1..window.len() - 1 {
-        for j in i + 1..window.len() - 1 {
-            // Compute cost before swap (only affected edges)
-            let cost_before = element_cost(filters, window, i) + element_cost(filters, window, j);
-            
-            // Swap elements
-            window.swap(i, j);
-            
-            // Compute cost after swap
-            let cost_after = element_cost(filters, window, i) + element_cost(filters, window, j);
-            
-            if cost_after < cost_before {
-                // Keep the swap
-                improved = true;
-            } else {
-                // Swap back
-                window.swap(i, j);
-            }
-        }
-    }
-    
-    improved
-}
-
-/// Parallel refinement: divide into chunks and refine each chunk using pairwise exchange.
-fn refine_ordering_parallel(filters: &[GeoFilter], order: &mut [u32], window_size: usize) {
-    let n = order.len();
-    if n < window_size {
-        return;
-    }
-    
-    // Multiple passes over the entire array
-    let mut total_improvements = 0;
-    
-    for pass in 1..=10 {
-        let mut improvements = 0u64;
-        
-        // Slide window and try pairwise exchanges
-        for start in 0..n.saturating_sub(window_size - 1) {
-            let end = (start + window_size).min(n);
-            if improve_window_pairwise(filters, &mut order[start..end]) {
-                improvements += 1;
-            }
-        }
-        
-        total_improvements += improvements;
-        print!("\r  Pass {}: {} improvements", pass, improvements);
-        std::io::stdout().flush().ok();
-        
-        if improvements == 0 {
-            break;
-        }
-    }
-    
-    println!("\r  Completed with {} total improvements", total_improvements);
 }
 
 // ============================================================================
@@ -407,14 +312,20 @@ fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: {} <input.docs> [window_size] [mask_bits] [refine_window]", args[0]);
+        eprintln!(
+            "Usage: {} <input.docs> [window_size] [mask_bits] [refine_window]",
+            args[0]
+        );
         eprintln!();
         eprintln!("Reorders document IDs by similarity using MST with masked sorting.");
         eprintln!("Outputs a mapping file next to the input.");
         eprintln!();
         eprintln!("Arguments:");
         eprintln!("  window_size    - Number of neighbors to consider for MST (default: 32)");
-        eprintln!("  mask_bits      - Number of bits set in masks (default: 3, max: {})", MASK_SIZE);
+        eprintln!(
+            "  mask_bits      - Number of bits set in masks (default: 3, max: {})",
+            MASK_SIZE
+        );
         eprintln!("  refine_window  - Window size for local refinement (default: 0 = disabled)");
         std::process::exit(1);
     }
@@ -426,7 +337,11 @@ fn main() -> std::io::Result<()> {
 
     println!("Reading PISA posting lists from: {}", input_path);
     println!("Window size: {}", window_size);
-    println!("Mask bits: {} (generates {} masks)", mask_bits, mask_patterns(MASK_SIZE, mask_bits).len());
+    println!(
+        "Mask bits: {} (generates {} masks)",
+        mask_bits,
+        mask_patterns(MASK_SIZE, mask_bits).len()
+    );
     if refine_window > 0 {
         println!("Refinement window: {}", refine_window);
     }
@@ -445,9 +360,7 @@ fn main() -> std::io::Result<()> {
     // Step 1: Build geometric filters for each document
     // ========================================================================
     println!("\n=== Building document filters ===");
-    let mut filters: Vec<GeoFilter> = (0..num_documents)
-        .map(|_| GeoFilter::default())
-        .collect();
+    let mut filters: Vec<GeoFilter> = (0..num_documents).map(|_| GeoFilter::default()).collect();
 
     let start = Instant::now();
     let mut last_report = Instant::now();
@@ -458,7 +371,6 @@ fn main() -> std::io::Result<()> {
         for &doc_id in &postings {
             filters[doc_id as usize].push(term_id);
         }
-
         total_postings += postings.len() as u64;
         term_id += 1;
 
@@ -475,7 +387,9 @@ fn main() -> std::io::Result<()> {
     let elapsed = start.elapsed();
     println!(
         "\rProcessed {:>10} terms, {:>12} postings in {:.2}s",
-        term_id, total_postings, elapsed.as_secs_f64()
+        term_id,
+        total_postings,
+        elapsed.as_secs_f64()
     );
 
     // ========================================================================
@@ -485,7 +399,11 @@ fn main() -> std::io::Result<()> {
     let start = Instant::now();
     let mst = compute_approximate_mst(&filters, window_size, mask_bits);
     let elapsed = start.elapsed();
-    println!("MST computed in {:.2}s ({} edges)", elapsed.as_secs_f64(), mst.len());
+    println!(
+        "MST computed in {:.2}s ({} edges)",
+        elapsed.as_secs_f64(),
+        mst.len()
+    );
 
     // ========================================================================
     // Step 3: DFS traversal to get document ordering
@@ -495,33 +413,21 @@ fn main() -> std::io::Result<()> {
 
     // Start from document 0 (or the largest document)
     let start_doc = 0u32;
-    let mut order = dfs_order(&adj, start_doc);
+    let order = dfs_order(&adj, start_doc);
 
     // ========================================================================
-    // Step 3b: Local refinement using sliding window
+    // Step 4: Write reordering to file
     // ========================================================================
-    if refine_window > 0 {
-        println!("\n=== Refining ordering with window size {} ===", refine_window);
-        let start = Instant::now();
-        refine_ordering_parallel(&filters, &mut order, refine_window);
-        let elapsed = start.elapsed();
-        println!("Refinement completed in {:.2}s", elapsed.as_secs_f64());
-    }
-
-    let mapping = compute_docid_mapping(&order);
-
-    // ========================================================================
-    // Step 4: Write mapping to file
-    // ========================================================================
-    let output_path = Path::new(input_path).with_extension("docid_mapping");
-    println!("\n=== Writing mapping to {} ===", output_path.display());
+    let output_path = Path::new(input_path).with_extension("docid_reordering");
+    println!("\n=== Writing reordering to {} ===", output_path.display());
 
     let output_file = File::create(&output_path)?;
     let mut writer = BufWriter::new(output_file);
 
-    // Write as binary: array of u32 where mapping[old_id] = new_id
-    for &new_id in &mapping {
-        writer.write_all(&new_id.to_le_bytes())?;
+    // Write as binary: array of (doc_id, parent_id)
+    for &(doc_id, parent_id) in &order {
+        writer.write_all(&doc_id.to_le_bytes())?;
+        writer.write_all(&parent_id.to_le_bytes())?;
     }
     writer.flush()?;
 
@@ -539,11 +445,15 @@ fn main() -> std::io::Result<()> {
     println!("Total documents:     {:>12}", num_documents);
     println!("MST edges:           {:>12}", mst.len());
 
-    // Sample some mappings
-    println!("\nSample mappings (old -> new):");
-    for old_id in [0, 1, 100, 1000, 10000, 100000, 500000].iter() {
-        if (*old_id as usize) < num_documents {
-            println!("  Doc {:>6} -> {:>6}", old_id, mapping[*old_id as usize]);
+    // Sample some reorderings
+    println!("\nSample reordering (index -> doc_id, parent_id):");
+    for i in [0, 1, 100, 1000, 10000, 100000, 500000].iter() {
+        if (*i as usize) < order.len() {
+            let (doc_id, parent_id) = order[*i as usize];
+            println!(
+                "  Index {:>6} -> Doc {:>6} (Parent {:>6})",
+                i, doc_id, parent_id
+            );
         }
     }
 
@@ -551,8 +461,16 @@ fn main() -> std::io::Result<()> {
     let mst_sum: f64 = mst.iter().map(|e| e.cost.0 as f64).sum();
     if !mst.is_empty() {
         let avg_cost = mst_sum / mst.len() as f64;
-        let min_cost = mst.iter().map(|e| e.cost.0).min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(0.0);
-        let max_cost = mst.iter().map(|e| e.cost.0).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(0.0);
+        let min_cost = mst
+            .iter()
+            .map(|e| e.cost.0)
+            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.0);
+        let max_cost = mst
+            .iter()
+            .map(|e| e.cost.0)
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.0);
         println!("\nMST edge costs:");
         println!("  Sum:     {:>15.2}", mst_sum);
         println!("  Min:     {:>15.2}", min_cost);
@@ -577,8 +495,8 @@ fn main() -> std::io::Result<()> {
     let sum_after: f64 = (0..order.len() - 1)
         .into_par_iter()
         .map(|i| {
-            let doc_a = order[i] as usize;
-            let doc_b = order[i + 1] as usize;
+            let doc_a = order[i].0 as usize;
+            let doc_b = order[i + 1].0 as usize;
             filters[doc_a].size_with_sketch_f32(&filters[doc_b]) as f64
         })
         .sum();

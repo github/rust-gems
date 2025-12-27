@@ -77,17 +77,19 @@ fn grouped_elias_fano_bits(postings: &[u32]) -> u32 {
             offset = postings[start];
             let max = postings[end] - offset + 1;
             let len = (end - start) as u32;
-            next_bits = 4 + optimal_bits_per_value(max - len, len).0;
+            next_bits = 5 + optimal_bits_per_value(max - len, len).0;
             if next_bits > LIMIT {
                 next_bits = LIMIT;
                 break;
             }
             end += 1;
         }
-        offset = postings[end - 1];
-        total += next_bits;
+        total += next_bits.div_ceil(8) * 8;
         start = end;
-        skiplist.push(offset);
+        if end < postings.len() {
+            offset = postings[end];
+            skiplist.push(offset);
+        }
     }
     total
         + optimal_bits_per_value(
@@ -222,28 +224,107 @@ fn vbyte_size(postings: &[u32]) -> u64 {
     total
 }
 
-/// Load a docid mapping file (binary array of u32)
-fn load_mapping<P: AsRef<Path>>(path: P) -> std::io::Result<Vec<u32>> {
+/// Load a docid mapping file (binary array of (doc_id, parent_id))
+/// Returns (old_to_new, subtree_ends)
+fn load_mapping<P: AsRef<Path>>(path: P) -> std::io::Result<(Vec<u32>, Vec<u32>)> {
     let file = File::open(path)?;
     let file_len = file.metadata()?.len() as usize;
-    let num_docs = file_len / 4;
+    let num_docs = file_len / 8; // 2 * u32
 
     let mut reader = BufReader::new(file);
-    let mut mapping = vec![0u32; num_docs];
+    let mut old_to_new = vec![0u32; num_docs];
+    let mut parents = vec![0u32; num_docs];
 
-    for m in &mut mapping {
-        *m = read_u32(&mut reader)?;
+    // Read mapping and build old_to_new + parents (in new ID space)
+    // The file is ordered by new_id (0..N-1)
+    for new_id in 0..num_docs {
+        let old_id = read_u32(&mut reader)?;
+        let old_parent = read_u32(&mut reader)?;
+
+        if old_id as usize >= num_docs {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Doc ID out of range",
+            ));
+        }
+        old_to_new[old_id as usize] = new_id as u32;
+
+        // We can't resolve old_parent to new_parent yet because we might not have seen old_parent yet.
+        // So we store old_parent temporarily or do a second pass?
+        // Actually, we can just store the old_parent for now, but we need to map it later.
+        // But wait, we can't store old_parent in `parents` if we want `parents` to be new_ids.
+        // Let's store old_parent in a temporary vector.
+        parents[new_id] = old_parent;
     }
 
-    Ok(mapping)
+    // Convert parents to new IDs
+    for parent in &mut parents {
+        *parent = old_to_new[*parent as usize];
+    }
+
+    // Compute subtree ranges
+    // In DFS order, children are visited after parents? No.
+    // In DFS order:
+    //   Visit u
+    //   Visit children...
+    // So u < child.
+    // And the subtree of u is a contiguous range [u, end].
+    // We can compute end by iterating backwards.
+    let mut subtree_ends: Vec<u32> = (0..num_docs as u32).collect();
+
+    for i in (1..num_docs).rev() {
+        let u = i as u32;
+        let p = parents[i];
+        // If p is actually the parent (and not self-loop for root), propagate range
+        if p != u {
+            // The parent's range must include the child's range.
+            // Since it's DFS, p < u.
+            // And since we iterate backwards, we have already computed the full range of u.
+            // So we extend p's range to include u's range.
+            if subtree_ends[u as usize] > subtree_ends[p as usize] {
+                subtree_ends[p as usize] = subtree_ends[u as usize];
+            }
+        }
+    }
+
+    Ok((old_to_new, subtree_ends))
 }
 
-/// Remap a posting list using the provided mapping, then sort.
-fn remap_posting_list(postings: &mut Vec<u32>, mapping: &[u32]) {
-    for doc in postings.iter_mut() {
-        *doc = mapping[*doc as usize];
+/// Transform a posting list using the range toggle logic.
+/// Returns the transformed posting list.
+fn transform_posting_list(postings: &[u32], num_docs: usize, subtree_ends: &[u32]) -> Vec<u32> {
+    let mut output = Vec::new();
+    let mut stack: Vec<u32> = Vec::new(); // Stack of end positions
+
+    // Use a cursor for the sorted postings to avoid O(N) lookup
+    let mut posting_idx = 0;
+
+    for i in 0..num_docs as u32 {
+        // Check for expired ranges
+        while let Some(&end) = stack.last() {
+            if end < i {
+                stack.pop();
+            } else {
+                break;
+            }
+        }
+        let current_state = stack.len() % 2 != 0;
+
+        // Check if current doc is in the posting list
+        let is_present = if posting_idx < postings.len() && postings[posting_idx] == i {
+            posting_idx += 1;
+            true
+        } else {
+            false
+        };
+
+        if is_present != current_state {
+            output.push(i);
+            stack.push(subtree_ends[i as usize]);
+        }
     }
-    postings.sort_unstable();
+
+    output
 }
 
 impl Stats {
@@ -254,10 +335,13 @@ impl Stats {
         self.total_input_bytes += (len * 4) as u64;
 
         // Compute standard Elias-Fano encoding size
-        let ef_bits = optimal_bits_per_value(
-            postings.last().copied().unwrap_or_default() + 1 - len as u32,
-            len as u32,
-        )
+        // Encode the inverse if it's smaller.
+        let last_posting = postings.last().copied().unwrap_or_default() + 1;
+        let ef_bits = if last_posting - len as u32 > len as u32 {
+            optimal_bits_per_value(last_posting - len as u32, len as u32)
+        } else {
+            optimal_bits_per_value(len as u32, last_posting - len as u32)
+        }
         .0;
         self.total_ef_bytes += ef_bits.div_ceil(8) as u64;
 
@@ -457,18 +541,18 @@ fn main() -> std::io::Result<()> {
         .and_then(|i| args.get(i + 1));
 
     // Load mapping if provided
-    let mapping = if let Some(path) = remap_path {
+    let (mapping, subtree_ends) = if let Some(path) = remap_path {
         println!("Loading docid mapping from: {}", path);
-        let m = load_mapping(path)?;
+        let (m, s) = load_mapping(path)?;
         println!("Loaded mapping for {} documents", m.len());
-        Some(m)
+        (Some(m), Some(s))
     } else {
-        None
+        (None, None)
     };
 
     println!("Reading PISA posting lists from: {}", input_path);
     if mapping.is_some() {
-        println!("Document IDs will be remapped before encoding");
+        println!("Document IDs will be remapped and transformed");
     }
 
     let file = File::open(input_path)?;
@@ -479,22 +563,46 @@ fn main() -> std::io::Result<()> {
     let header2 = read_u32(&mut reader)?;
     println!("Header: [{}, {}]", header1, header2);
     println!("Number of documents: {}", header2);
+    let num_docs = header2 as usize;
 
     let mut stats = Stats::default();
 
     let start = Instant::now();
     let mut last_report = Instant::now();
 
+    let mut orig_num_postings = 0;
+    let mut remapped_num_postings = 0;
+
     // Read and encode all posting lists
     while let Some(mut postings) = read_posting_list(&mut reader)? {
         if postings.is_empty() {
             continue;
         }
+        orig_num_postings += postings.len();
 
         // Remap document IDs if mapping is provided
         if let Some(ref m) = mapping {
-            remap_posting_list(&mut postings, m);
+            // Remap and sort
+            for doc in postings.iter_mut() {
+                *doc = m[*doc as usize];
+            }
+            postings.sort_unstable();
+            let before = postings.len();
+            postings.dedup();
+            let after = postings.len();
+            assert_eq!(before, after);
+
+            // Apply range toggle transformation
+            if let Some(ref ends) = subtree_ends {
+                let before = postings.len();
+                postings = transform_posting_list(&postings, num_docs, ends);
+                let after = postings.len();
+                if before == 1 {
+                    assert!(after >= 1)
+                }
+            }
         }
+        remapped_num_postings += postings.len();
 
         // Encode with Elias-Fano
         // let ef = EliasFano::new(postings.iter().copied(), max, len);
@@ -518,8 +626,247 @@ fn main() -> std::io::Result<()> {
         stats.total_postings,
         elapsed.as_secs_f64()
     );
+    println!(
+        "Original total postings: {:>12}, after remapping: {:>12}",
+        orig_num_postings, remapped_num_postings
+    );
 
     stats.print();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// Helper to compute mapping and subtree_ends from in-memory data.
+    /// Input: slice of (old_id, old_parent_id) in DFS order (new_id = index).
+    fn compute_mapping_from_slice(data: &[(u32, u32)]) -> (Vec<u32>, Vec<u32>) {
+        let num_docs = data.len();
+        let mut old_to_new = vec![0u32; num_docs];
+        let mut parents = vec![0u32; num_docs];
+
+        for (new_id, &(old_id, old_parent)) in data.iter().enumerate() {
+            old_to_new[old_id as usize] = new_id as u32;
+            parents[new_id] = old_parent;
+        }
+
+        // Convert parents to new IDs
+        for parent in &mut parents {
+            *parent = old_to_new[*parent as usize];
+        }
+
+        // Compute subtree ranges
+        let mut subtree_ends: Vec<u32> = (0..num_docs as u32).collect();
+
+        for i in (1..num_docs).rev() {
+            let u = i as u32;
+            let p = parents[i];
+            if p != u {
+                if subtree_ends[u as usize] > subtree_ends[p as usize] {
+                    subtree_ends[p as usize] = subtree_ends[u as usize];
+                }
+            }
+        }
+
+        (old_to_new, subtree_ends)
+    }
+
+    #[test]
+    fn test_mapping_simple_chain() {
+        // DFS order: 0 -> 1 -> 2 -> 3 (linear chain)
+        // old_ids happen to match new_ids, each node's parent is the previous
+        // new_id=0: old_id=0, parent=0 (root)
+        // new_id=1: old_id=1, parent=0
+        // new_id=2: old_id=2, parent=1
+        // new_id=3: old_id=3, parent=2
+        let data = [(0, 0), (1, 0), (2, 1), (3, 2)];
+        let (old_to_new, subtree_ends) = compute_mapping_from_slice(&data);
+
+        // old_to_new should be identity
+        assert_eq!(old_to_new, vec![0, 1, 2, 3]);
+
+        // subtree_ends:
+        // Node 3: end=3 (leaf)
+        // Node 2: end=max(2, end[3])=3
+        // Node 1: end=max(1, end[2])=3
+        // Node 0: end=max(0, end[1])=3
+        assert_eq!(subtree_ends, vec![3, 3, 3, 3]);
+    }
+
+    #[test]
+    fn test_mapping_binary_tree() {
+        // Binary tree:
+        //       0
+        //      / \
+        //     1   4
+        //    / \
+        //   2   3
+        //
+        // DFS order (pre-order): 0, 1, 2, 3, 4
+        // new_id=0: old_id=0, parent=0 (root)
+        // new_id=1: old_id=1, parent=0
+        // new_id=2: old_id=2, parent=1
+        // new_id=3: old_id=3, parent=1
+        // new_id=4: old_id=4, parent=0
+        let data = [(0, 0), (1, 0), (2, 1), (3, 1), (4, 0)];
+        let (old_to_new, subtree_ends) = compute_mapping_from_slice(&data);
+
+        // old_to_new should be identity
+        assert_eq!(old_to_new, vec![0, 1, 2, 3, 4]);
+
+        // subtree_ends:
+        // Node 4: end=4 (leaf)
+        // Node 3: end=3 (leaf)
+        // Node 2: end=2 (leaf)
+        // Node 1: end=max(1, end[2], end[3])=3
+        // Node 0: end=max(0, end[1], end[4])=4
+        assert_eq!(subtree_ends, vec![4, 3, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_mapping_shuffled_old_ids() {
+        // 5 nodes with shuffled old_ids:
+        // Tree structure (in new_id space):
+        //       0
+        //      / \
+        //     1   4
+        //    / \
+        //   2   3
+        //
+        // DFS order: new_id -> old_id
+        // new_id=0: old_id=4
+        // new_id=1: old_id=2
+        // new_id=2: old_id=0
+        // new_id=3: old_id=3
+        // new_id=4: old_id=1
+        //
+        // Parents (in old_id space):
+        // old_id=4 is root -> parent=4
+        // old_id=2's parent is old_id=4
+        // old_id=0's parent is old_id=2
+        // old_id=3's parent is old_id=2
+        // old_id=1's parent is old_id=4
+        let data = [(4, 4), (2, 4), (0, 2), (3, 2), (1, 4)];
+        let (old_to_new, subtree_ends) = compute_mapping_from_slice(&data);
+
+        // old_to_new: old_id -> new_id
+        // old_id=0 -> new_id=2
+        // old_id=1 -> new_id=4
+        // old_id=2 -> new_id=1
+        // old_id=3 -> new_id=3
+        // old_id=4 -> new_id=0
+        assert_eq!(old_to_new, vec![2, 4, 1, 3, 0]);
+
+        // subtree_ends (same tree structure as test_mapping_binary_tree):
+        // Node 4: end=4 (leaf)
+        // Node 3: end=3 (leaf)
+        // Node 2: end=2 (leaf)
+        // Node 1: end=max(1, end[2], end[3])=3
+        // Node 0: end=max(0, end[1], end[4])=4
+        assert_eq!(subtree_ends, vec![4, 3, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_mapping_reordered() {
+        // 4 nodes, but old_ids are reordered:
+        // DFS new_id order: 0, 1, 2, 3
+        // old_ids:          3, 1, 0, 2
+        //
+        // Tree structure (in new_id space):
+        //       0
+        //      / \
+        //     1   3
+        //     |
+        //     2
+        //
+        // Parents (in old_id space):
+        // new_id=0: old_id=3, parent=3 (root)
+        // new_id=1: old_id=1, parent=3
+        // new_id=2: old_id=0, parent=1
+        // new_id=3: old_id=2, parent=3
+        let data = [(3, 3), (1, 3), (0, 1), (2, 3)];
+        let (old_to_new, subtree_ends) = compute_mapping_from_slice(&data);
+
+        // old_to_new: old_id -> new_id
+        // old_id=0 -> new_id=2
+        // old_id=1 -> new_id=1
+        // old_id=2 -> new_id=3
+        // old_id=3 -> new_id=0
+        assert_eq!(old_to_new, vec![2, 1, 3, 0]);
+
+        // subtree_ends (in new_id space):
+        // Node 3: end=3 (leaf)
+        // Node 2: end=2 (leaf)
+        // Node 1: parent=0, end=max(1, end[2])=2
+        // Node 0: parent=0 (self), end=max(0, end[1], end[3])=3
+        assert_eq!(subtree_ends, vec![3, 2, 2, 3]);
+    }
+
+    #[test]
+    fn test_transform_simple() {
+        // 4 documents with subtree_ends = [3, 2, 2, 3]
+        // Tree:
+        //       0
+        //      / \
+        //     1   3
+        //     |
+        //     2
+        //
+        // Posting list (in new space, sorted): [0, 2]
+        //
+        // i=0: is_present=true, state=false -> output 0, state=true, push end[0]=3
+        // i=1: stack=[3], end=3 >= 1, no pop. is_present=false, state=true -> output 1, state=false, push end[1]=2
+        // i=2: stack=[3,2], end=2 >= 2, no pop. is_present=true, state=false -> output 2, state=true, push end[2]=2
+        // i=3: stack=[3,2,2], end=2 < 3, pop, state=false. end=2 < 3, pop, state=true. end=3 >= 3, stop.
+        //      is_present=false, state=true -> output 3, state=false, push end[3]=3
+        //
+        // Output: [0, 1, 2, 3]
+        let subtree_ends = vec![3, 2, 2, 3];
+        let postings = vec![0, 2];
+        let result = transform_posting_list(&postings, 4, &subtree_ends);
+        assert_eq!(result, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn test_transform_full_subtree() {
+        // 4 documents with subtree_ends = [3, 2, 2, 3]
+        // Posting list (in new space, sorted): [0, 1, 2]
+        // All of subtree under node 0's left child (1 and 2) are present, plus root
+        //
+        // i=0: is_present=true, state=false -> output 0, state=true, push 3
+        // i=1: is_present=true, state=true -> no output
+        // i=2: is_present=true, state=true -> no output
+        // i=3: stack=[3], 3 >= 3, no pop. is_present=false, state=true -> output 3, state=false, push 3
+        //
+        // Output: [0, 3]
+        let subtree_ends = vec![3, 2, 2, 3];
+        let postings = vec![0, 1, 2];
+        let result = transform_posting_list(&postings, 4, &subtree_ends);
+        assert_eq!(result, vec![0, 3]);
+    }
+
+    #[test]
+    fn test_transform_empty() {
+        let subtree_ends = vec![3, 2, 2, 3];
+        let postings: Vec<u32> = vec![];
+        let result = transform_posting_list(&postings, 4, &subtree_ends);
+        assert_eq!(result, vec![]);
+    }
+
+    #[test]
+    fn test_transform_all_present() {
+        // All documents present
+        let subtree_ends = vec![3, 2, 2, 3];
+        let postings = vec![0, 1, 2, 3];
+        let result = transform_posting_list(&postings, 4, &subtree_ends);
+        // i=0: present, state=false -> output 0, state=true, push 3
+        // i=1: present, state=true -> no output
+        // i=2: present, state=true -> no output
+        // i=3: 3>=3 no pop. present, state=true -> no output
+        // Output: [0]
+        assert_eq!(result, vec![0]);
+    }
 }
