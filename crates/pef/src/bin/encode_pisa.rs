@@ -298,29 +298,37 @@ fn transform_posting_list(postings: &[u32], num_docs: usize, subtree_ends: &[u32
 
     // Use a cursor for the sorted postings to avoid O(N) lookup
     let mut posting_idx = 0;
+    let mut i = 0;
 
-    for i in 0..num_docs as u32 {
-        // Check for expired ranges
-        while let Some(&end) = stack.last() {
-            if end < i {
-                stack.pop();
-            } else {
-                break;
-            }
+    while i < num_docs as u32 {
+        while !stack.is_empty() && stack.last() < Some(&i) {
+            stack.pop();
         }
-        let current_state = stack.len() % 2 != 0;
-
-        // Check if current doc is in the posting list
-        let is_present = if posting_idx < postings.len() && postings[posting_idx] == i {
-            posting_idx += 1;
-            true
+        if stack.len() % 2 == 1 {
+            if postings.get(posting_idx) == Some(&i) {
+                posting_idx += 1;   
+            } else {
+                // need to make it even...
+                output.push(i);
+                stack.push(subtree_ends[i as usize]);
+            }
+            i += 1;
         } else {
-            false
-        };
-
-        if is_present != current_state {
-            output.push(i);
-            stack.push(subtree_ends[i as usize]);
+            if postings.get(posting_idx) == Some(&i) {
+                output.push(i);
+                stack.push(subtree_ends[i as usize]);
+                posting_idx += 1;
+                i += 1;            
+            } else {
+                if postings.get(posting_idx) > Some(&i) {
+                    i = postings[posting_idx];
+                } else {
+                    i = num_docs as u32;
+                }
+                if let Some(&n) = stack.last() {
+                    i = i.min(n + 1);
+                }
+            }
         }
     }
 
