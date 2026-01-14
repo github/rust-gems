@@ -277,16 +277,33 @@ where
 
     for i in 0..n {
         let mut heap = BinaryHeap::with_capacity(k);
-        let mut indices: Vec<usize> = (0..n).filter(|&j| j != i).collect();
-        indices.shuffle(rng);
 
-        for &j in indices.iter().take(k) {
-            let d = distance_fn(&data[i], &data[j]);
-            heap.push(NeighborEntry {
-                index: j,
-                distance: d,
-            });
-            neighbor_sets[i].insert(j);
+        // Sample k random neighbors using Floyd's algorithm - guaranteed O(k)
+        // https://fermatslibrary.com/s/a-sample-of-brilliance
+        // This selects k distinct elements from 0..n, excluding i
+        let effective_n = n - 1; // exclude self
+        let range_start = effective_n.saturating_sub(k);
+        for t in range_start..effective_n {
+            let j = rng.gen_range(0..=t);
+            // Map j to actual index, skipping i
+            let actual_j = if j >= i { j + 1 } else { j };
+
+            if !neighbor_sets[i].insert(actual_j) {
+                // j was already selected, so add t instead
+                let actual_t = if t >= i { t + 1 } else { t };
+                neighbor_sets[i].insert(actual_t);
+                let d = distance_fn(&data[i], &data[actual_t]);
+                heap.push(NeighborEntry {
+                    index: actual_t,
+                    distance: d,
+                });
+            } else {
+                let d = distance_fn(&data[i], &data[actual_j]);
+                heap.push(NeighborEntry {
+                    index: actual_j,
+                    distance: d,
+                });
+            }
         }
         heaps.push(heap);
     }
