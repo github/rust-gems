@@ -655,6 +655,20 @@ mod tests {
     }
 
     #[test]
+    fn test_k_greater_than_n() {
+        // 3 points but k=20 (default), so k >= n
+        let points: Vec<Vec<f64>> = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+        ];
+        let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
+        let config = FamstConfig::default(); // k=20 > n=3
+        let result = famst(&points, distance, &config);
+        assert_eq!(result.edges.len(), 2); // MST has n-1 edges
+    }
+
+    #[test]
     fn test_union_find() {
         let mut uf = UnionFind::new(5);
         assert!(uf.union(0, 1));
