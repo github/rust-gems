@@ -637,6 +637,24 @@ mod tests {
     use rand::SeedableRng;
 
     #[test]
+    fn test_empty_input() {
+        let points: Vec<Vec<f64>> = vec![];
+        let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
+        let result = famst(&points, distance, &FamstConfig::default());
+        assert_eq!(result.edges.len(), 0);
+        assert_eq!(result.total_weight, 0.0);
+    }
+
+    #[test]
+    fn test_single_point() {
+        let points: Vec<Vec<f64>> = vec![vec![1.0, 2.0, 3.0]];
+        let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
+        let result = famst(&points, distance, &FamstConfig::default());
+        assert_eq!(result.edges.len(), 0);
+        assert_eq!(result.total_weight, 0.0);
+    }
+
+    #[test]
     fn test_union_find() {
         let mut uf = UnionFind::new(5);
         assert!(uf.union(0, 1));
