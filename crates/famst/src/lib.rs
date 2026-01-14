@@ -583,7 +583,7 @@ where
 /// Extract MST using Kruskal's algorithm on the connected ANN graph
 fn extract_mst(ann_graph: &AnnGraph, inter_edges: &[Edge], n: usize) -> Vec<Edge> {
     // Collect all edges from ANN graph
-    let mut all_edges: Vec<Edge> = Vec::new();
+    let mut edges: Vec<Edge> = Vec::new();
 
     for (i, (neighbors, distances)) in ann_graph
         .neighbors
@@ -592,43 +592,17 @@ fn extract_mst(ann_graph: &AnnGraph, inter_edges: &[Edge], n: usize) -> Vec<Edge
         .enumerate()
     {
         for (&j, &d) in neighbors.iter().zip(distances.iter()) {
-            let (u, v) = if i < j { (i, j) } else { (j, i) };
-            all_edges.push(Edge::new(u, v, d));
+            edges.push(Edge::new(i, j, d));
         }
     }
 
     // Add inter-component edges
-    for edge in inter_edges {
-        all_edges.push(edge.clone());
-    }
-
-    // Deduplicate edges
-    let mut edge_set: HashMap<(usize, usize), f64> = HashMap::new();
-    for edge in all_edges {
-        let key = if edge.u < edge.v {
-            (edge.u, edge.v)
-        } else {
-            (edge.v, edge.u)
-        };
-        edge_set
-            .entry(key)
-            .and_modify(|d| {
-                if edge.distance < *d {
-                    *d = edge.distance
-                }
-            })
-            .or_insert(edge.distance);
-    }
-
-    let mut edges: Vec<Edge> = edge_set
-        .into_iter()
-        .map(|((u, v), d)| Edge::new(u, v, d))
-        .collect();
+    edges.extend(inter_edges.iter().cloned());
 
     // Sort edges by weight
     edges.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
 
-    // Kruskal's algorithm
+    // Kruskal's algorithm (naturally handles duplicate edges)
     let mut uf = UnionFind::new(n);
     let mut mst_edges = Vec::with_capacity(n - 1);
 
