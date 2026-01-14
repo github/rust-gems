@@ -592,25 +592,8 @@ fn extract_mst(ann_graph: &AnnGraph, inter_edges: &[Edge], n: usize) -> Vec<Edge
         .enumerate()
     {
         for (&j, &d) in neighbors.iter().zip(distances.iter()) {
-            // Only add edge once (i < j)
-            if i < j {
-                all_edges.push(Edge::new(i, j, d));
-            }
-        }
-    }
-
-    // Add edges where j < i (reverse direction in ANN graph)
-    for (i, (neighbors, distances)) in ann_graph
-        .neighbors
-        .iter()
-        .zip(ann_graph.distances.iter())
-        .enumerate()
-    {
-        for (&j, &d) in neighbors.iter().zip(distances.iter()) {
-            if j < i {
-                // Check if this edge isn't already added
-                all_edges.push(Edge::new(j, i, d));
-            }
+            let (u, v) = if i < j { (i, j) } else { (j, i) };
+            all_edges.push(Edge::new(u, v, d));
         }
     }
 
