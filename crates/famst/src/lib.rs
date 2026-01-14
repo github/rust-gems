@@ -158,13 +158,7 @@ where
     R: Rng,
 {
     let n = data.len();
-    if n == 0 {
-        return FamstResult {
-            edges: vec![],
-            total_weight: 0.0,
-        };
-    }
-    if n == 1 {
+    if n <= 1 {
         return FamstResult {
             edges: vec![],
             total_weight: 0.0,
@@ -178,7 +172,6 @@ where
     let (undirected_graph, components) = find_components(&ann_graph);
 
     // If only one component, skip inter-component edge logic
-    println!("components {}", components.len());
     if components.len() <= 1 {
         let edges = extract_mst_from_ann(&ann_graph, n);
         let total_weight = edges.iter().map(|e| e.distance).sum();
