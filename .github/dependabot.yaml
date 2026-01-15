@@ -4,9 +4,11 @@ updates:
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "cron"
+      cronjob: "0 5 2 * *" # Second day of each month at 05:00 UTC
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "cron"
+      cronjob: "0 5 2 * *" # Second day of each month at 05:00 UTC
