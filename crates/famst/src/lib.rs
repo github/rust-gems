@@ -30,27 +30,27 @@ impl Edge {
 }
 
 /// Union-Find (Disjoint Set Union) data structure for Kruskal's algorithm
-pub struct UnionFind {
+struct UnionFind {
     parent: Vec<usize>,
     rank: Vec<usize>,
 }
 
 impl UnionFind {
-    pub fn new(n: usize) -> Self {
+    fn new(n: usize) -> Self {
         UnionFind {
             parent: (0..n).collect(),
             rank: vec![0; n],
         }
     }
 
-    pub fn find(&mut self, x: usize) -> usize {
+    fn find(&mut self, x: usize) -> usize {
         if self.parent[x] != x {
             self.parent[x] = self.find(self.parent[x]); // Path compression
         }
         self.parent[x]
     }
 
-    pub fn union(&mut self, x: usize, y: usize) -> bool {
+    fn union(&mut self, x: usize, y: usize) -> bool {
         let px = self.find(x);
         let py = self.find(y);
         if px == py {
@@ -69,9 +69,39 @@ impl UnionFind {
     }
 }
 
+/// A neighbor entry: node index and distance
+#[derive(Debug, Clone, Copy)]
+struct Neighbor {
+    index: usize,
+    distance: f64,
+}
+
+impl PartialEq for Neighbor {
+    fn eq(&self, other: &Self) -> bool {
+        self.distance == other.distance
+    }
+}
+
+impl Eq for Neighbor {}
+
+impl PartialOrd for Neighbor {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Neighbor {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Max-heap: larger distances have higher priority
+        self.distance
+            .partial_cmp(&other.distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
 /// Approximate Nearest Neighbors graph representation
 /// Stored as a flat n×k matrix of Neighbor entries
-pub struct AnnGraph {
+struct AnnGraph {
     /// Flat storage: data[i*k..(i+1)*k] contains k neighbors of point i
     data: Vec<Neighbor>,
     /// Number of points
@@ -81,21 +111,21 @@ pub struct AnnGraph {
 }
 
 impl AnnGraph {
-    pub fn new(n: usize, k: usize, data: Vec<Neighbor>) -> Self {
+    fn new(n: usize, k: usize, data: Vec<Neighbor>) -> Self {
         assert_eq!(data.len(), n * k);
         AnnGraph { data, n, k }
     }
 
-    pub fn n(&self) -> usize {
+    fn n(&self) -> usize {
         self.n
     }
 
-    pub fn k(&self) -> usize {
+    fn k(&self) -> usize {
         self.k
     }
 
     /// Get the neighbors of point i
-    pub fn neighbors(&self, i: usize) -> &[Neighbor] {
+    fn neighbors(&self, i: usize) -> &[Neighbor] {
         let start = i * self.k;
         &self.data[start..start + self.k]
     }
@@ -224,37 +254,6 @@ where
     FamstResult {
         edges,
         total_weight,
-    }
-}
-
-/// A neighbor entry: node index and distance
-/// Used both in the k-NN heap and in the final AnnGraph
-#[derive(Debug, Clone, Copy)]
-pub struct Neighbor {
-    pub index: usize,
-    pub distance: f64,
-}
-
-impl PartialEq for Neighbor {
-    fn eq(&self, other: &Self) -> bool {
-        self.distance == other.distance
-    }
-}
-
-impl Eq for Neighbor {}
-
-impl PartialOrd for Neighbor {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Neighbor {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Max-heap: larger distances have higher priority
-        self.distance
-            .partial_cmp(&other.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
     }
 }
 
