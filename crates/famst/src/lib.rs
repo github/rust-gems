@@ -20,11 +20,11 @@ use std::collections::BinaryHeap;
 pub struct Edge {
     pub u: usize,
     pub v: usize,
-    pub distance: f64,
+    pub distance: f32,
 }
 
 impl Edge {
-    pub fn new(u: usize, v: usize, distance: f64) -> Self {
+    fn new(u: usize, v: usize, distance: f32) -> Self {
         Edge { u, v, distance }
     }
 }
@@ -69,11 +69,14 @@ impl UnionFind {
     }
 }
 
-/// A neighbor entry: node index and distance
+/// Node index type (32-bit for memory efficiency, limits graphs to 2^32 nodes)
+type NodeId = u32;
+
+/// A neighbor entry: node index and distance (32-bit for memory efficiency)
 #[derive(Debug, Clone, Copy)]
 struct Neighbor {
-    index: usize,
-    distance: f64,
+    index: NodeId,
+    distance: f32,
 }
 
 impl PartialEq for Neighbor {
@@ -120,10 +123,6 @@ impl AnnGraph {
         self.n
     }
 
-    fn k(&self) -> usize {
-        self.k
-    }
-
     /// Get the neighbors of point i
     fn neighbors(&self, i: usize) -> &[Neighbor] {
         let start = i * self.k;
@@ -162,14 +161,14 @@ pub struct FamstResult {
     /// MST edges
     pub edges: Vec<Edge>,
     /// Total weight of the MST
-    pub total_weight: f64,
+    pub total_weight: f32,
 }
 
 /// Main FAMST algorithm implementation
 ///
 /// Generic over:
 /// - `T`: The data type stored at each point
-/// - `D`: Distance function `Fn(&T, &T) -> f64`
+/// - `D`: Distance function `Fn(&T, &T) -> f32`
 ///
 /// # Arguments
 /// * `data` - Slice of data points
@@ -178,14 +177,20 @@ pub struct FamstResult {
 ///
 /// # Returns
 /// The approximate MST as a list of edges
+///
+/// # Panics
+/// Panics if `data.len() >= 2^32` (more than ~4 billion points).
 pub fn famst<T, D>(data: &[T], distance_fn: D, config: &FamstConfig) -> FamstResult
 where
-    D: Fn(&T, &T) -> f64,
+    D: Fn(&T, &T) -> f32,
 {
     famst_with_rng(data, distance_fn, config, &mut rand::thread_rng())
 }
 
 /// FAMST with custom RNG. (We use a seeded RNG in tests for reproducibility.)
+///
+/// # Panics
+/// Panics if `data.len() >= 2^32` (more than ~4 billion points).
 pub fn famst_with_rng<T, D, R>(
     data: &[T],
     distance_fn: D,
@@ -193,10 +198,15 @@ pub fn famst_with_rng<T, D, R>(
     rng: &mut R,
 ) -> FamstResult
 where
-    D: Fn(&T, &T) -> f64,
+    D: Fn(&T, &T) -> f32,
     R: Rng,
 {
     let n = data.len();
+    assert!(
+        n <= NodeId::MAX as usize,
+        "famst: data length {n} exceeds maximum supported size of 2^32"
+    );
+    
     if n <= 1 {
         return FamstResult {
             edges: vec![],
@@ -263,7 +273,7 @@ where
 /// by Wei Dong, Charikar Moses, and Kai Li (2011)
 fn nn_descent<T, D, R>(data: &[T], distance_fn: &D, config: &FamstConfig, rng: &mut R) -> AnnGraph
 where
-    D: Fn(&T, &T) -> f64,
+    D: Fn(&T, &T) -> f32,
     R: Rng,
 {
     let n = data.len();
@@ -274,12 +284,12 @@ where
     }
 
     // Helper: check if sorted vec contains value
-    fn sorted_contains(v: &[usize], x: usize) -> bool {
+    fn sorted_contains(v: &[NodeId], x: NodeId) -> bool {
         v.binary_search(&x).is_ok()
     }
 
     // Helper: insert into sorted vec, returns true if inserted (was not present)
-    fn sorted_insert(v: &mut Vec<usize>, x: usize) -> bool {
+    fn sorted_insert(v: &mut Vec<NodeId>, x: NodeId) -> bool {
         match v.binary_search(&x) {
             Ok(_) => false,
             Err(pos) => {
@@ -290,7 +300,7 @@ where
     }
 
     // Helper: remove from sorted vec
-    fn sorted_remove(v: &mut Vec<usize>, x: usize) {
+    fn sorted_remove(v: &mut Vec<NodeId>, x: NodeId) {
         if let Ok(pos) = v.binary_search(&x) {
             v.remove(pos);
         }
@@ -299,7 +309,7 @@ where
     // Initialize with random neighbors using max-heap for each point
     // neighbor_lists[i] is kept sorted by index for O(log k) membership tests
     let mut heaps: Vec<BinaryHeap<Neighbor>> = Vec::with_capacity(n);
-    let mut neighbor_lists: Vec<Vec<usize>> = vec![Vec::with_capacity(k); n];
+    let mut neighbor_lists: Vec<Vec<NodeId>> = vec![Vec::with_capacity(k); n];
 
     for i in 0..n {
         let mut heap = BinaryHeap::with_capacity(k);
@@ -312,19 +322,19 @@ where
         for t in range_start..effective_n {
             let j = rng.gen_range(0..=t);
             // Map j to actual index, skipping i
-            let actual_j = if j >= i { j + 1 } else { j };
+            let actual_j = (if j >= i { j + 1 } else { j }) as NodeId;
 
             if !sorted_insert(&mut neighbor_lists[i], actual_j) {
                 // j was already selected, so add t instead
-                let actual_t = if t >= i { t + 1 } else { t };
+                let actual_t = (if t >= i { t + 1 } else { t }) as NodeId;
                 sorted_insert(&mut neighbor_lists[i], actual_t);
-                let d = distance_fn(&data[i], &data[actual_t]);
+                let d = distance_fn(&data[i], &data[actual_t as usize]);
                 heap.push(Neighbor {
                     index: actual_t,
                     distance: d,
                 });
             } else {
-                let d = distance_fn(&data[i], &data[actual_j]);
+                let d = distance_fn(&data[i], &data[actual_j as usize]);
                 heap.push(Neighbor {
                     index: actual_j,
                     distance: d,
@@ -336,11 +346,11 @@ where
 
     // Build reverse neighbor lists (who has me as a neighbor)
     // Returns sorted vecs for each point
-    let build_reverse = |neighbor_lists: &[Vec<usize>]| -> Vec<Vec<usize>> {
-        let mut reverse: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let build_reverse = |neighbor_lists: &[Vec<NodeId>]| -> Vec<Vec<NodeId>> {
+        let mut reverse: Vec<Vec<NodeId>> = vec![Vec::new(); n];
         for (i, neighbors) in neighbor_lists.iter().enumerate() {
             for &j in neighbors {
-                reverse[j].push(i);
+                reverse[j as usize].push(i as NodeId);
             }
         }
         // Sort each reverse list (they're built in order of i, so already sorted)
@@ -355,7 +365,7 @@ where
         // For each point, explore neighbors of neighbors
         for i in 0..n {
             // Collect candidates: neighbors and reverse neighbors
-            let mut candidates: Vec<usize> = Vec::new();
+            let mut candidates: Vec<NodeId> = Vec::new();
 
             // Sample from forward neighbors
             let mut sampled_forward = neighbor_lists[i].clone();
@@ -372,15 +382,16 @@ where
             sampled_reverse.truncate(sample_size);
 
             // Neighbors of neighbors
+            let i_id = i as NodeId;
             for &neighbor in sampled_forward.iter().chain(sampled_reverse.iter()) {
-                for &nn in &neighbor_lists[neighbor] {
-                    if nn != i && !sorted_contains(&neighbor_lists[i], nn) {
+                for &nn in &neighbor_lists[neighbor as usize] {
+                    if nn != i_id && !sorted_contains(&neighbor_lists[i], nn) {
                         candidates.push(nn);
                     }
                 }
                 // Also check reverse neighbors of neighbors
-                for &rn in &reverse_neighbors[neighbor] {
-                    if rn != i && !sorted_contains(&neighbor_lists[i], rn) {
+                for &rn in &reverse_neighbors[neighbor as usize] {
+                    if rn != i_id && !sorted_contains(&neighbor_lists[i], rn) {
                         candidates.push(rn);
                     }
                 }
@@ -392,7 +403,7 @@ where
 
             // Try to improve neighbors
             for c in candidates {
-                let d = distance_fn(&data[i], &data[c]);
+                let d = distance_fn(&data[i], &data[c as usize]);
 
                 // Check if this is better than the worst current neighbor
                 if let Some(worst) = heaps[i].peek() {
@@ -432,16 +443,16 @@ where
 
 /// Find connected components in the ANN graph using DFS
 /// Returns the undirected graph adjacency list (sorted vecs) and component assignments
-fn find_components(ann_graph: &AnnGraph) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
+fn find_components(ann_graph: &AnnGraph) -> (Vec<Vec<NodeId>>, Vec<Vec<NodeId>>) {
     let n = ann_graph.n();
 
     // Build undirected graph from directed ANN graph using sorted vecs
-    let mut graph: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut graph: Vec<Vec<NodeId>> = vec![Vec::new(); n];
     for i in 0..n {
         for neighbor in ann_graph.neighbors(i) {
             let j = neighbor.index;
             graph[i].push(j);
-            graph[j].push(i);
+            graph[j as usize].push(i as NodeId);
         }
     }
     // Sort and deduplicate each adjacency list
@@ -452,7 +463,7 @@ fn find_components(ann_graph: &AnnGraph) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
 
     // DFS to find components
     let mut visited = vec![false; n];
-    let mut components: Vec<Vec<usize>> = Vec::new();
+    let mut components: Vec<Vec<NodeId>> = Vec::new();
 
     for start in 0..n {
         if visited[start] {
@@ -460,17 +471,17 @@ fn find_components(ann_graph: &AnnGraph) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
         }
 
         let mut component = Vec::new();
-        let mut stack = vec![start];
+        let mut stack = vec![start as NodeId];
 
         while let Some(u) = stack.pop() {
-            if visited[u] {
+            if visited[u as usize] {
                 continue;
             }
-            visited[u] = true;
+            visited[u as usize] = true;
             component.push(u);
 
-            for &v in &graph[u] {
-                if !visited[v] {
+            for &v in &graph[u as usize] {
+                if !visited[v as usize] {
                     stack.push(v);
                 }
             }
@@ -485,13 +496,13 @@ fn find_components(ann_graph: &AnnGraph) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
 /// Add random edges between components (Algorithm 3 in the paper)
 fn add_random_edges<T, D, R>(
     data: &[T],
-    components: &[Vec<usize>],
+    components: &[Vec<NodeId>],
     lambda: usize,
     distance_fn: &D,
     rng: &mut R,
 ) -> (Vec<Edge>, Vec<(usize, usize)>)
 where
-    D: Fn(&T, &T) -> f64,
+    D: Fn(&T, &T) -> f32,
     R: Rng,
 {
     let t = components.len();
@@ -506,8 +517,8 @@ where
 
             // Generate λ² candidate edges
             for _ in 0..lambda_sq {
-                let u = *components[i].choose(rng).unwrap();
-                let v = *components[j].choose(rng).unwrap();
+                let u = *components[i].choose(rng).unwrap() as usize;
+                let v = *components[j].choose(rng).unwrap() as usize;
                 let d = distance_fn(&data[u], &data[v]);
                 candidates.push(Edge::new(u, v, d));
             }
@@ -528,14 +539,14 @@ where
 /// Refine inter-component edges (Algorithm 4 in the paper)
 fn refine_edges<T, D>(
     data: &[T],
-    undirected_graph: &[Vec<usize>],
-    components: &[Vec<usize>],
+    undirected_graph: &[Vec<NodeId>],
+    components: &[Vec<NodeId>],
     edges: &[Edge],
     edge_components: &[(usize, usize)],
     distance_fn: &D,
 ) -> (Vec<Edge>, usize)
 where
-    D: Fn(&T, &T) -> f64,
+    D: Fn(&T, &T) -> f32,
 {
     let n = data.len();
     
@@ -543,7 +554,7 @@ where
     let mut node_to_component: Vec<usize> = vec![0; n];
     for (comp_idx, component) in components.iter().enumerate() {
         for &node in component {
-            node_to_component[node] = comp_idx;
+            node_to_component[node as usize] = comp_idx;
         }
     }
 
@@ -558,6 +569,7 @@ where
         // Get neighbors of u that are in component ci
         // (undirected_graph is sorted, so we can iterate directly)
         for &u_prime in &undirected_graph[edge.u] {
+            let u_prime = u_prime as usize;
             if node_to_component[u_prime] == ci && u_prime != edge.v {
                 let d_prime = distance_fn(&data[u_prime], &data[best_v]);
                 if d_prime < best_d {
@@ -569,6 +581,7 @@ where
 
         // Get neighbors of v that are in component cj
         for &v_prime in &undirected_graph[edge.v] {
+            let v_prime = v_prime as usize;
             if node_to_component[v_prime] == cj && v_prime != edge.u {
                 let d_prime = distance_fn(&data[best_u], &data[v_prime]);
                 if d_prime < best_d {
@@ -595,7 +608,7 @@ fn extract_mst(ann_graph: &AnnGraph, inter_edges: &[Edge], n: usize) -> Vec<Edge
 
     for i in 0..n {
         for neighbor in ann_graph.neighbors(i) {
-            edges.push(Edge::new(i, neighbor.index, neighbor.distance));
+            edges.push(Edge::new(i, neighbor.index as usize, neighbor.distance));
         }
     }
 
@@ -632,24 +645,24 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
-    /// Manhattan distance for slices of f64
-    pub fn manhattan_distance(a: &[f64], b: &[f64]) -> f64 {
+    /// Manhattan distance for slices of f32
+    fn manhattan_distance(a: &[f32], b: &[f32]) -> f32 {
         a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum()
     }
 
-    /// Euclidean distance for slices of f64
-    pub fn euclidean_distance(a: &[f64], b: &[f64]) -> f64 {
+    /// Euclidean distance for slices of f32
+    fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
         a.iter()
             .zip(b.iter())
             .map(|(x, y)| (x - y).powi(2))
-            .sum::<f64>()
+            .sum::<f32>()
             .sqrt()
     }
 
     #[test]
     fn test_empty_input() {
-        let points: Vec<Vec<f64>> = vec![];
-        let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
+        let points: Vec<Vec<f32>> = vec![];
+        let distance = |a: &Vec<f32>, b: &Vec<f32>| euclidean_distance(a, b);
         let result = famst(&points, distance, &FamstConfig::default());
         assert_eq!(result.edges.len(), 0);
         assert_eq!(result.total_weight, 0.0);
@@ -657,8 +670,8 @@ mod tests {
 
     #[test]
     fn test_single_point() {
-        let points: Vec<Vec<f64>> = vec![vec![1.0, 2.0, 3.0]];
-        let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
+        let points: Vec<Vec<f32>> = vec![vec![1.0, 2.0, 3.0]];
+        let distance = |a: &Vec<f32>, b: &Vec<f32>| euclidean_distance(a, b);
         let result = famst(&points, distance, &FamstConfig::default());
         assert_eq!(result.edges.len(), 0);
         assert_eq!(result.total_weight, 0.0);
@@ -667,8 +680,8 @@ mod tests {
     #[test]
     fn test_k_greater_than_n() {
         // 3 points but k=20 (default), so k >= n
-        let points: Vec<Vec<f64>> = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
-        let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
+        let points: Vec<Vec<f32>> = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let distance = |a: &Vec<f32>, b: &Vec<f32>| euclidean_distance(a, b);
         let config = FamstConfig::default(); // k=20 > n=3
         let result = famst(&points, distance, &config);
         assert_eq!(result.edges.len(), 2); // MST has n-1 edges
@@ -687,13 +700,13 @@ mod tests {
     #[test]
     fn test_simple_mst() {
         // Simple 2D points forming a triangle
-        let points: Vec<Vec<f64>> = vec![
+        let points: Vec<Vec<f32>> = vec![
             vec![0.0, 0.0],
             vec![1.0, 0.0],
             vec![0.5, 0.866], // Equilateral triangle
         ];
 
-        let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
+        let distance = |a: &Vec<f32>, b: &Vec<f32>| euclidean_distance(a, b);
         let config = FamstConfig {
             k: 2,
             ..Default::default()
@@ -708,9 +721,9 @@ mod tests {
     #[test]
     fn test_line_points() {
         // Points on a line
-        let points: Vec<Vec<f64>> = vec![vec![0.0], vec![1.0], vec![2.0], vec![3.0], vec![4.0]];
+        let points: Vec<Vec<f32>> = vec![vec![0.0], vec![1.0], vec![2.0], vec![3.0], vec![4.0]];
 
-        let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
+        let distance = |a: &Vec<f32>, b: &Vec<f32>| euclidean_distance(a, b);
         let config = FamstConfig {
             k: 2,
             ..Default::default()
@@ -727,7 +740,7 @@ mod tests {
     #[test]
     fn test_disconnected_components() {
         // Two clusters far apart
-        let points: Vec<Vec<f64>> = vec![
+        let points: Vec<Vec<f32>> = vec![
             vec![0.0, 0.0],
             vec![1.0, 0.0],
             vec![0.5, 0.5],
@@ -737,7 +750,7 @@ mod tests {
         ];
 
         // k=1 will likely create disconnected components
-        let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
+        let distance = |a: &Vec<f32>, b: &Vec<f32>| euclidean_distance(a, b);
         let config = FamstConfig {
             k: 1,
             lambda: 3,
@@ -754,9 +767,9 @@ mod tests {
     #[test]
     fn test_custom_distance() {
         // Test with Manhattan distance
-        let points: Vec<Vec<f64>> = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
+        let points: Vec<Vec<f32>> = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
 
-        let distance = |a: &Vec<f64>, b: &Vec<f64>| manhattan_distance(a, b);
+        let distance = |a: &Vec<f32>, b: &Vec<f32>| manhattan_distance(a, b);
         let config = FamstConfig {
             k: 2,
             ..Default::default()
@@ -775,12 +788,12 @@ mod tests {
         // Test with a custom struct
         #[derive(Clone)]
         struct Point3D {
-            x: f64,
-            y: f64,
-            z: f64,
+            x: f32,
+            y: f32,
+            z: f32,
         }
 
-        fn point_distance(a: &Point3D, b: &Point3D) -> f64 {
+        fn point_distance(a: &Point3D, b: &Point3D) -> f32 {
             ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt()
         }
 
@@ -836,7 +849,7 @@ mod tests {
         ];
 
         let points_per_cluster = 20;
-        let mut points: Vec<Vec<f64>> = Vec::new();
+        let mut points: Vec<Vec<f32>> = Vec::new();
 
         for center in &cluster_centers {
             for _ in 0..points_per_cluster {
@@ -849,7 +862,7 @@ mod tests {
         }
 
         let n = points.len();
-        let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
+        let distance = |a: &Vec<f32>, b: &Vec<f32>| euclidean_distance(a, b);
 
         // Use small k to create disconnected components
         // With k=3 and 20 points per cluster spread over 5 clusters,
@@ -899,9 +912,9 @@ mod tests {
     }
 
     /// Compute exact MST using Kruskal's algorithm on complete graph
-    fn exact_mst_weight<T, D>(data: &[T], distance_fn: D) -> f64
+    fn exact_mst_weight<T, D>(data: &[T], distance_fn: D) -> f32
     where
-        D: Fn(&T, &T) -> f64,
+        D: Fn(&T, &T) -> f32,
     {
         let n = data.len();
         if n <= 1 {
@@ -909,7 +922,7 @@ mod tests {
         }
 
         // Build all edges
-        let mut edges: Vec<(usize, usize, f64)> = Vec::with_capacity(n * (n - 1) / 2);
+        let mut edges: Vec<(usize, usize, f32)> = Vec::with_capacity(n * (n - 1) / 2);
         for i in 0..n {
             for j in (i + 1)..n {
                 let d = distance_fn(&data[i], &data[j]);
@@ -950,12 +963,12 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(12345);
         let dist = Uniform::new(0.0, 1000.0);
 
-        let points: Vec<Vec<f64>> = (0..N)
+        let points: Vec<Vec<f32>> = (0..N)
             .map(|_| (0..DIM).map(|_| dist.sample(&mut rng)).collect())
             .collect();
 
         println!("Running FAMST with NN-Descent...");
-        let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
+        let distance = |a: &Vec<f32>, b: &Vec<f32>| euclidean_distance(a, b);
         let config = FamstConfig {
             k: 20,
             lambda: 5,
@@ -985,11 +998,11 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(99999);
         let dist = Uniform::new(0.0, 100.0);
 
-        let points: Vec<Vec<f64>> = (0..N)
+        let points: Vec<Vec<f32>> = (0..N)
             .map(|_| (0..DIM).map(|_| dist.sample(&mut rng)).collect())
             .collect();
 
-        let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
+        let distance = |a: &Vec<f32>, b: &Vec<f32>| euclidean_distance(a, b);
 
         // Compute exact MST
         let exact_weight = exact_mst_weight(&points, distance);
