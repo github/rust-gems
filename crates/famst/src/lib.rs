@@ -70,25 +70,34 @@ impl UnionFind {
 }
 
 /// Approximate Nearest Neighbors graph representation
-/// Contains neighbor indices and distances for each point
+/// Stored as a flat n×k matrix of Neighbor entries
 pub struct AnnGraph {
-    /// neighbors[i] contains the indices of k nearest neighbors of point i
-    pub neighbors: Vec<Vec<usize>>,
-    /// distances[i] contains the distances to k nearest neighbors of point i
-    pub distances: Vec<Vec<f64>>,
+    /// Flat storage: data[i*k..(i+1)*k] contains k neighbors of point i
+    data: Vec<Neighbor>,
+    /// Number of points
+    n: usize,
+    /// Number of neighbors per point
+    k: usize,
 }
 
 impl AnnGraph {
-    pub fn new(neighbors: Vec<Vec<usize>>, distances: Vec<Vec<f64>>) -> Self {
-        assert_eq!(neighbors.len(), distances.len());
-        AnnGraph {
-            neighbors,
-            distances,
-        }
+    pub fn new(n: usize, k: usize, data: Vec<Neighbor>) -> Self {
+        assert_eq!(data.len(), n * k);
+        AnnGraph { data, n, k }
     }
 
     pub fn n(&self) -> usize {
-        self.neighbors.len()
+        self.n
+    }
+
+    pub fn k(&self) -> usize {
+        self.k
+    }
+
+    /// Get the neighbors of point i
+    pub fn neighbors(&self, i: usize) -> &[Neighbor] {
+        let start = i * self.k;
+        &self.data[start..start + self.k]
     }
 }
 
@@ -218,28 +227,29 @@ where
     }
 }
 
-/// A neighbor entry in the k-NN heap (max-heap by distance for easy replacement of farthest)
-#[derive(Clone, Copy)]
-struct NeighborEntry {
-    index: usize,
-    distance: f64,
+/// A neighbor entry: node index and distance
+/// Used both in the k-NN heap and in the final AnnGraph
+#[derive(Debug, Clone, Copy)]
+pub struct Neighbor {
+    pub index: usize,
+    pub distance: f64,
 }
 
-impl PartialEq for NeighborEntry {
+impl PartialEq for Neighbor {
     fn eq(&self, other: &Self) -> bool {
         self.distance == other.distance
     }
 }
 
-impl Eq for NeighborEntry {}
+impl Eq for Neighbor {}
 
-impl PartialOrd for NeighborEntry {
+impl PartialOrd for Neighbor {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for NeighborEntry {
+impl Ord for Neighbor {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Max-heap: larger distances have higher priority
         self.distance
@@ -261,7 +271,7 @@ where
     let k = config.k.min(n - 1);
 
     if k == 0 || n <= 1 {
-        return AnnGraph::new(vec![vec![]; n], vec![vec![]; n]);
+        return AnnGraph::new(n, 0, vec![]);
     }
 
     // Helper: check if sorted vec contains value
@@ -289,7 +299,7 @@ where
 
     // Initialize with random neighbors using max-heap for each point
     // neighbor_lists[i] is kept sorted by index for O(log k) membership tests
-    let mut heaps: Vec<BinaryHeap<NeighborEntry>> = Vec::with_capacity(n);
+    let mut heaps: Vec<BinaryHeap<Neighbor>> = Vec::with_capacity(n);
     let mut neighbor_lists: Vec<Vec<usize>> = vec![Vec::with_capacity(k); n];
 
     for i in 0..n {
@@ -310,13 +320,13 @@ where
                 let actual_t = if t >= i { t + 1 } else { t };
                 sorted_insert(&mut neighbor_lists[i], actual_t);
                 let d = distance_fn(&data[i], &data[actual_t]);
-                heap.push(NeighborEntry {
+                heap.push(Neighbor {
                     index: actual_t,
                     distance: d,
                 });
             } else {
                 let d = distance_fn(&data[i], &data[actual_j]);
-                heap.push(NeighborEntry {
+                heap.push(Neighbor {
                     index: actual_j,
                     distance: d,
                 });
@@ -392,7 +402,7 @@ where
                         let removed = heaps[i].pop().unwrap();
                         sorted_remove(&mut neighbor_lists[i], removed.index);
 
-                        heaps[i].push(NeighborEntry {
+                        heaps[i].push(Neighbor {
                             index: c,
                             distance: d,
                         });
@@ -409,21 +419,16 @@ where
         }
     }
 
-    // Convert heaps to sorted neighbor lists
-    let mut neighbors = vec![Vec::with_capacity(k); n];
-    let mut distances = vec![Vec::with_capacity(k); n];
+    // Convert heaps to flat neighbor array sorted by distance
+    let mut result_data = Vec::with_capacity(n * k);
 
-    for (i, heap) in heaps.into_iter().enumerate() {
-        let mut entries: Vec<NeighborEntry> = heap.into_vec();
+    for heap in heaps {
+        let mut entries: Vec<Neighbor> = heap.into_vec();
         entries.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
-
-        for entry in entries {
-            neighbors[i].push(entry.index);
-            distances[i].push(entry.distance);
-        }
+        result_data.extend(entries);
     }
 
-    AnnGraph::new(neighbors, distances)
+    AnnGraph::new(n, k, result_data)
 }
 
 /// Find connected components in the ANN graph using DFS
@@ -433,8 +438,9 @@ fn find_components(ann_graph: &AnnGraph) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
 
     // Build undirected graph from directed ANN graph using sorted vecs
     let mut graph: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (i, neighbors) in ann_graph.neighbors.iter().enumerate() {
-        for &j in neighbors {
+    for i in 0..n {
+        for neighbor in ann_graph.neighbors(i) {
+            let j = neighbor.index;
             graph[i].push(j);
             graph[j].push(i);
         }
@@ -588,14 +594,9 @@ fn extract_mst(ann_graph: &AnnGraph, inter_edges: &[Edge], n: usize) -> Vec<Edge
     // Collect all edges from ANN graph
     let mut edges: Vec<Edge> = Vec::new();
 
-    for (i, (neighbors, distances)) in ann_graph
-        .neighbors
-        .iter()
-        .zip(ann_graph.distances.iter())
-        .enumerate()
-    {
-        for (&j, &d) in neighbors.iter().zip(distances.iter()) {
-            edges.push(Edge::new(i, j, d));
+    for i in 0..n {
+        for neighbor in ann_graph.neighbors(i) {
+            edges.push(Edge::new(i, neighbor.index, neighbor.distance));
         }
     }
 
