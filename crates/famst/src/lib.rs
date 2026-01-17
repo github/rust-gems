@@ -13,7 +13,7 @@
 
 use rand::seq::SliceRandom;
 use rand::Rng;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::BinaryHeap;
 
 /// An edge in the MST, represented as (node_a, node_b, distance)
 #[derive(Debug, Clone)]
@@ -264,9 +264,33 @@ where
         return AnnGraph::new(vec![vec![]; n], vec![vec![]; n]);
     }
 
+    // Helper: check if sorted vec contains value
+    fn sorted_contains(v: &[usize], x: usize) -> bool {
+        v.binary_search(&x).is_ok()
+    }
+
+    // Helper: insert into sorted vec, returns true if inserted (was not present)
+    fn sorted_insert(v: &mut Vec<usize>, x: usize) -> bool {
+        match v.binary_search(&x) {
+            Ok(_) => false,
+            Err(pos) => {
+                v.insert(pos, x);
+                true
+            }
+        }
+    }
+
+    // Helper: remove from sorted vec
+    fn sorted_remove(v: &mut Vec<usize>, x: usize) {
+        if let Ok(pos) = v.binary_search(&x) {
+            v.remove(pos);
+        }
+    }
+
     // Initialize with random neighbors using max-heap for each point
+    // neighbor_lists[i] is kept sorted by index for O(log k) membership tests
     let mut heaps: Vec<BinaryHeap<NeighborEntry>> = Vec::with_capacity(n);
-    let mut neighbor_sets: Vec<HashSet<usize>> = vec![HashSet::with_capacity(k); n];
+    let mut neighbor_lists: Vec<Vec<usize>> = vec![Vec::with_capacity(k); n];
 
     for i in 0..n {
         let mut heap = BinaryHeap::with_capacity(k);
@@ -281,10 +305,10 @@ where
             // Map j to actual index, skipping i
             let actual_j = if j >= i { j + 1 } else { j };
 
-            if !neighbor_sets[i].insert(actual_j) {
+            if !sorted_insert(&mut neighbor_lists[i], actual_j) {
                 // j was already selected, so add t instead
                 let actual_t = if t >= i { t + 1 } else { t };
-                neighbor_sets[i].insert(actual_t);
+                sorted_insert(&mut neighbor_lists[i], actual_t);
                 let d = distance_fn(&data[i], &data[actual_t]);
                 heap.push(NeighborEntry {
                     index: actual_t,
@@ -302,20 +326,22 @@ where
     }
 
     // Build reverse neighbor lists (who has me as a neighbor)
-    let build_reverse = |neighbor_sets: &[HashSet<usize>]| -> Vec<HashSet<usize>> {
-        let mut reverse: Vec<HashSet<usize>> = vec![HashSet::new(); n];
-        for (i, neighbors) in neighbor_sets.iter().enumerate() {
+    // Returns sorted vecs for each point
+    let build_reverse = |neighbor_lists: &[Vec<usize>]| -> Vec<Vec<usize>> {
+        let mut reverse: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (i, neighbors) in neighbor_lists.iter().enumerate() {
             for &j in neighbors {
-                reverse[j].insert(i);
+                reverse[j].push(i);
             }
         }
+        // Sort each reverse list (they're built in order of i, so already sorted)
         reverse
     };
 
     // NN-Descent iterations
     for _ in 0..config.nn_descent_iterations {
         let mut updates = 0;
-        let reverse_neighbors = build_reverse(&neighbor_sets);
+        let reverse_neighbors = build_reverse(&neighbor_lists);
 
         // For each point, explore neighbors of neighbors
         for i in 0..n {
@@ -323,31 +349,29 @@ where
             let mut candidates: Vec<usize> = Vec::new();
 
             // Sample from forward neighbors
-            let forward: Vec<usize> = neighbor_sets[i].iter().copied().collect();
+            let mut sampled_forward = neighbor_lists[i].clone();
             let sample_size =
-                ((forward.len() as f64 * config.nn_descent_sample_rate).ceil() as usize).max(1);
-            let mut sampled_forward = forward.clone();
+                ((sampled_forward.len() as f64 * config.nn_descent_sample_rate).ceil() as usize).max(1);
             sampled_forward.shuffle(rng);
             sampled_forward.truncate(sample_size);
 
             // Sample from reverse neighbors
-            let reverse: Vec<usize> = reverse_neighbors[i].iter().copied().collect();
+            let mut sampled_reverse = reverse_neighbors[i].clone();
             let sample_size =
-                ((reverse.len() as f64 * config.nn_descent_sample_rate).ceil() as usize).max(1);
-            let mut sampled_reverse = reverse.clone();
+                ((sampled_reverse.len() as f64 * config.nn_descent_sample_rate).ceil() as usize).max(1);
             sampled_reverse.shuffle(rng);
             sampled_reverse.truncate(sample_size);
 
             // Neighbors of neighbors
             for &neighbor in sampled_forward.iter().chain(sampled_reverse.iter()) {
-                for &nn in &neighbor_sets[neighbor] {
-                    if nn != i && !neighbor_sets[i].contains(&nn) {
+                for &nn in &neighbor_lists[neighbor] {
+                    if nn != i && !sorted_contains(&neighbor_lists[i], nn) {
                         candidates.push(nn);
                     }
                 }
                 // Also check reverse neighbors of neighbors
                 for &rn in &reverse_neighbors[neighbor] {
-                    if rn != i && !neighbor_sets[i].contains(&rn) {
+                    if rn != i && !sorted_contains(&neighbor_lists[i], rn) {
                         candidates.push(rn);
                     }
                 }
@@ -366,13 +390,13 @@ where
                     if d < worst.distance {
                         // Remove worst and add new neighbor
                         let removed = heaps[i].pop().unwrap();
-                        neighbor_sets[i].remove(&removed.index);
+                        sorted_remove(&mut neighbor_lists[i], removed.index);
 
                         heaps[i].push(NeighborEntry {
                             index: c,
                             distance: d,
                         });
-                        neighbor_sets[i].insert(c);
+                        sorted_insert(&mut neighbor_lists[i], c);
                         updates += 1;
                     }
                 }
@@ -403,17 +427,22 @@ where
 }
 
 /// Find connected components in the ANN graph using DFS
-/// Returns the undirected graph adjacency list and component assignments
-fn find_components(ann_graph: &AnnGraph) -> (Vec<HashSet<usize>>, Vec<Vec<usize>>) {
+/// Returns the undirected graph adjacency list (sorted vecs) and component assignments
+fn find_components(ann_graph: &AnnGraph) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
     let n = ann_graph.n();
 
-    // Build undirected graph from directed ANN graph
-    let mut graph: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+    // Build undirected graph from directed ANN graph using sorted vecs
+    let mut graph: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (i, neighbors) in ann_graph.neighbors.iter().enumerate() {
         for &j in neighbors {
-            graph[i].insert(j);
-            graph[j].insert(i);
+            graph[i].push(j);
+            graph[j].push(i);
         }
+    }
+    // Sort and deduplicate each adjacency list
+    for adj in &mut graph {
+        adj.sort_unstable();
+        adj.dedup();
     }
 
     // DFS to find components
@@ -494,7 +523,7 @@ where
 /// Refine inter-component edges (Algorithm 4 in the paper)
 fn refine_edges<T, D>(
     data: &[T],
-    undirected_graph: &[HashSet<usize>],
+    undirected_graph: &[Vec<usize>],
     components: &[Vec<usize>],
     edges: &[Edge],
     edge_components: &[(usize, usize)],
@@ -503,19 +532,15 @@ fn refine_edges<T, D>(
 where
     D: Fn(&T, &T) -> f64,
 {
-    // Build component membership lookup
-    let mut node_to_component: HashMap<usize, usize> = HashMap::new();
+    let n = data.len();
+    
+    // Build component membership lookup (simple vec, O(1) lookup)
+    let mut node_to_component: Vec<usize> = vec![0; n];
     for (comp_idx, component) in components.iter().enumerate() {
         for &node in component {
-            node_to_component.insert(node, comp_idx);
+            node_to_component[node] = comp_idx;
         }
     }
-
-    // Build component node sets for quick lookup
-    let component_sets: Vec<HashSet<usize>> = components
-        .iter()
-        .map(|c| c.iter().copied().collect())
-        .collect();
 
     let mut refined_edges = Vec::with_capacity(edges.len());
     let mut changes = 0;
@@ -526,40 +551,25 @@ where
         let mut best_d = edge.distance;
 
         // Get neighbors of u that are in component ci
-        let neighbors_u: Vec<usize> = undirected_graph[edge.u]
-            .iter()
-            .filter(|&&n| component_sets[ci].contains(&n))
-            .copied()
-            .collect();
-
-        // Try to find better u from neighbors
-        for u_prime in neighbors_u {
-            if u_prime == edge.v {
-                continue;
-            }
-            let d_prime = distance_fn(&data[u_prime], &data[best_v]);
-            if d_prime < best_d {
-                best_u = u_prime;
-                best_d = d_prime;
+        // (undirected_graph is sorted, so we can iterate directly)
+        for &u_prime in &undirected_graph[edge.u] {
+            if node_to_component[u_prime] == ci && u_prime != edge.v {
+                let d_prime = distance_fn(&data[u_prime], &data[best_v]);
+                if d_prime < best_d {
+                    best_u = u_prime;
+                    best_d = d_prime;
+                }
             }
         }
 
         // Get neighbors of v that are in component cj
-        let neighbors_v: Vec<usize> = undirected_graph[edge.v]
-            .iter()
-            .filter(|&&n| component_sets[cj].contains(&n))
-            .copied()
-            .collect();
-
-        // Try to find better v from neighbors (using updated best_u)
-        for v_prime in neighbors_v {
-            if v_prime == edge.u {
-                continue;
-            }
-            let d_prime = distance_fn(&data[best_u], &data[v_prime]);
-            if d_prime < best_d {
-                best_v = v_prime;
-                best_d = d_prime;
+        for &v_prime in &undirected_graph[edge.v] {
+            if node_to_component[v_prime] == cj && v_prime != edge.u {
+                let d_prime = distance_fn(&data[best_u], &data[v_prime]);
+                if d_prime < best_d {
+                    best_v = v_prime;
+                    best_d = d_prime;
+                }
             }
         }
 
