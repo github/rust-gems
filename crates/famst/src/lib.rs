@@ -146,7 +146,7 @@ where
     famst_with_rng(data, distance_fn, config, &mut rand::thread_rng())
 }
 
-/// FAMST with custom RNG for reproducibility
+/// FAMST with custom RNG. (We use a seeded RNG in tests for reproducibility.)
 pub fn famst_with_rng<T, D, R>(
     data: &[T],
     distance_fn: D,
@@ -616,25 +616,25 @@ fn extract_mst_from_ann(ann_graph: &AnnGraph, n: usize) -> Vec<Edge> {
     extract_mst(ann_graph, &[], n)
 }
 
-/// Euclidean distance for slices of f64
-pub fn euclidean_distance(a: &[f64], b: &[f64]) -> f64 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| (x - y).powi(2))
-        .sum::<f64>()
-        .sqrt()
-}
-
-/// Manhattan distance for slices of f64
-pub fn manhattan_distance(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
+
+    /// Manhattan distance for slices of f64
+    pub fn manhattan_distance(a: &[f64], b: &[f64]) -> f64 {
+        a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum()
+    }
+
+    /// Euclidean distance for slices of f64
+    pub fn euclidean_distance(a: &[f64], b: &[f64]) -> f64 {
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f64>()
+            .sqrt()
+    }
 
     #[test]
     fn test_empty_input() {
@@ -657,11 +657,7 @@ mod tests {
     #[test]
     fn test_k_greater_than_n() {
         // 3 points but k=20 (default), so k >= n
-        let points: Vec<Vec<f64>> = vec![
-            vec![0.0, 0.0],
-            vec![1.0, 0.0],
-            vec![0.0, 1.0],
-        ];
+        let points: Vec<Vec<f64>> = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
         let distance = |a: &Vec<f64>, b: &Vec<f64>| euclidean_distance(a, b);
         let config = FamstConfig::default(); // k=20 > n=3
         let result = famst(&points, distance, &config);
