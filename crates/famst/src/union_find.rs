@@ -1,6 +1,6 @@
 //! Union-Find (Disjoint Set Union) data structure for Kruskal's algorithm
 
-use crate::NodeId;
+use crate::{AnnGraph, NodeId};
 
 /// Union-Find (Disjoint Set Union) data structure for Kruskal's algorithm
 pub(crate) struct UnionFind {
@@ -40,4 +40,40 @@ impl UnionFind {
         }
         true
     }
+}
+
+/// Find connected components from the ANN graph
+/// Treats directed edges as undirected for connectivity
+/// Returns component assignments as a list of node lists
+pub(crate) fn find_components(ann_graph: &AnnGraph) -> Vec<Vec<NodeId>> {
+    let n = ann_graph.n();
+    let mut uf = UnionFind::new(n);
+
+    // Union all edges (treating directed as undirected)
+    for i in 0..n {
+        for neighbor in ann_graph.neighbors(i) {
+            uf.union(i as NodeId, neighbor.index);
+        }
+    }
+
+    // First pass: assign contiguous component IDs to each root
+    let mut root_to_component: Vec<NodeId> = vec![NodeId::MAX; n];
+    let mut num_components = 0;
+    for i in 0..n {
+        let root = uf.find(i as NodeId) as usize;
+        if root_to_component[root] == NodeId::MAX {
+            root_to_component[root] = num_components;
+            num_components += 1;
+        }
+    }
+
+    // Second pass: fill components directly
+    let mut components: Vec<Vec<NodeId>> = vec![Vec::new(); num_components as usize];
+    for i in 0..n {
+        let root = uf.find(i as NodeId) as usize;
+        let component_id = root_to_component[root] as usize;
+        components[component_id].push(i as NodeId);
+    }
+
+    components
 }

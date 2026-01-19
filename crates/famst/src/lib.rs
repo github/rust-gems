@@ -17,7 +17,7 @@ mod union_find;
 use nn_descent::nn_descent;
 use rand::seq::SliceRandom;
 use rand::Rng;
-use union_find::UnionFind;
+use union_find::{find_components, UnionFind};
 
 /// Node index type (32-bit for memory efficiency, limits graphs to 2^32 nodes)
 pub type NodeId = u32;
@@ -183,7 +183,7 @@ where
 
     // Phase 2: Build undirected graph and find connected components
     let undirected_graph = build_undirected_graph(&ann_graph);
-    let components = find_components(&undirected_graph);
+    let components = find_components(&ann_graph);
 
     // If only one component, skip inter-component edge logic
     if components.len() <= 1 {
@@ -252,42 +252,6 @@ fn build_undirected_graph(ann_graph: &AnnGraph) -> Vec<Vec<NodeId>> {
     }
 
     graph
-}
-
-/// Find connected components in an undirected graph using DFS
-/// Returns component assignments as a list of node lists
-fn find_components(graph: &[Vec<NodeId>]) -> Vec<Vec<NodeId>> {
-    let n = graph.len();
-
-    let mut visited = vec![false; n];
-    let mut components: Vec<Vec<NodeId>> = Vec::new();
-
-    for start in 0..n {
-        if visited[start] {
-            continue;
-        }
-
-        let mut component = Vec::new();
-        let mut stack = vec![start as NodeId];
-
-        while let Some(u) = stack.pop() {
-            if visited[u as usize] {
-                continue;
-            }
-            visited[u as usize] = true;
-            component.push(u);
-
-            for &v in &graph[u as usize] {
-                if !visited[v as usize] {
-                    stack.push(v);
-                }
-            }
-        }
-
-        components.push(component);
-    }
-
-    components
 }
 
 /// Add random edges between components (Algorithm 3 in the paper)
