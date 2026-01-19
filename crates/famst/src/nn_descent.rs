@@ -232,78 +232,90 @@ where
         // Build combined neighbor lists (forward + reverse, with reservoir sampling)
         // Also marks all neighbors as old for next iteration
         let (old_neighbors, new_neighbors) = build_neighbor_lists(&mut graph, rng);
+        println!(" Built neighbor lists");
 
-        // For each point, generate candidates from neighbors of neighbors
-        // Key optimization: only consider pairs where at least one is "new"
-        // Collect all candidates with their distances, including reverse edges
-        let mut candidates: Vec<(u32, u32, f32)> = (0..n)
-            .into_par_iter()
-            .flat_map_iter(|i| {
-                let old_i = old_neighbors.get(i);
-                let new_i = new_neighbors.get(i);
+        // Process in batches of central nodes to limit memory usage
+        let batch_size: usize = n / k;
+        let mut total_updates = 0;
+        let mut total_candidates = 0;
 
-                // new-new pairs: (u, v) where u < v
-                let new_new = new_i.iter().flat_map(|&u| {
-                    new_i
-                        .iter()
-                        .filter_map(move |&v| if u < v { Some((u, v)) } else { None })
-                });
+        for batch_start in (0..n).step_by(batch_size) {
+            let batch_end = (batch_start + batch_size).min(n);
 
-                // new-old pairs: (min, max) where u != v
-                let new_old = new_i.iter().flat_map(|&u| {
-                    old_i.iter().filter_map(move |&v| {
-                        if u != v {
-                            Some((u.min(v), u.max(v)))
-                        } else {
-                            None
+            // For each point in this batch, generate candidates from neighbors of neighbors
+            // Key optimization: only consider pairs where at least one is "new"
+            // Collect all candidates with their distances, including reverse edges
+            let mut candidates: Vec<(u32, u32, f32)> = (batch_start..batch_end)
+                .into_par_iter()
+                .flat_map_iter(|i| {
+                    let old_i = old_neighbors.get(i);
+                    let new_i = new_neighbors.get(i);
+
+                    // new-new pairs: (u, v) where u < v
+                    let new_new = new_i.iter().flat_map(|&u| {
+                        new_i
+                            .iter()
+                            .filter_map(move |&v| if u < v { Some((u, v)) } else { None })
+                    });
+
+                    // new-old pairs: (min, max) where u != v
+                    let new_old = new_i.iter().flat_map(|&u| {
+                        old_i.iter().filter_map(move |&v| {
+                            if u != v {
+                                Some((u.min(v), u.max(v)))
+                            } else {
+                                None
+                            }
+                        })
+                    });
+
+                    new_new
+                        .chain(new_old)
+                        .flat_map(|(u, v)| {
+                            let d = distance_fn(&data[u as usize], &data[v as usize]);
+                            // Insert both (u, v) and (v, u) so we can parallelize by node
+                            [(u, v, d), (v, u, d)]
+                        })
+                })
+                .collect();
+
+            // Sort by first node so candidates for each node are contiguous
+            candidates.par_sort_unstable_by_key(|(a, _, _)| *a);
+            candidates.dedup();
+            total_candidates += candidates.len();
+
+            // Process in parallel by chunks of nodes
+            const CHUNK_SIZE: usize = 64;
+            let updates: usize = graph
+                .neighbors_chunks_mut(CHUNK_SIZE)
+                .enumerate()
+                .map(|(i, chunk_neighbors)| {
+                    let start_node = (CHUNK_SIZE * i) as u32;
+                    // Binary search to find the range of candidates for this chunk
+                    let start = candidates.partition_point(|&(u, _, _)| u < start_node);
+                    let mut count = 0;
+                    for &(u, v, d) in &candidates[start..] {
+                        if u >= start_node + CHUNK_SIZE as u32 {
+                            break;
                         }
-                    })
-                });
-
-                new_new
-                    .chain(new_old)
-                    .flat_map(|(u, v)| {
-                        let d = distance_fn(&data[u as usize], &data[v as usize]);
-                        // Insert both (u, v) and (v, u) so we can parallelize by node
-                        [(u, v, d), (v, u, d)]
-                    })
-            })
-            .collect();
-
-        // Sort by first node so candidates for each node are contiguous
-        candidates.par_sort_unstable_by_key(|(a, _, _)| *a);
-        candidates.dedup();
-
-        // Process in parallel by chunks of nodes
-        const CHUNK_SIZE: usize = 64;
-        let updates: usize = graph
-            .neighbors_chunks_mut(CHUNK_SIZE)
-            .enumerate()
-            .map(|(i, chunk_neighbors)| {
-                let start_node = (CHUNK_SIZE * i) as u32;
-                // Binary search to find the range of candidates for this node
-                let start = candidates.partition_point(|&(u, _, _)| u < start_node);
-                let mut count = 0;
-                for &(u, v, d) in &candidates[start..] {
-                    if u >= start_node + CHUNK_SIZE as u32 {
-                        break;
+                        let neighbors = &mut chunk_neighbors[(u - start_node) as usize * k..][..k];
+                        if insert_neighbor(neighbors, NodeId::new(v), d) {
+                            count += 1;
+                        }
                     }
-                    let neighbors = &mut chunk_neighbors[(u - start_node) as usize * k..][..k];
-                    if insert_neighbor(neighbors, NodeId::new(v), d) {
-                        count += 1;
-                    }
-                }
-                count
-            })
-            .sum();
+                    count
+                })
+                .sum();
+
+            total_updates += updates;
+        }
 
         println!(
-            "NN-Descent iteration {iter}: {updates} updates of {} candidates",
-            candidates.len(),
+            "NN-Descent iteration {iter}: {total_updates} updates of {total_candidates} candidates",
         );
 
         // Early termination if no updates
-        if updates == 0 {
+        if total_updates == 0 {
             break;
         }
     }
