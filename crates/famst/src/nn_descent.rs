@@ -235,36 +235,34 @@ where
 
         // For each point, generate candidates from neighbors of neighbors
         // Key optimization: only consider pairs where at least one is "new"
-        let candidates: HashSet<(u32, u32)> = (0..n)
+        let mut candidates: Vec<(u32, u32)> = (0..n)
             .into_par_iter()
-            .fold(
-                HashSet::new,
-                |mut local_candidates, i| {
-                    let old_i = old_neighbors.get(i);
-                    let new_i = new_neighbors.get(i);
+            .flat_map_iter(|i| {
+                let old_i = old_neighbors.get(i);
+                let new_i = new_neighbors.get(i);
 
-                    // Skip if no new neighbors
-                    if !new_i.is_empty() {
-                        for &u in new_i {
-                            for &v in new_i {
-                                if u < v {
-                                    local_candidates.insert((u, v));
-                                }
-                            }
-                            for &v in old_i {
-                                if u != v {
-                                    local_candidates.insert((u.min(v), u.max(v)));
-                                }
-                            }
+                // new-new pairs: (u, v) where u < v
+                let new_new = new_i.iter().flat_map(|&u| {
+                    new_i.iter().filter_map(move |&v| if u < v { Some((u, v)) } else { None })
+                });
+
+                // new-old pairs: (min, max) where u != v
+                let new_old = new_i.iter().flat_map(|&u| {
+                    old_i.iter().filter_map(move |&v| {
+                        if u != v {
+                            Some((u.min(v), u.max(v)))
+                        } else {
+                            None
                         }
-                    }
-                    local_candidates
-                },
-            )
-            .reduce(HashSet::new, |mut a, b| {
-                a.extend(b);
-                a
-            });
+                    })
+                });
+
+                new_new.chain(new_old)
+            })
+            .take_any(n * k)
+            .collect();
+        candidates.par_sort_unstable();
+        candidates.dedup();
 
         // Try to improve neighbors with candidates
         let mut updates = 0;
@@ -278,7 +276,7 @@ where
             }
         }
 
-        println!("NN-Descent iteration {iter}: {updates} updates");
+        println!("NN-Descent iteration {iter}: {updates} updates of {} candidates", candidates.len());
 
         // Early termination if no updates
         if updates == 0 {
