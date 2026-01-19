@@ -182,7 +182,8 @@ where
     let ann_graph = nn_descent(data, &distance_fn, config, rng);
 
     // Phase 2: Build undirected graph and find connected components
-    let (undirected_graph, components) = find_components(&ann_graph);
+    let undirected_graph = build_undirected_graph(&ann_graph);
+    let components = find_components(&undirected_graph);
 
     // If only one component, skip inter-component edge logic
     if components.len() <= 1 {
@@ -231,12 +232,11 @@ where
     }
 }
 
-/// Find connected components in the ANN graph using DFS
-/// Returns the undirected graph adjacency list (sorted vecs) and component assignments
-fn find_components(ann_graph: &AnnGraph) -> (Vec<Vec<NodeId>>, Vec<Vec<NodeId>>) {
+/// Build an undirected graph from the directed ANN graph
+/// Returns adjacency list with sorted, deduplicated neighbors
+fn build_undirected_graph(ann_graph: &AnnGraph) -> Vec<Vec<NodeId>> {
     let n = ann_graph.n();
 
-    // Build undirected graph from directed ANN graph using sorted vecs
     let mut graph: Vec<Vec<NodeId>> = vec![Vec::new(); n];
     for i in 0..n {
         for neighbor in ann_graph.neighbors(i) {
@@ -251,7 +251,14 @@ fn find_components(ann_graph: &AnnGraph) -> (Vec<Vec<NodeId>>, Vec<Vec<NodeId>>)
         adj.dedup();
     }
 
-    // DFS to find components
+    graph
+}
+
+/// Find connected components in an undirected graph using DFS
+/// Returns component assignments as a list of node lists
+fn find_components(graph: &[Vec<NodeId>]) -> Vec<Vec<NodeId>> {
+    let n = graph.len();
+
     let mut visited = vec![false; n];
     let mut components: Vec<Vec<NodeId>> = Vec::new();
 
@@ -280,7 +287,7 @@ fn find_components(ann_graph: &AnnGraph) -> (Vec<Vec<NodeId>>, Vec<Vec<NodeId>>)
         components.push(component);
     }
 
-    (graph, components)
+    components
 }
 
 /// Add random edges between components (Algorithm 3 in the paper)
