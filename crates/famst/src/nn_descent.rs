@@ -5,44 +5,94 @@
 
 use rand::seq::SliceRandom;
 use rand::Rng;
-use std::collections::BinaryHeap;
+use std::collections::HashSet;
 
 use crate::{AnnGraph, FamstConfig, Neighbor, NodeId};
 
-/// Check if sorted vec contains value
-fn sorted_contains(v: &[NodeId], x: NodeId) -> bool {
-    v.binary_search(&x).is_ok()
+/// Build reverse neighbor lists (who has me as a neighbor)
+fn build_reverse(graph: &AnnGraph) -> Vec<Vec<NodeId>> {
+    let n = graph.n();
+    let mut reverse: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for neighbor in graph.neighbors(i) {
+            reverse[neighbor.index as usize].push(i as NodeId);
+        }
+    }
+    reverse
 }
 
-/// Insert into sorted vec, returns true if inserted (was not present)
-fn sorted_insert(v: &mut Vec<NodeId>, x: NodeId) -> bool {
-    match v.binary_search(&x) {
-        Ok(_) => false,
-        Err(pos) => {
-            v.insert(pos, x);
+/// Initialize ANN graph with random neighbors
+fn init_random_graph<T, D, R>(data: &[T], k: usize, distance_fn: &D, rng: &mut R) -> AnnGraph
+where
+    D: Fn(&T, &T) -> f32,
+    R: Rng,
+{
+    let n = data.len();
+    let mut graph_data: Vec<Neighbor> = Vec::with_capacity(n * k);
+
+    for i in 0..n {
+        let mut neighbors: Vec<Neighbor> = Vec::with_capacity(k);
+        let mut seen: HashSet<NodeId> = HashSet::with_capacity(k);
+
+        // Sample k random neighbors using Floyd's algorithm - guaranteed O(k)
+        let effective_n = n - 1; // exclude self
+        let range_start = effective_n.saturating_sub(k);
+        for t in range_start..effective_n {
+            let j = rng.gen_range(0..=t);
+            // Map j to actual index, skipping i
+            let actual_j = (if j >= i { j + 1 } else { j }) as NodeId;
+
+            let selected = if seen.insert(actual_j) {
+                actual_j
+            } else {
+                // j was already selected, so add t instead
+                let actual_t = (if t >= i { t + 1 } else { t }) as NodeId;
+                seen.insert(actual_t);
+                actual_t
+            };
+
+            let d = distance_fn(&data[i], &data[selected as usize]);
+            neighbors.push(Neighbor {
+                index: selected,
+                distance: d,
+            });
+        }
+
+        // Sort by (distance, index) for total ordering
+        neighbors.sort();
+        graph_data.extend(neighbors);
+    }
+
+    AnnGraph::new(n, k, graph_data)
+}
+
+/// Try to insert a new neighbor into a sorted neighbor slice.
+/// Returns true if the neighbor was inserted (better than the worst).
+/// Assumes neighbors are sorted by (distance, index) for total ordering.
+fn insert_neighbor(neighbors: &mut [Neighbor], new_index: NodeId, new_distance: f32) -> bool {
+    let new_neighbor = Neighbor {
+        index: new_index,
+        distance: new_distance,
+    };
+
+    // Binary search using total ordering - also serves as existence check
+    match neighbors.binary_search(&new_neighbor) {
+        Ok(_) => false, // Already exists
+        Err(insert_pos) => {
+            // Check if better than worst (last element)
+            if insert_pos >= neighbors.len() {
+                return false;
+            }
+
+            // Shift elements to make room (dropping the last/worst)
+            for j in (insert_pos + 1..neighbors.len()).rev() {
+                neighbors[j] = neighbors[j - 1];
+            }
+
+            neighbors[insert_pos] = new_neighbor;
             true
         }
     }
-}
-
-/// Remove from sorted vec
-fn sorted_remove(v: &mut Vec<NodeId>, x: NodeId) {
-    if let Ok(pos) = v.binary_search(&x) {
-        v.remove(pos);
-    }
-}
-
-/// Build reverse neighbor lists (who has me as a neighbor)
-/// Returns sorted vecs for each point
-fn build_reverse(neighbor_lists: &[Vec<NodeId>], n: usize) -> Vec<Vec<NodeId>> {
-    let mut reverse: Vec<Vec<NodeId>> = vec![Vec::new(); n];
-    for (i, neighbors) in neighbor_lists.iter().enumerate() {
-        for &j in neighbors {
-            reverse[j as usize].push(i as NodeId);
-        }
-    }
-    // Each reverse list is built in order of i, so already sorted
-    reverse
 }
 
 /// NN-Descent algorithm for approximate k-NN graph construction
@@ -66,56 +116,26 @@ where
         return AnnGraph::new(n, 0, vec![]);
     }
 
-    // Initialize with random neighbors using max-heap for each point
-    // neighbor_lists[i] is kept sorted by index for O(log k) membership tests
-    let mut heaps: Vec<BinaryHeap<Neighbor>> = Vec::with_capacity(n);
-    let mut neighbor_lists: Vec<Vec<NodeId>> = vec![Vec::with_capacity(k); n];
-
-    for i in 0..n {
-        let mut heap = BinaryHeap::with_capacity(k);
-
-        // Sample k random neighbors using Floyd's algorithm - guaranteed O(k)
-        // https://fermatslibrary.com/s/a-sample-of-brilliance
-        // This selects k distinct elements from 0..n, excluding i
-        let effective_n = n - 1; // exclude self
-        let range_start = effective_n.saturating_sub(k);
-        for t in range_start..effective_n {
-            let j = rng.gen_range(0..=t);
-            // Map j to actual index, skipping i
-            let actual_j = (if j >= i { j + 1 } else { j }) as NodeId;
-
-            if !sorted_insert(&mut neighbor_lists[i], actual_j) {
-                // j was already selected, so add t instead
-                let actual_t = (if t >= i { t + 1 } else { t }) as NodeId;
-                sorted_insert(&mut neighbor_lists[i], actual_t);
-                let d = distance_fn(&data[i], &data[actual_t as usize]);
-                heap.push(Neighbor {
-                    index: actual_t,
-                    distance: d,
-                });
-            } else {
-                let d = distance_fn(&data[i], &data[actual_j as usize]);
-                heap.push(Neighbor {
-                    index: actual_j,
-                    distance: d,
-                });
-            }
-        }
-        heaps.push(heap);
-    }
+    // Initialize ANN graph with random neighbors
+    let mut graph = init_random_graph(data, k, distance_fn, rng);
 
     // NN-Descent iterations
     for _ in 0..config.nn_descent_iterations {
         let mut updates = 0;
-        let reverse_neighbors = build_reverse(&neighbor_lists, n);
+        let reverse_neighbors = build_reverse(&graph);
 
         // For each point, explore neighbors of neighbors
         for i in 0..n {
+            // Build set of current neighbors for O(1) lookup
+            let current_neighbors: HashSet<NodeId> =
+                graph.neighbors(i).iter().map(|nb| nb.index).collect();
+
             // Collect candidates: neighbors and reverse neighbors
             let mut candidates: Vec<NodeId> = Vec::new();
 
             // Sample from forward neighbors
-            let mut sampled_forward = neighbor_lists[i].clone();
+            let mut sampled_forward: Vec<NodeId> =
+                graph.neighbors(i).iter().map(|nb| nb.index).collect();
             let sample_size =
                 ((sampled_forward.len() as f64 * config.nn_descent_sample_rate).ceil() as usize)
                     .max(1);
@@ -133,14 +153,14 @@ where
             // Neighbors of neighbors
             let i_id = i as NodeId;
             for &neighbor in sampled_forward.iter().chain(sampled_reverse.iter()) {
-                for &nn in &neighbor_lists[neighbor as usize] {
-                    if nn != i_id && !sorted_contains(&neighbor_lists[i], nn) {
-                        candidates.push(nn);
+                for nb in graph.neighbors(neighbor as usize) {
+                    if nb.index != i_id && !current_neighbors.contains(&nb.index) {
+                        candidates.push(nb.index);
                     }
                 }
                 // Also check reverse neighbors of neighbors
                 for &rn in &reverse_neighbors[neighbor as usize] {
-                    if rn != i_id && !sorted_contains(&neighbor_lists[i], rn) {
+                    if rn != i_id && !current_neighbors.contains(&rn) {
                         candidates.push(rn);
                     }
                 }
@@ -154,17 +174,8 @@ where
             for c in candidates {
                 let d = distance_fn(&data[i], &data[c as usize]);
 
-                // Check if this is better than the worst current neighbor
-                if let Some(worst) = heaps[i].peek() {
-                    if d < worst.distance {
-                        // Remove worst and add new neighbor
-                        let removed = heaps[i].pop().unwrap();
-                        sorted_remove(&mut neighbor_lists[i], removed.index);
-
-                        heaps[i].push(Neighbor { index: c, distance: d });
-                        sorted_insert(&mut neighbor_lists[i], c);
-                        updates += 1;
-                    }
+                if insert_neighbor(graph.neighbors_mut(i), c, d) {
+                    updates += 1;
                 }
             }
         }
@@ -175,14 +186,5 @@ where
         }
     }
 
-    // Convert heaps to flat neighbor array sorted by distance
-    let mut result_data = Vec::with_capacity(n * k);
-
-    for heap in heaps {
-        let mut entries: Vec<Neighbor> = heap.into_vec();
-        entries.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
-        result_data.extend(entries);
-    }
-
-    AnnGraph::new(n, k, result_data)
+    graph
 }

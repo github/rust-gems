@@ -45,7 +45,7 @@ pub(crate) struct Neighbor {
 
 impl PartialEq for Neighbor {
     fn eq(&self, other: &Self) -> bool {
-        self.distance == other.distance
+        self.distance == other.distance && self.index == other.index
     }
 }
 
@@ -59,10 +59,11 @@ impl PartialOrd for Neighbor {
 
 impl Ord for Neighbor {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Max-heap: larger distances have higher priority
+        // Total ordering by (distance, index)
         self.distance
             .partial_cmp(&other.distance)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| self.index.cmp(&other.index))
     }
 }
 
@@ -78,19 +79,29 @@ pub(crate) struct AnnGraph {
 }
 
 impl AnnGraph {
-    fn new(n: usize, k: usize, data: Vec<Neighbor>) -> Self {
+    pub(crate) fn new(n: usize, k: usize, data: Vec<Neighbor>) -> Self {
         assert_eq!(data.len(), n * k);
         AnnGraph { data, n, k }
     }
 
-    fn n(&self) -> usize {
+    pub(crate) fn n(&self) -> usize {
         self.n
     }
 
+    pub(crate) fn k(&self) -> usize {
+        self.k
+    }
+
     /// Get the neighbors of point i
-    fn neighbors(&self, i: usize) -> &[Neighbor] {
+    pub(crate) fn neighbors(&self, i: usize) -> &[Neighbor] {
         let start = i * self.k;
         &self.data[start..start + self.k]
+    }
+
+    /// Get mutable access to neighbors of point i
+    pub(crate) fn neighbors_mut(&mut self, i: usize) -> &mut [Neighbor] {
+        let start = i * self.k;
+        &mut self.data[start..start + self.k]
     }
 }
 
