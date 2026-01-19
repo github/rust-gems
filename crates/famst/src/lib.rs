@@ -157,7 +157,8 @@ pub struct FamstResult {
 /// Panics if `data.len() >= 2^32` (more than ~4 billion points).
 pub fn famst<T, D>(data: &[T], distance_fn: D, config: &FamstConfig) -> FamstResult
 where
-    D: Fn(&T, &T) -> f32,
+    T: Sync,
+    D: Fn(&T, &T) -> f32 + Sync,
 {
     famst_with_rng(data, distance_fn, config, &mut rand::thread_rng())
 }
@@ -173,7 +174,8 @@ pub fn famst_with_rng<T, D, R>(
     rng: &mut R,
 ) -> FamstResult
 where
-    D: Fn(&T, &T) -> f32,
+    T: Sync,
+    D: Fn(&T, &T) -> f32 + Sync,
     R: Rng,
 {
     let n = data.len();

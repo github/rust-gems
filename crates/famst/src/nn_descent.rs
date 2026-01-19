@@ -4,7 +4,9 @@
 //! by Wei Dong, Charikar Moses, and Kai Li (2011)
 
 use rand::seq::SliceRandom;
-use rand::Rng;
+use rand::{Rng, SeedableRng};
+use rand::rngs::SmallRng;
+use rayon::prelude::*;
 use std::collections::HashSet;
 
 use crate::{AnnGraph, FamstConfig, Neighbor, NodeId};
@@ -24,44 +26,51 @@ fn build_reverse(graph: &AnnGraph) -> Vec<Vec<NodeId>> {
 /// Initialize ANN graph with random neighbors
 fn init_random_graph<T, D, R>(data: &[T], k: usize, distance_fn: &D, rng: &mut R) -> AnnGraph
 where
-    D: Fn(&T, &T) -> f32,
+    T: Sync,
+    D: Fn(&T, &T) -> f32 + Sync,
     R: Rng,
 {
     let n = data.len();
-    let mut graph_data: Vec<Neighbor> = Vec::with_capacity(n * k);
 
-    for i in 0..n {
-        let mut neighbors: Vec<Neighbor> = Vec::with_capacity(k);
-        let mut seen: HashSet<NodeId> = HashSet::with_capacity(k);
+    // Generate seeds for per-thread RNGs
+    let seeds: Vec<u64> = (0..n).map(|_| rng.r#gen()).collect();
 
-        // Sample k random neighbors using Floyd's algorithm - guaranteed O(k)
-        let effective_n = n - 1; // exclude self
-        let range_start = effective_n.saturating_sub(k);
-        for t in range_start..effective_n {
-            let j = rng.gen_range(0..=t);
-            // Map j to actual index, skipping i
-            let actual_j = (if j >= i { j + 1 } else { j }) as NodeId;
+    let graph_data: Vec<Neighbor> = (0..n)
+        .into_par_iter()
+        .flat_map(|i| {
+            let mut local_rng = SmallRng::seed_from_u64(seeds[i]);
+            let mut neighbors: Vec<Neighbor> = Vec::with_capacity(k);
+            let mut seen: HashSet<NodeId> = HashSet::with_capacity(k);
 
-            let selected = if seen.insert(actual_j) {
-                actual_j
-            } else {
-                // j was already selected, so add t instead
-                let actual_t = (if t >= i { t + 1 } else { t }) as NodeId;
-                seen.insert(actual_t);
-                actual_t
-            };
+            // Sample k random neighbors using Floyd's algorithm - guaranteed O(k)
+            let effective_n = n - 1; // exclude self
+            let range_start = effective_n.saturating_sub(k);
+            for t in range_start..effective_n {
+                let j = local_rng.gen_range(0..=t);
+                // Map j to actual index, skipping i
+                let actual_j = (if j >= i { j + 1 } else { j }) as NodeId;
 
-            let d = distance_fn(&data[i], &data[selected as usize]);
-            neighbors.push(Neighbor {
-                index: selected,
-                distance: d,
-            });
-        }
+                let selected = if seen.insert(actual_j) {
+                    actual_j
+                } else {
+                    // j was already selected, so add t instead
+                    let actual_t = (if t >= i { t + 1 } else { t }) as NodeId;
+                    seen.insert(actual_t);
+                    actual_t
+                };
 
-        // Sort by (distance, index) for total ordering
-        neighbors.sort();
-        graph_data.extend(neighbors);
-    }
+                let d = distance_fn(&data[i], &data[selected as usize]);
+                neighbors.push(Neighbor {
+                    index: selected,
+                    distance: d,
+                });
+            }
+
+            // Sort by (distance, index) for total ordering
+            neighbors.sort();
+            neighbors
+        })
+        .collect();
 
     AnnGraph::new(n, k, graph_data)
 }
@@ -106,7 +115,8 @@ pub(crate) fn nn_descent<T, D, R>(
     rng: &mut R,
 ) -> AnnGraph
 where
-    D: Fn(&T, &T) -> f32,
+    T: Sync,
+    D: Fn(&T, &T) -> f32 + Sync,
     R: Rng,
 {
     let n = data.len();
