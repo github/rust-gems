@@ -14,48 +14,54 @@ use std::collections::HashSet;
 
 use crate::{AnnGraph, FamstConfig, Neighbor, NodeId};
 
-/// Reverse neighbor lists with bounded size k per node.
-/// Uses flat storage: data[i*k..(i+1)*k] contains up to k reverse neighbors of node i.
-/// Uses reservoir sampling when more than k reverse edges exist.
-struct ReverseNeighbors {
-    /// Flat storage of reverse neighbor IDs (with new flag preserved)
+/// Neighbor lists with bounded size k per node.
+/// Uses flat storage: data[i*k..(i+1)*k] contains up to k neighbors of node i.
+/// Uses reservoir sampling when more than k neighbors exist.
+struct Neighbors {
+    /// Flat storage of neighbor IDs
     data: Vec<NodeId>,
-    /// Count of reverse neighbors seen so far (for reservoir sampling)
+    /// Count of neighbors seen so far (for reservoir sampling)
     counts: Vec<u32>,
-    /// Max reverse neighbors per node
+    /// Max neighbors per node
     k: usize,
 }
 
-impl ReverseNeighbors {
+impl Neighbors {
     fn new(n: usize, k: usize) -> Self {
-        ReverseNeighbors {
+        Neighbors {
             data: vec![NodeId::new(0); n * k],
             counts: vec![0; n],
             k,
         }
     }
 
-    /// Add a reverse edge: node `from` is a neighbor of node `to`, so `to` has reverse edge to `from`.
-    /// Uses reservoir sampling to maintain at most k reverse neighbors.
+    /// Add a neighbor using reservoir sampling to maintain at most k neighbors.
+    /// Skips if the neighbor is already present.
     #[inline]
-    fn add(&mut self, to: usize, from: NodeId, rng: &mut impl Rng) {
-        let count = self.counts[to] as usize;
-        let start = to * self.k;
+    fn add(&mut self, node: usize, neighbor: NodeId, rng: &mut impl Rng) {
+        let count = self.counts[node] as usize;
+        let start = node * self.k;
+        let filled = count.min(self.k);
+
+        // Check if neighbor already exists in the filled portion
+        if self.data[start..start + filled].contains(&neighbor) {
+            return;
+        }
 
         if count < self.k {
             // Still have room, just append
-            self.data[start + count] = from;
+            self.data[start + count] = neighbor;
         } else {
             // Reservoir sampling: replace with probability k / (count + 1)
             let j = rng.gen_range(0..=count);
             if j < self.k {
-                self.data[start + j] = from;
+                self.data[start + j] = neighbor;
             }
         }
-        self.counts[to] += 1;
+        self.counts[node] += 1;
     }
 
-    /// Get the reverse neighbors of node i (only the filled slots)
+    /// Get the neighbors of node i (only the filled slots)
     #[inline]
     fn get(&self, i: usize) -> &[NodeId] {
         let start = i * self.k;
@@ -64,26 +70,46 @@ impl ReverseNeighbors {
     }
 }
 
-/// Build reverse neighbor lists with reservoir sampling.
-/// Returns separate old and new reverse neighbor structures.
-fn build_reverse_lists(graph: &AnnGraph, rng: &mut impl Rng) -> (ReverseNeighbors, ReverseNeighbors) {
+/// Build combined neighbor lists (forward + reverse) with reservoir sampling.
+/// Returns (old_neighbors, new_neighbors), each with 2*k capacity per node.
+/// Only marks neighbors that were selected into new_neighbors as old.
+fn build_neighbor_lists(graph: &mut AnnGraph, rng: &mut impl Rng) -> (Neighbors, Neighbors) {
     let n = graph.n();
     let k = graph.k();
-    let mut old_reverse = ReverseNeighbors::new(n, k);
-    let mut new_reverse = ReverseNeighbors::new(n, k);
+    // 2*k capacity: k for forward + k for reverse
+    let mut old_neighbors = Neighbors::new(n, 2 * k);
+    let mut new_neighbors = Neighbors::new(n, 2 * k);
 
     for i in 0..n {
         let i_id = NodeId::new(i as u32);
         for neighbor in graph.neighbors(i) {
             let target = neighbor.index.index() as usize;
+            let target_id = neighbor.index.as_old(); // Strip new flag for storage
             if neighbor.index.is_new() {
-                new_reverse.add(target, i_id, rng);
+                // Forward: i -> target, Reverse: target <- i
+                new_neighbors.add(i, target_id, rng);
+                new_neighbors.add(target, i_id, rng);
             } else {
-                old_reverse.add(target, i_id, rng);
+                old_neighbors.add(i, target_id, rng);
+                old_neighbors.add(target, i_id, rng);
             }
         }
     }
-    (old_reverse, new_reverse)
+
+    // Only mark neighbors as old if they were selected into new_neighbors
+    for i in 0..n {
+        for &selected_id in new_neighbors.get(i) {
+            // Find this neighbor in the graph and mark as old if it's still new
+            for nb in graph.neighbors_mut(i) {
+                if nb.index == selected_id {
+                    nb.index = nb.index.as_old();
+                    break;
+                }
+            }
+        }
+    }
+
+    (old_neighbors, new_neighbors)
 }
 
 /// Initialize ANN graph with random neighbors
@@ -201,30 +227,10 @@ where
 
     // NN-Descent iterations
     for iter in 0..config.nn_descent_iterations {
-        // Build reverse neighbor lists, separating old and new (with reservoir sampling)
-        let (old_reverse, new_reverse) = build_reverse_lists(&graph, rng);
-
-        // For each point, collect old and new forward neighbors
-        let mut old_neighbors: Vec<Vec<NodeId>> = vec![Vec::new(); n];
-        let mut new_neighbors: Vec<Vec<NodeId>> = vec![Vec::new(); n];
-
-        for i in 0..n {
-            for nb in graph.neighbors(i) {
-                let idx = nb.index.as_old(); // Strip new flag for storage
-                if nb.index.is_new() {
-                    new_neighbors[i].push(idx);
-                } else {
-                    old_neighbors[i].push(idx);
-                }
-            }
-        }
-
-        // Mark all neighbors as old for next iteration
-        for i in 0..n {
-            for nb in graph.neighbors_mut(i) {
-                nb.index = nb.index.as_old();
-            }
-        }
+        println!("NN-Descent iteration {iter}...");
+        // Build combined neighbor lists (forward + reverse, with reservoir sampling)
+        // Also marks all neighbors as old for next iteration
+        let (old_neighbors, new_neighbors) = build_neighbor_lists(&mut graph, rng);
 
         let mut updates = 0;
 
@@ -233,17 +239,8 @@ where
         for i in 0..n {
             let i_id = NodeId::new(i as u32);
 
-            // Combine forward and reverse neighbors
-            let old_i: Vec<NodeId> = old_neighbors[i]
-                .iter()
-                .chain(old_reverse.get(i).iter())
-                .copied()
-                .collect();
-            let new_i: Vec<NodeId> = new_neighbors[i]
-                .iter()
-                .chain(new_reverse.get(i).iter())
-                .copied()
-                .collect();
+            let old_i = old_neighbors.get(i);
+            let new_i = new_neighbors.get(i);
 
             // Skip if no new neighbors
             if new_i.is_empty() {
@@ -260,14 +257,9 @@ where
             let mut candidates: HashSet<NodeId> = HashSet::new();
 
             // new-new pairs: for each new neighbor, look at their new neighbors
-            for &u in &new_i {
+            for &u in new_i {
                 let u_idx = u.index() as usize;
-                for &v in &new_neighbors[u_idx] {
-                    if v != i_id && !current_neighbors.contains(&v) {
-                        candidates.insert(v);
-                    }
-                }
-                for v in new_reverse.get(u_idx) {
+                for v in new_neighbors.get(u_idx) {
                     if *v != i_id && !current_neighbors.contains(v) {
                         candidates.insert(*v);
                     }
@@ -275,14 +267,9 @@ where
             }
 
             // new-old pairs: for each new neighbor, look at their old neighbors
-            for &u in &new_i {
+            for &u in new_i {
                 let u_idx = u.index() as usize;
-                for &v in &old_neighbors[u_idx] {
-                    if v != i_id && !current_neighbors.contains(&v) {
-                        candidates.insert(v);
-                    }
-                }
-                for v in old_reverse.get(u_idx) {
+                for v in old_neighbors.get(u_idx) {
                     if *v != i_id && !current_neighbors.contains(v) {
                         candidates.insert(*v);
                     }
@@ -290,14 +277,9 @@ where
             }
 
             // old-new pairs: for each old neighbor, look at their new neighbors
-            for &u in &old_i {
+            for &u in old_i {
                 let u_idx = u.index() as usize;
-                for &v in &new_neighbors[u_idx] {
-                    if v != i_id && !current_neighbors.contains(&v) {
-                        candidates.insert(v);
-                    }
-                }
-                for v in new_reverse.get(u_idx) {
+                for v in new_neighbors.get(u_idx) {
                     if *v != i_id && !current_neighbors.contains(v) {
                         candidates.insert(*v);
                     }
@@ -320,13 +302,5 @@ where
             break;
         }
     }
-
-    // Strip the new flag from all neighbors before returning
-    for i in 0..n {
-        for nb in graph.neighbors_mut(i) {
-            nb.index = nb.index.as_old();
-        }
-    }
-
     graph
 }
