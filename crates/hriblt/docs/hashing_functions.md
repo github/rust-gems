@@ -8,7 +8,7 @@ The following documentation provides more details on this trait in particular. H
 
 When using HRIBLT in production systems it is important to consider the stability of your hash functions.
 
-We provide a `DefaultHashFunctions` type which is a wrapper around the `DefaultHasher` type provided by the Rust standard library. Though the seed for this function is fixed, it should be noted that the hashes produces by this type are *not* guarenteed to be stable across different versions of the Rust standard library. As such, you should not use this type for any situation where clients might potentially be running on a binary built with an unspecified version of Rust.
+We provide a `DefaultHashFunctions` type which is a wrapper around the `DefaultHasher` type provided by the Rust standard library. Though the seed for this function is fixed, it should be noted that the hashes produces by this type are *not* guaranteed to be stable across different versions of the Rust standard library. As such, you should not use this type for any situation where clients might potentially be running on a binary built with an unspecified version of Rust.
 
 We recommend you implement your own `HashFunctions` implementation with a stable hash function.
 

@@ -10,3 +10,14 @@ categories = ["algorithms", "data-structures", "mathematics", "science"]
 
 [dependencies]
 thiserror = "2"
+clap = { version = "4", features = ["derive"], optional = true }
+rand = { version = "0.9", optional = true }
+
+[[bin]]
+name = "hriblt-bench"
+path = "evaluation/bench.rs"
+required-features = ["bin"]
+
+[features]
+default = []
+bin = ["dep:clap", "dep:rand"]

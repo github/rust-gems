@@ -61,7 +61,7 @@ impl<T: Encodable, H: HashFunctions<T>> EncodingSession<T, H> {
 
     /// Create a EncodingSession from a vector of coded symbols.
     ///
-    /// Returns an error if the split is out of range or if the length of te vector
+    /// Returns an error if the split is out of range or if the length of the vector
     /// and the length of the range differ.
     pub fn try_from_coded_symbols(
         state: H,
