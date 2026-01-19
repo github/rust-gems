@@ -17,6 +17,8 @@ mod union_find;
 use nn_descent::nn_descent;
 use rand::seq::SliceRandom;
 use rand::Rng;
+use rayon::iter::IndexedParallelIterator;
+use rayon::slice::ParallelSliceMut;
 use union_find::{find_components, UnionFind};
 
 /// Node index with embedded "new" flag in the least significant bit.
@@ -168,6 +170,11 @@ impl AnnGraph {
     pub(crate) fn neighbors_mut(&mut self, i: usize) -> &mut [Neighbor] {
         let start = i * self.k;
         &mut self.data[start..start + self.k]
+    }
+
+    /// Get mutable access to all neighbor chunks for parallel processing
+    pub(crate) fn neighbors_chunks_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [Neighbor]> {
+        self.data.par_chunks_mut(self.k)
     }
 }
 

@@ -19,7 +19,7 @@ use crate::{AnnGraph, FamstConfig, Neighbor, NodeId};
 /// Uses reservoir sampling when more than k neighbors exist.
 struct Neighbors {
     /// Flat storage of neighbor IDs
-    data: Vec<NodeId>,
+    data: Vec<u32>,
     /// Count of neighbors seen so far (for reservoir sampling)
     counts: Vec<u32>,
     /// Max neighbors per node
@@ -29,7 +29,7 @@ struct Neighbors {
 impl Neighbors {
     fn new(n: usize, k: usize) -> Self {
         Neighbors {
-            data: vec![NodeId::new(0); n * k],
+            data: vec![0; n * k],
             counts: vec![0; n],
             k,
         }
@@ -38,7 +38,7 @@ impl Neighbors {
     /// Add a neighbor using reservoir sampling to maintain at most k neighbors.
     /// Skips if the neighbor is already present.
     #[inline]
-    fn add(&mut self, node: usize, neighbor: NodeId, rng: &mut impl Rng) {
+    fn add(&mut self, node: usize, neighbor: u32, rng: &mut impl Rng) {
         let count = self.counts[node] as usize;
         let start = node * self.k;
         let filled = count.min(self.k);
@@ -63,7 +63,7 @@ impl Neighbors {
 
     /// Get the neighbors of node i (only the filled slots)
     #[inline]
-    fn get(&self, i: usize) -> &[NodeId] {
+    fn get(&self, i: usize) -> &[u32] {
         let start = i * self.k;
         let count = (self.counts[i] as usize).min(self.k);
         &self.data[start..start + count]
@@ -77,37 +77,38 @@ fn build_neighbor_lists(graph: &mut AnnGraph, rng: &mut impl Rng) -> (Neighbors,
     let n = graph.n();
     let k = graph.k();
     // 2*k capacity: k for forward + k for reverse
-    let mut old_neighbors = Neighbors::new(n, 2 * k);
-    let mut new_neighbors = Neighbors::new(n, 2 * k);
+    let mut old_neighbors = Neighbors::new(n, k * 2);
+    let mut new_neighbors = Neighbors::new(n, k * 2);
 
     for i in 0..n {
-        let i_id = NodeId::new(i as u32);
         for neighbor in graph.neighbors(i) {
-            let target = neighbor.index.index() as usize;
-            let target_id = neighbor.index.as_old(); // Strip new flag for storage
+            let target = neighbor.index.index();
             if neighbor.index.is_new() {
                 // Forward: i -> target, Reverse: target <- i
-                new_neighbors.add(i, target_id, rng);
-                new_neighbors.add(target, i_id, rng);
+                new_neighbors.add(i, target, rng);
+                new_neighbors.add(target as usize, i as u32, rng);
             } else {
-                old_neighbors.add(i, target_id, rng);
-                old_neighbors.add(target, i_id, rng);
+                old_neighbors.add(i, target, rng);
+                old_neighbors.add(target as usize, i as u32, rng);
             }
         }
     }
 
     // Only mark neighbors as old if they were selected into new_neighbors
-    for i in 0..n {
-        for &selected_id in new_neighbors.get(i) {
-            // Find this neighbor in the graph and mark as old if it's still new
-            for nb in graph.neighbors_mut(i) {
-                if nb.index == selected_id {
-                    nb.index = nb.index.as_old();
-                    break;
+    graph
+        .neighbors_chunks_mut()
+        .enumerate()
+        .for_each(|(i, neighbors)| {
+            for &selected_id in new_neighbors.get(i) {
+                // Find this neighbor in the graph and mark as old if it's still new
+                for nb in neighbors.iter_mut() {
+                    if nb.index.index() == selected_id {
+                        nb.index = nb.index.as_old();
+                        break;
+                    }
                 }
             }
-        }
-    }
+        });
 
     (old_neighbors, new_neighbors)
 }
@@ -232,66 +233,48 @@ where
         // Also marks all neighbors as old for next iteration
         let (old_neighbors, new_neighbors) = build_neighbor_lists(&mut graph, rng);
 
-        let mut updates = 0;
-
         // For each point, generate candidates from neighbors of neighbors
         // Key optimization: only consider pairs where at least one is "new"
-        for i in 0..n {
-            let i_id = NodeId::new(i as u32);
+        let candidates: HashSet<(u32, u32)> = (0..n)
+            .into_par_iter()
+            .fold(
+                HashSet::new,
+                |mut local_candidates, i| {
+                    let old_i = old_neighbors.get(i);
+                    let new_i = new_neighbors.get(i);
 
-            let old_i = old_neighbors.get(i);
-            let new_i = new_neighbors.get(i);
-
-            // Skip if no new neighbors
-            if new_i.is_empty() {
-                continue;
-            }
-
-            // Build set of current neighbors for O(1) lookup
-            let current_neighbors: HashSet<NodeId> = graph
-                .neighbors(i)
-                .iter()
-                .map(|nb| nb.index.as_old())
-                .collect();
-
-            let mut candidates: HashSet<NodeId> = HashSet::new();
-
-            // new-new pairs: for each new neighbor, look at their new neighbors
-            for &u in new_i {
-                let u_idx = u.index() as usize;
-                for v in new_neighbors.get(u_idx) {
-                    if *v != i_id && !current_neighbors.contains(v) {
-                        candidates.insert(*v);
+                    // Skip if no new neighbors
+                    if !new_i.is_empty() {
+                        for &u in new_i {
+                            for &v in new_i {
+                                if u < v {
+                                    local_candidates.insert((u, v));
+                                }
+                            }
+                            for &v in old_i {
+                                if u != v {
+                                    local_candidates.insert((u.min(v), u.max(v)));
+                                }
+                            }
+                        }
                     }
-                }
-            }
+                    local_candidates
+                },
+            )
+            .reduce(HashSet::new, |mut a, b| {
+                a.extend(b);
+                a
+            });
 
-            // new-old pairs: for each new neighbor, look at their old neighbors
-            for &u in new_i {
-                let u_idx = u.index() as usize;
-                for v in old_neighbors.get(u_idx) {
-                    if *v != i_id && !current_neighbors.contains(v) {
-                        candidates.insert(*v);
-                    }
-                }
+        // Try to improve neighbors with candidates
+        let mut updates = 0;
+        for &(u, v) in &candidates {
+            let d = distance_fn(&data[u as usize], &data[v as usize]);
+            if insert_neighbor(graph.neighbors_mut(u as usize), NodeId::new(v), d) {
+                updates += 1;
             }
-
-            // old-new pairs: for each old neighbor, look at their new neighbors
-            for &u in old_i {
-                let u_idx = u.index() as usize;
-                for v in new_neighbors.get(u_idx) {
-                    if *v != i_id && !current_neighbors.contains(v) {
-                        candidates.insert(*v);
-                    }
-                }
-            }
-
-            // Try to improve neighbors with candidates
-            for c in candidates {
-                let d = distance_fn(&data[i], &data[c.index() as usize]);
-                if insert_neighbor(graph.neighbors_mut(i), c, d) {
-                    updates += 1;
-                }
+            if insert_neighbor(graph.neighbors_mut(v as usize), NodeId::new(u), d) {
+                updates += 1;
             }
         }
 
