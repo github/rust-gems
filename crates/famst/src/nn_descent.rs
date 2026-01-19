@@ -9,6 +9,42 @@ use std::collections::BinaryHeap;
 
 use crate::{AnnGraph, FamstConfig, Neighbor, NodeId};
 
+/// Check if sorted vec contains value
+fn sorted_contains(v: &[NodeId], x: NodeId) -> bool {
+    v.binary_search(&x).is_ok()
+}
+
+/// Insert into sorted vec, returns true if inserted (was not present)
+fn sorted_insert(v: &mut Vec<NodeId>, x: NodeId) -> bool {
+    match v.binary_search(&x) {
+        Ok(_) => false,
+        Err(pos) => {
+            v.insert(pos, x);
+            true
+        }
+    }
+}
+
+/// Remove from sorted vec
+fn sorted_remove(v: &mut Vec<NodeId>, x: NodeId) {
+    if let Ok(pos) = v.binary_search(&x) {
+        v.remove(pos);
+    }
+}
+
+/// Build reverse neighbor lists (who has me as a neighbor)
+/// Returns sorted vecs for each point
+fn build_reverse(neighbor_lists: &[Vec<NodeId>], n: usize) -> Vec<Vec<NodeId>> {
+    let mut reverse: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+    for (i, neighbors) in neighbor_lists.iter().enumerate() {
+        for &j in neighbors {
+            reverse[j as usize].push(i as NodeId);
+        }
+    }
+    // Each reverse list is built in order of i, so already sorted
+    reverse
+}
+
 /// NN-Descent algorithm for approximate k-NN graph construction
 ///
 /// Based on: "Efficient K-Nearest Neighbor Graph Construction for Generic Similarity Measures"
@@ -28,29 +64,6 @@ where
 
     if k == 0 || n <= 1 {
         return AnnGraph::new(n, 0, vec![]);
-    }
-
-    // Helper: check if sorted vec contains value
-    fn sorted_contains(v: &[NodeId], x: NodeId) -> bool {
-        v.binary_search(&x).is_ok()
-    }
-
-    // Helper: insert into sorted vec, returns true if inserted (was not present)
-    fn sorted_insert(v: &mut Vec<NodeId>, x: NodeId) -> bool {
-        match v.binary_search(&x) {
-            Ok(_) => false,
-            Err(pos) => {
-                v.insert(pos, x);
-                true
-            }
-        }
-    }
-
-    // Helper: remove from sorted vec
-    fn sorted_remove(v: &mut Vec<NodeId>, x: NodeId) {
-        if let Ok(pos) = v.binary_search(&x) {
-            v.remove(pos);
-        }
     }
 
     // Initialize with random neighbors using max-heap for each point
@@ -91,23 +104,10 @@ where
         heaps.push(heap);
     }
 
-    // Build reverse neighbor lists (who has me as a neighbor)
-    // Returns sorted vecs for each point
-    let build_reverse = |neighbor_lists: &[Vec<NodeId>]| -> Vec<Vec<NodeId>> {
-        let mut reverse: Vec<Vec<NodeId>> = vec![Vec::new(); n];
-        for (i, neighbors) in neighbor_lists.iter().enumerate() {
-            for &j in neighbors {
-                reverse[j as usize].push(i as NodeId);
-            }
-        }
-        // Sort each reverse list (they're built in order of i, so already sorted)
-        reverse
-    };
-
     // NN-Descent iterations
     for _ in 0..config.nn_descent_iterations {
         let mut updates = 0;
-        let reverse_neighbors = build_reverse(&neighbor_lists);
+        let reverse_neighbors = build_reverse(&neighbor_lists, n);
 
         // For each point, explore neighbors of neighbors
         for i in 0..n {

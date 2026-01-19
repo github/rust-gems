@@ -12,10 +12,12 @@
 //! Generic over data type `T` and distance function.
 
 mod nn_descent;
+mod union_find;
 
 use nn_descent::nn_descent;
 use rand::seq::SliceRandom;
 use rand::Rng;
+use union_find::UnionFind;
 
 /// An edge in the MST, represented as (node_a, node_b, distance)
 #[derive(Debug, Clone)]
@@ -28,46 +30,6 @@ pub struct Edge {
 impl Edge {
     fn new(u: usize, v: usize, distance: f32) -> Self {
         Edge { u, v, distance }
-    }
-}
-
-/// Union-Find (Disjoint Set Union) data structure for Kruskal's algorithm
-struct UnionFind {
-    parent: Vec<usize>,
-    rank: Vec<usize>,
-}
-
-impl UnionFind {
-    fn new(n: usize) -> Self {
-        UnionFind {
-            parent: (0..n).collect(),
-            rank: vec![0; n],
-        }
-    }
-
-    fn find(&mut self, x: usize) -> usize {
-        if self.parent[x] != x {
-            self.parent[x] = self.find(self.parent[x]); // Path compression
-        }
-        self.parent[x]
-    }
-
-    fn union(&mut self, x: usize, y: usize) -> bool {
-        let px = self.find(x);
-        let py = self.find(y);
-        if px == py {
-            return false;
-        }
-        // Union by rank
-        match self.rank[px].cmp(&self.rank[py]) {
-            std::cmp::Ordering::Less => self.parent[px] = py,
-            std::cmp::Ordering::Greater => self.parent[py] = px,
-            std::cmp::Ordering::Equal => {
-                self.parent[py] = px;
-                self.rank[px] += 1;
-            }
-        }
-        true
     }
 }
 
