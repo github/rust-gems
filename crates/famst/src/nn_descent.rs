@@ -117,10 +117,12 @@ where
     }
 
     // Initialize ANN graph with random neighbors
+    println!("Initializing random graph");
     let mut graph = init_random_graph(data, k, distance_fn, rng);
 
     // NN-Descent iterations
-    for _ in 0..config.nn_descent_iterations {
+    for iter in 0..config.nn_descent_iterations {
+        println!("NN-Descent iteration {iter}");
         let mut updates = 0;
         let reverse_neighbors = build_reverse(&graph);
 

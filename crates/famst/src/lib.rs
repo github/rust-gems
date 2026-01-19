@@ -195,6 +195,7 @@ where
     // Phase 2: Build undirected graph and find connected components
     let undirected_graph = build_undirected_graph(&ann_graph);
     let components = find_components(&ann_graph);
+    println!("Found {} connected components", components.len());
 
     // If only one component, skip inter-component edge logic
     if components.len() <= 1 {
@@ -661,7 +662,7 @@ mod tests {
         // Check all nodes are in the same component
         let root = uf.find(0);
         for i in 1..n {
-            assert_eq!(uf.find(i), root, "All nodes should be connected in the MST");
+            assert_eq!(uf.find(i as NodeId), root, "All nodes should be connected in the MST");
         }
 
         // Compare with exact MST
@@ -711,7 +712,7 @@ mod tests {
         let mut edge_count = 0;
 
         for (u, v, w) in edges {
-            if uf.union(u, v) {
+            if uf.union(u as NodeId, v as NodeId) {
                 total_weight += w;
                 edge_count += 1;
                 if edge_count == n - 1 {
@@ -764,8 +765,8 @@ mod tests {
     fn test_medium_scale_vs_exact() {
         use rand::distributions::{Distribution, Uniform};
 
-        const N: usize = 5000;
-        const DIM: usize = 5;
+        const N: usize = 10000;
+        const DIM: usize = 2;
 
         let mut rng = StdRng::seed_from_u64(99999);
         let dist = Uniform::new(0.0, 100.0);
@@ -781,10 +782,10 @@ mod tests {
 
         // Compute approximate MST with FAMST
         let config = FamstConfig {
-            k: 15,
+            k: 4,
             lambda: 5,
             max_iterations: 100,
-            nn_descent_iterations: 15,
+            nn_descent_iterations: 100,
             nn_descent_sample_rate: 0.5,
         };
         let mut famst_rng = StdRng::seed_from_u64(11111);
