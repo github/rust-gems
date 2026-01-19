@@ -10,6 +10,29 @@
 //! 3. Iterative edge refinement
 //!
 //! Generic over data type `T` and distance function.
+//! 
+//! While https://github.com/cmuparlay/ParlayANN is not specifically for MST construction,
+//! it gives some idea how far one can scale ANN graph construction.
+//! 
+//! One problem with very large graphs are cache misses. To address them, a common procedure
+//! is to partition the data/graph into smaller buckets and solve the k-NN problem within each bucket.
+//! To make this actually work, one needs to rearrange the data points according to the partitioning
+//! to improve cache locality. A quite strong partitioning can be obtained via masked sorting of geo-filters.
+//! For large chunks of the sorted data, a partial MST can be computed and then be merged with the previously
+//! computed approximate MSTs. This approach is probably more efficient than the windowing approach currently
+//! implemented in Blackbird, since many different masks are needed to get accurate results.
+//! 
+//! The default sorting implementation of Rayon is not sufficient for very large data sets though.
+//! The problem is that our data points are pretty large and copying them is costly. But leaving
+//! them in place results in cache misses. Therefore, one has to group the data into managable chunks whose data
+//! is all in one contiguous block of memory and the actual sorting can be done via references.
+//! The simplest solution to chunking is to first sample a random subset of the data. Those data points
+//! are collected into a contiguous block and first sorted via indirection and then the data can be rearranged if needed.
+//! In the second phase, all data is partitioned according to the sample points. This can be done efficiently
+//! in parallel. The intermediate output of this step is the partition each data point belongs to.
+//! At the end of this step, the data points can be copied to their locations within their partitions.
+//! In the last phase, each partition can be sorted individually via indirection and again be rearranged at the end if needed.
+//! Note, that all those steps are cache friendly and highly parallelisable.
 
 mod nn_descent;
 mod union_find;
@@ -802,7 +825,7 @@ mod tests {
     fn test_large_scale_vs_exact() {
         use rand::distributions::{Distribution, Uniform};
 
-        const N: usize = 1_000_000;
+        const N: usize = 10_000_000;
         const DIM: usize = 10;
 
         println!("Generating {} random {}-dimensional points...", N, DIM);
