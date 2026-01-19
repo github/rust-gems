@@ -173,8 +173,8 @@ impl AnnGraph {
     }
 
     /// Get mutable access to all neighbor chunks for parallel processing
-    pub(crate) fn neighbors_chunks_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [Neighbor]> {
-        self.data.par_chunks_mut(self.k)
+    pub(crate) fn neighbors_chunks_mut(&mut self, group_size: usize) -> impl IndexedParallelIterator<Item = &mut [Neighbor]> {
+        self.data.par_chunks_mut(self.k * group_size)
     }
 }
 

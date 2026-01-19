@@ -96,7 +96,7 @@ fn build_neighbor_lists(graph: &mut AnnGraph, rng: &mut impl Rng) -> (Neighbors,
 
     // Only mark neighbors as old if they were selected into new_neighbors
     graph
-        .neighbors_chunks_mut()
+        .neighbors_chunks_mut(1)
         .enumerate()
         .for_each(|(i, neighbors)| {
             for &selected_id in new_neighbors.get(i) {
@@ -235,7 +235,8 @@ where
 
         // For each point, generate candidates from neighbors of neighbors
         // Key optimization: only consider pairs where at least one is "new"
-        let mut candidates: Vec<(u32, u32)> = (0..n)
+        // Collect all candidates with their distances, including reverse edges
+        let mut candidates: Vec<(u32, u32, f32)> = (0..n)
             .into_par_iter()
             .flat_map_iter(|i| {
                 let old_i = old_neighbors.get(i);
@@ -243,7 +244,9 @@ where
 
                 // new-new pairs: (u, v) where u < v
                 let new_new = new_i.iter().flat_map(|&u| {
-                    new_i.iter().filter_map(move |&v| if u < v { Some((u, v)) } else { None })
+                    new_i
+                        .iter()
+                        .filter_map(move |&v| if u < v { Some((u, v)) } else { None })
                 });
 
                 // new-old pairs: (min, max) where u != v
@@ -257,26 +260,47 @@ where
                     })
                 });
 
-                new_new.chain(new_old)
+                new_new
+                    .chain(new_old)
+                    .flat_map(|(u, v)| {
+                        let d = distance_fn(&data[u as usize], &data[v as usize]);
+                        // Insert both (u, v) and (v, u) so we can parallelize by node
+                        [(u, v, d), (v, u, d)]
+                    })
             })
-            .take_any(n * k)
             .collect();
-        candidates.par_sort_unstable();
+
+        // Sort by first node so candidates for each node are contiguous
+        candidates.par_sort_unstable_by_key(|(a, _, _)| *a);
         candidates.dedup();
 
-        // Try to improve neighbors with candidates
-        let mut updates = 0;
-        for &(u, v) in &candidates {
-            let d = distance_fn(&data[u as usize], &data[v as usize]);
-            if insert_neighbor(graph.neighbors_mut(u as usize), NodeId::new(v), d) {
-                updates += 1;
-            }
-            if insert_neighbor(graph.neighbors_mut(v as usize), NodeId::new(u), d) {
-                updates += 1;
-            }
-        }
+        // Process in parallel by chunks of nodes
+        const CHUNK_SIZE: usize = 64;
+        let updates: usize = graph
+            .neighbors_chunks_mut(CHUNK_SIZE)
+            .enumerate()
+            .map(|(i, chunk_neighbors)| {
+                let start_node = (CHUNK_SIZE * i) as u32;
+                // Binary search to find the range of candidates for this node
+                let start = candidates.partition_point(|&(u, _, _)| u < start_node);
+                let mut count = 0;
+                for &(u, v, d) in &candidates[start..] {
+                    if u >= start_node + CHUNK_SIZE as u32 {
+                        break;
+                    }
+                    let neighbors = &mut chunk_neighbors[(u - start_node) as usize * k..][..k];
+                    if insert_neighbor(neighbors, NodeId::new(v), d) {
+                        count += 1;
+                    }
+                }
+                count
+            })
+            .sum();
 
-        println!("NN-Descent iteration {iter}: {updates} updates of {} candidates", candidates.len());
+        println!(
+            "NN-Descent iteration {iter}: {updates} updates of {} candidates",
+            candidates.len(),
+        );
 
         // Early termination if no updates
         if updates == 0 {
