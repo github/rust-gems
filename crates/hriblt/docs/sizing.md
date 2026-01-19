@@ -10,7 +10,7 @@ The number of coded symbols required to find the difference between two sets is 
 
 `y = len(coded_symbols) / diff_size`
 
-![Coded symbol multiplier](./assets/coded-symbol-multiplier.png)
+![Coded symbol multiplier](../evaulation/overhead/overhead.png)
 
 For small diffs, the number of coded symbols required per value is larger, after a difference of approximately 100 values the coefficient settles on around 1.3 to 1.4.
 
