@@ -19,19 +19,84 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use union_find::{find_components, UnionFind};
 
-/// Node index type (32-bit for memory efficiency, limits graphs to 2^32 nodes)
-pub type NodeId = u32;
+/// Node index with embedded "new" flag in the least significant bit.
+///
+/// The LSB (bit 0) is used as a "new" flag for NN-Descent optimization.
+/// The actual node index is stored in bits 1-31, giving capacity for 2^31 nodes.
+///
+/// Using LSB means that during sorting, the same node ID with or without the
+/// new flag will be adjacent (differ only by 1), which helps with existence checks.
+#[derive(Debug, Clone, Copy, Default, Hash)]
+pub struct NodeId(u32);
+
+impl NodeId {
+    /// Flag bit indicating a "new" neighbor (LSB)
+    const NEW_FLAG: u32 = 1;
+
+    /// Create a new NodeId from a raw index (not marked as new)
+    #[inline]
+    pub fn new(index: u32) -> Self {
+        debug_assert!(index < (1 << 31), "NodeId index must be < 2^31");
+        NodeId(index << 1)
+    }
+
+    /// Get the actual node index (without the new flag)
+    #[inline]
+    pub fn index(self) -> u32 {
+        self.0 >> 1
+    }
+
+    /// Check if this NodeId has the "new" flag set
+    #[inline]
+    pub fn is_new(self) -> bool {
+        self.0 & Self::NEW_FLAG != 0
+    }
+
+    /// Return a copy with the "new" flag set
+    #[inline]
+    pub fn as_new(self) -> Self {
+        NodeId(self.0 | Self::NEW_FLAG)
+    }
+
+    /// Return a copy with the "new" flag cleared
+    #[inline]
+    pub fn as_old(self) -> Self {
+        NodeId(self.0 & !Self::NEW_FLAG)
+    }
+}
+
+impl PartialEq for NodeId {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare by actual index, ignoring new flag
+        self.index() == other.index()
+    }
+}
+
+impl Eq for NodeId {}
+
+impl PartialOrd for NodeId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NodeId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Compare by actual index, ignoring new flag
+        self.index().cmp(&other.index())
+    }
+}
 
 /// An edge in the MST, represented as (node_a, node_b, distance)
 #[derive(Debug, Clone)]
 pub struct Edge {
-    pub u: NodeId,
-    pub v: NodeId,
+    pub u: u32,
+    pub v: u32,
     pub distance: f32,
 }
 
 impl Edge {
-    fn new(u: NodeId, v: NodeId, distance: f32) -> Self {
+    fn new(u: u32, v: u32, distance: f32) -> Self {
         Edge { u, v, distance }
     }
 }
@@ -45,6 +110,7 @@ pub(crate) struct Neighbor {
 
 impl PartialEq for Neighbor {
     fn eq(&self, other: &Self) -> bool {
+        // Compare by (distance, index) - index comparison ignores new flag
         self.distance == other.distance && self.index == other.index
     }
 }
@@ -59,7 +125,7 @@ impl PartialOrd for Neighbor {
 
 impl Ord for Neighbor {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Total ordering by (distance, index)
+        // Total ordering by (distance, index) - index comparison ignores new flag
         self.distance
             .partial_cmp(&other.distance)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -180,8 +246,8 @@ where
 {
     let n = data.len();
     assert!(
-        n <= NodeId::MAX as usize,
-        "famst: data length {n} exceeds maximum supported size of 2^32"
+        n <= (1 << 31),
+        "famst: data length {n} exceeds maximum supported size of 2^31"
     );
     
     if n <= 1 {
@@ -256,7 +322,7 @@ fn build_undirected_graph(ann_graph: &AnnGraph) -> Vec<Vec<NodeId>> {
         for neighbor in ann_graph.neighbors(i) {
             let j = neighbor.index;
             graph[i].push(j);
-            graph[j as usize].push(i as NodeId);
+            graph[j.index() as usize].push(NodeId::new(i as u32));
         }
     }
     // Sort and deduplicate each adjacency list
@@ -294,8 +360,8 @@ where
             for _ in 0..lambda_sq {
                 let u = *components[i].choose(rng).unwrap();
                 let v = *components[j].choose(rng).unwrap();
-                let d = distance_fn(&data[u as usize], &data[v as usize]);
-                candidates.push(Edge::new(u, v, d));
+                let d = distance_fn(&data[u.index() as usize], &data[v.index() as usize]);
+                candidates.push(Edge::new(u.index(), v.index(), d));
             }
 
             // Sort by distance and take top λ
@@ -329,7 +395,7 @@ where
     let mut node_to_component: Vec<usize> = vec![0; n];
     for (comp_idx, component) in components.iter().enumerate() {
         for &node in component {
-            node_to_component[node as usize] = comp_idx;
+            node_to_component[node.index() as usize] = comp_idx;
         }
     }
 
@@ -344,11 +410,12 @@ where
         // Get neighbors of u that are in component ci
         // (undirected_graph is sorted, so we can iterate directly)
         for &u_prime in &undirected_graph[edge.u as usize] {
-            let u_prime_usize = u_prime as usize;
-            if node_to_component[u_prime_usize] == ci && u_prime != edge.v {
+            let u_prime_idx = u_prime.index();
+            let u_prime_usize = u_prime_idx as usize;
+            if node_to_component[u_prime_usize] == ci && u_prime_idx != edge.v {
                 let d_prime = distance_fn(&data[u_prime_usize], &data[best_v as usize]);
                 if d_prime < best_d {
-                    best_u = u_prime;
+                    best_u = u_prime_idx;
                     best_d = d_prime;
                 }
             }
@@ -356,11 +423,12 @@ where
 
         // Get neighbors of v that are in component cj
         for &v_prime in &undirected_graph[edge.v as usize] {
-            let v_prime_usize = v_prime as usize;
-            if node_to_component[v_prime_usize] == cj && v_prime != edge.u {
+            let v_prime_idx = v_prime.index();
+            let v_prime_usize = v_prime_idx as usize;
+            if node_to_component[v_prime_usize] == cj && v_prime_idx != edge.u {
                 let d_prime = distance_fn(&data[best_u as usize], &data[v_prime_usize]);
                 if d_prime < best_d {
-                    best_v = v_prime;
+                    best_v = v_prime_idx;
                     best_d = d_prime;
                 }
             }
@@ -383,7 +451,7 @@ fn extract_mst(ann_graph: &AnnGraph, inter_edges: &[Edge], n: usize) -> Vec<Edge
 
     for i in 0..n {
         for neighbor in ann_graph.neighbors(i) {
-            edges.push(Edge::new(i as u32, neighbor.index, neighbor.distance));
+            edges.push(Edge::new(i as u32, neighbor.index.index(), neighbor.distance));
         }
     }
 
@@ -664,7 +732,7 @@ mod tests {
         // Check all nodes are in the same component
         let root = uf.find(0);
         for i in 1..n {
-            assert_eq!(uf.find(i as NodeId), root, "All nodes should be connected in the MST");
+            assert_eq!(uf.find(i as u32), root, "All nodes should be connected in the MST");
         }
 
         // Compare with exact MST
@@ -714,7 +782,7 @@ mod tests {
         let mut edge_count = 0;
 
         for (u, v, w) in edges {
-            if uf.union(u as NodeId, v as NodeId) {
+            if uf.union(u as u32, v as u32) {
                 total_weight += w;
                 edge_count += 1;
                 if edge_count == n - 1 {

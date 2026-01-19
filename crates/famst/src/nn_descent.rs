@@ -2,25 +2,37 @@
 //!
 //! Based on: "Efficient K-Nearest Neighbor Graph Construction for Generic Similarity Measures"
 //! by Wei Dong, Charikar Moses, and Kai Li (2011)
+//!
+//! Uses the "new/old" optimization from pynndescent: each neighbor is marked as "new"
+//! when first added. Only pairs where at least one is "new" need to be compared.
+//! The LSB of NodeId is used as the "new" flag.
 
-use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
 use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 use std::collections::HashSet;
 
 use crate::{AnnGraph, FamstConfig, Neighbor, NodeId};
 
-/// Build reverse neighbor lists (who has me as a neighbor)
-fn build_reverse(graph: &AnnGraph) -> Vec<Vec<NodeId>> {
+/// Build reverse neighbor lists, separating new and old neighbors
+/// Returns (old_reverse, new_reverse)
+fn build_reverse_lists(graph: &AnnGraph) -> (Vec<Vec<NodeId>>, Vec<Vec<NodeId>>) {
     let n = graph.n();
-    let mut reverse: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+    let mut old_reverse: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+    let mut new_reverse: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+
     for i in 0..n {
+        let i_id = NodeId::new(i as u32);
         for neighbor in graph.neighbors(i) {
-            reverse[neighbor.index as usize].push(i as NodeId);
+            let target = neighbor.index.index() as usize;
+            if neighbor.index.is_new() {
+                new_reverse[target].push(i_id);
+            } else {
+                old_reverse[target].push(i_id);
+            }
         }
     }
-    reverse
+    (old_reverse, new_reverse)
 }
 
 /// Initialize ANN graph with random neighbors
@@ -40,7 +52,7 @@ where
         .flat_map(|i| {
             let mut local_rng = SmallRng::seed_from_u64(seeds[i]);
             let mut neighbors: Vec<Neighbor> = Vec::with_capacity(k);
-            let mut seen: HashSet<NodeId> = HashSet::with_capacity(k);
+            let mut seen: HashSet<u32> = HashSet::with_capacity(k);
 
             // Sample k random neighbors using Floyd's algorithm - guaranteed O(k)
             let effective_n = n - 1; // exclude self
@@ -48,20 +60,21 @@ where
             for t in range_start..effective_n {
                 let j = local_rng.gen_range(0..=t);
                 // Map j to actual index, skipping i
-                let actual_j = (if j >= i { j + 1 } else { j }) as NodeId;
+                let actual_j = (if j >= i { j + 1 } else { j }) as u32;
 
                 let selected = if seen.insert(actual_j) {
                     actual_j
                 } else {
                     // j was already selected, so add t instead
-                    let actual_t = (if t >= i { t + 1 } else { t }) as NodeId;
+                    let actual_t = (if t >= i { t + 1 } else { t }) as u32;
                     seen.insert(actual_t);
                     actual_t
                 };
 
                 let d = distance_fn(&data[i], &data[selected as usize]);
+                // Mark as new (not yet used for candidate generation)
                 neighbors.push(Neighbor {
-                    index: selected,
+                    index: NodeId::new(selected).as_new(),
                     distance: d,
                 });
             }
@@ -78,13 +91,16 @@ where
 /// Try to insert a new neighbor into a sorted neighbor slice.
 /// Returns true if the neighbor was inserted (better than the worst).
 /// Assumes neighbors are sorted by (distance, index) for total ordering.
+/// The new flag (LSB) doesn't affect ordering since NodeId::cmp ignores it.
 fn insert_neighbor(neighbors: &mut [Neighbor], new_index: NodeId, new_distance: f32) -> bool {
+    // Create a search key with the new flag set (new insertions are always "new")
     let new_neighbor = Neighbor {
-        index: new_index,
+        index: new_index.as_new(),
         distance: new_distance,
     };
 
-    // Binary search using total ordering - also serves as existence check
+    // Binary search by (distance, index) - NodeId comparison ignores new flag
+    // so this will find the node regardless of its new/old status
     match neighbors.binary_search(&new_neighbor) {
         Ok(_) => false, // Already exists
         Err(insert_pos) => {
@@ -108,6 +124,8 @@ fn insert_neighbor(neighbors: &mut [Neighbor], new_index: NodeId, new_distance: 
 ///
 /// Based on: "Efficient K-Nearest Neighbor Graph Construction for Generic Similarity Measures"
 /// by Wei Dong, Charikar Moses, and Kai Li (2011)
+///
+/// Uses the "new/old" optimization: only compare pairs where at least one neighbor is "new".
 pub(crate) fn nn_descent<T, D, R>(
     data: &[T],
     distance_fn: &D,
@@ -126,75 +144,136 @@ where
         return AnnGraph::new(n, 0, vec![]);
     }
 
-    // Initialize ANN graph with random neighbors
+    // Initialize ANN graph with random neighbors (all marked as "new")
     println!("Initializing random graph");
     let mut graph = init_random_graph(data, k, distance_fn, rng);
 
     // NN-Descent iterations
     for iter in 0..config.nn_descent_iterations {
-        println!("NN-Descent iteration {iter}");
-        let mut updates = 0;
-        let reverse_neighbors = build_reverse(&graph);
+        // Build reverse neighbor lists, separating old and new
+        let (old_reverse, new_reverse) = build_reverse_lists(&graph);
 
-        // For each point, explore neighbors of neighbors
+        // For each point, collect old and new forward neighbors
+        let mut old_neighbors: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+        let mut new_neighbors: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+
         for i in 0..n {
+            for nb in graph.neighbors(i) {
+                let idx = nb.index.as_old(); // Strip new flag for storage
+                if nb.index.is_new() {
+                    new_neighbors[i].push(idx);
+                } else {
+                    old_neighbors[i].push(idx);
+                }
+            }
+        }
+
+        // Mark all neighbors as old for next iteration
+        for i in 0..n {
+            for nb in graph.neighbors_mut(i) {
+                nb.index = nb.index.as_old();
+            }
+        }
+
+        let mut updates = 0;
+
+        // For each point, generate candidates from neighbors of neighbors
+        // Key optimization: only consider pairs where at least one is "new"
+        for i in 0..n {
+            let i_id = NodeId::new(i as u32);
+
+            // Combine forward and reverse neighbors
+            let old_i: Vec<NodeId> = old_neighbors[i]
+                .iter()
+                .chain(old_reverse[i].iter())
+                .copied()
+                .collect();
+            let new_i: Vec<NodeId> = new_neighbors[i]
+                .iter()
+                .chain(new_reverse[i].iter())
+                .copied()
+                .collect();
+
+            // Skip if no new neighbors
+            if new_i.is_empty() {
+                continue;
+            }
+
             // Build set of current neighbors for O(1) lookup
-            let current_neighbors: HashSet<NodeId> =
-                graph.neighbors(i).iter().map(|nb| nb.index).collect();
+            let current_neighbors: HashSet<NodeId> = graph
+                .neighbors(i)
+                .iter()
+                .map(|nb| nb.index.as_old())
+                .collect();
 
-            // Collect candidates: neighbors and reverse neighbors
-            let mut candidates: Vec<NodeId> = Vec::new();
+            let mut candidates: HashSet<NodeId> = HashSet::new();
 
-            // Sample from forward neighbors
-            let mut sampled_forward: Vec<NodeId> =
-                graph.neighbors(i).iter().map(|nb| nb.index).collect();
-            let sample_size =
-                ((sampled_forward.len() as f64 * config.nn_descent_sample_rate).ceil() as usize)
-                    .max(1);
-            sampled_forward.shuffle(rng);
-            sampled_forward.truncate(sample_size);
-
-            // Sample from reverse neighbors
-            let mut sampled_reverse = reverse_neighbors[i].clone();
-            let sample_size =
-                ((sampled_reverse.len() as f64 * config.nn_descent_sample_rate).ceil() as usize)
-                    .max(1);
-            sampled_reverse.shuffle(rng);
-            sampled_reverse.truncate(sample_size);
-
-            // Neighbors of neighbors
-            let i_id = i as NodeId;
-            for &neighbor in sampled_forward.iter().chain(sampled_reverse.iter()) {
-                for nb in graph.neighbors(neighbor as usize) {
-                    if nb.index != i_id && !current_neighbors.contains(&nb.index) {
-                        candidates.push(nb.index);
+            // new-new pairs: for each new neighbor, look at their new neighbors
+            for &u in &new_i {
+                let u_idx = u.index() as usize;
+                for &v in &new_neighbors[u_idx] {
+                    if v != i_id && !current_neighbors.contains(&v) {
+                        candidates.insert(v);
                     }
                 }
-                // Also check reverse neighbors of neighbors
-                for &rn in &reverse_neighbors[neighbor as usize] {
-                    if rn != i_id && !current_neighbors.contains(&rn) {
-                        candidates.push(rn);
+                for &v in &new_reverse[u_idx] {
+                    if v != i_id && !current_neighbors.contains(&v) {
+                        candidates.insert(v);
                     }
                 }
             }
 
-            // Deduplicate candidates
-            candidates.sort_unstable();
-            candidates.dedup();
+            // new-old pairs: for each new neighbor, look at their old neighbors
+            for &u in &new_i {
+                let u_idx = u.index() as usize;
+                for &v in &old_neighbors[u_idx] {
+                    if v != i_id && !current_neighbors.contains(&v) {
+                        candidates.insert(v);
+                    }
+                }
+                for &v in &old_reverse[u_idx] {
+                    if v != i_id && !current_neighbors.contains(&v) {
+                        candidates.insert(v);
+                    }
+                }
+            }
 
-            // Try to improve neighbors
+            // old-new pairs: for each old neighbor, look at their new neighbors
+            for &u in &old_i {
+                let u_idx = u.index() as usize;
+                for &v in &new_neighbors[u_idx] {
+                    if v != i_id && !current_neighbors.contains(&v) {
+                        candidates.insert(v);
+                    }
+                }
+                for &v in &new_reverse[u_idx] {
+                    if v != i_id && !current_neighbors.contains(&v) {
+                        candidates.insert(v);
+                    }
+                }
+            }
+
+            // Try to improve neighbors with candidates
             for c in candidates {
-                let d = distance_fn(&data[i], &data[c as usize]);
-
+                let d = distance_fn(&data[i], &data[c.index() as usize]);
                 if insert_neighbor(graph.neighbors_mut(i), c, d) {
                     updates += 1;
                 }
             }
         }
 
+        println!("NN-Descent iteration {iter}: {updates} updates");
+
         // Early termination if no updates
         if updates == 0 {
             break;
+        }
+    }
+
+    // Strip the new flag from all neighbors before returning
+    for i in 0..n {
+        for nb in graph.neighbors_mut(i) {
+            nb.index = nb.index.as_old();
         }
     }
 
