@@ -14,21 +14,72 @@ use std::collections::HashSet;
 
 use crate::{AnnGraph, FamstConfig, Neighbor, NodeId};
 
-/// Build reverse neighbor lists, separating new and old neighbors
-/// Returns (old_reverse, new_reverse)
-fn build_reverse_lists(graph: &AnnGraph) -> (Vec<Vec<NodeId>>, Vec<Vec<NodeId>>) {
+/// Reverse neighbor lists with bounded size k per node.
+/// Uses flat storage: data[i*k..(i+1)*k] contains up to k reverse neighbors of node i.
+/// Uses reservoir sampling when more than k reverse edges exist.
+struct ReverseNeighbors {
+    /// Flat storage of reverse neighbor IDs (with new flag preserved)
+    data: Vec<NodeId>,
+    /// Count of reverse neighbors seen so far (for reservoir sampling)
+    counts: Vec<u32>,
+    /// Max reverse neighbors per node
+    k: usize,
+}
+
+impl ReverseNeighbors {
+    fn new(n: usize, k: usize) -> Self {
+        ReverseNeighbors {
+            data: vec![NodeId::new(0); n * k],
+            counts: vec![0; n],
+            k,
+        }
+    }
+
+    /// Add a reverse edge: node `from` is a neighbor of node `to`, so `to` has reverse edge to `from`.
+    /// Uses reservoir sampling to maintain at most k reverse neighbors.
+    #[inline]
+    fn add(&mut self, to: usize, from: NodeId, rng: &mut impl Rng) {
+        let count = self.counts[to] as usize;
+        let start = to * self.k;
+
+        if count < self.k {
+            // Still have room, just append
+            self.data[start + count] = from;
+        } else {
+            // Reservoir sampling: replace with probability k / (count + 1)
+            let j = rng.gen_range(0..=count);
+            if j < self.k {
+                self.data[start + j] = from;
+            }
+        }
+        self.counts[to] += 1;
+    }
+
+    /// Get the reverse neighbors of node i (only the filled slots)
+    #[inline]
+    fn get(&self, i: usize) -> &[NodeId] {
+        let start = i * self.k;
+        let count = (self.counts[i] as usize).min(self.k);
+        &self.data[start..start + count]
+    }
+}
+
+/// Build reverse neighbor lists with reservoir sampling.
+/// Returns separate old and new reverse neighbor structures.
+fn build_reverse_lists(graph: &AnnGraph, rng: &mut impl Rng) -> (ReverseNeighbors, ReverseNeighbors) {
     let n = graph.n();
-    let mut old_reverse: Vec<Vec<NodeId>> = vec![Vec::new(); n];
-    let mut new_reverse: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+    let k = graph.k();
+    let mut old_reverse = ReverseNeighbors::new(n, k);
+    let mut new_reverse = ReverseNeighbors::new(n, k);
 
     for i in 0..n {
         let i_id = NodeId::new(i as u32);
         for neighbor in graph.neighbors(i) {
             let target = neighbor.index.index() as usize;
             if neighbor.index.is_new() {
-                new_reverse[target].push(i_id);
+                new_reverse.add(target, i_id, rng);
             } else {
-                old_reverse[target].push(i_id);
+                old_reverse.add(target, i_id, rng);
             }
         }
     }
@@ -150,8 +201,8 @@ where
 
     // NN-Descent iterations
     for iter in 0..config.nn_descent_iterations {
-        // Build reverse neighbor lists, separating old and new
-        let (old_reverse, new_reverse) = build_reverse_lists(&graph);
+        // Build reverse neighbor lists, separating old and new (with reservoir sampling)
+        let (old_reverse, new_reverse) = build_reverse_lists(&graph, rng);
 
         // For each point, collect old and new forward neighbors
         let mut old_neighbors: Vec<Vec<NodeId>> = vec![Vec::new(); n];
@@ -185,12 +236,12 @@ where
             // Combine forward and reverse neighbors
             let old_i: Vec<NodeId> = old_neighbors[i]
                 .iter()
-                .chain(old_reverse[i].iter())
+                .chain(old_reverse.get(i).iter())
                 .copied()
                 .collect();
             let new_i: Vec<NodeId> = new_neighbors[i]
                 .iter()
-                .chain(new_reverse[i].iter())
+                .chain(new_reverse.get(i).iter())
                 .copied()
                 .collect();
 
@@ -216,9 +267,9 @@ where
                         candidates.insert(v);
                     }
                 }
-                for &v in &new_reverse[u_idx] {
-                    if v != i_id && !current_neighbors.contains(&v) {
-                        candidates.insert(v);
+                for v in new_reverse.get(u_idx) {
+                    if *v != i_id && !current_neighbors.contains(v) {
+                        candidates.insert(*v);
                     }
                 }
             }
@@ -231,9 +282,9 @@ where
                         candidates.insert(v);
                     }
                 }
-                for &v in &old_reverse[u_idx] {
-                    if v != i_id && !current_neighbors.contains(&v) {
-                        candidates.insert(v);
+                for v in old_reverse.get(u_idx) {
+                    if *v != i_id && !current_neighbors.contains(v) {
+                        candidates.insert(*v);
                     }
                 }
             }
@@ -246,9 +297,9 @@ where
                         candidates.insert(v);
                     }
                 }
-                for &v in &new_reverse[u_idx] {
-                    if v != i_id && !current_neighbors.contains(&v) {
-                        candidates.insert(v);
+                for v in new_reverse.get(u_idx) {
+                    if *v != i_id && !current_neighbors.contains(v) {
+                        candidates.insert(*v);
                     }
                 }
             }
