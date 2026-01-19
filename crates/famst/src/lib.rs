@@ -19,22 +19,22 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use union_find::UnionFind;
 
+/// Node index type (32-bit for memory efficiency, limits graphs to 2^32 nodes)
+pub type NodeId = u32;
+
 /// An edge in the MST, represented as (node_a, node_b, distance)
 #[derive(Debug, Clone)]
 pub struct Edge {
-    pub u: usize,
-    pub v: usize,
+    pub u: NodeId,
+    pub v: NodeId,
     pub distance: f32,
 }
 
 impl Edge {
-    fn new(u: usize, v: usize, distance: f32) -> Self {
+    fn new(u: NodeId, v: NodeId, distance: f32) -> Self {
         Edge { u, v, distance }
     }
 }
-
-/// Node index type (32-bit for memory efficiency, limits graphs to 2^32 nodes)
-pub(crate) type NodeId = u32;
 
 /// A neighbor entry: node index and distance (32-bit for memory efficiency)
 #[derive(Debug, Clone, Copy)]
@@ -307,9 +307,9 @@ where
 
             // Generate λ² candidate edges
             for _ in 0..lambda_sq {
-                let u = *components[i].choose(rng).unwrap() as usize;
-                let v = *components[j].choose(rng).unwrap() as usize;
-                let d = distance_fn(&data[u], &data[v]);
+                let u = *components[i].choose(rng).unwrap();
+                let v = *components[j].choose(rng).unwrap();
+                let d = distance_fn(&data[u as usize], &data[v as usize]);
                 candidates.push(Edge::new(u, v, d));
             }
 
@@ -358,10 +358,10 @@ where
 
         // Get neighbors of u that are in component ci
         // (undirected_graph is sorted, so we can iterate directly)
-        for &u_prime in &undirected_graph[edge.u] {
-            let u_prime = u_prime as usize;
-            if node_to_component[u_prime] == ci && u_prime != edge.v {
-                let d_prime = distance_fn(&data[u_prime], &data[best_v]);
+        for &u_prime in &undirected_graph[edge.u as usize] {
+            let u_prime_usize = u_prime as usize;
+            if node_to_component[u_prime_usize] == ci && u_prime != edge.v {
+                let d_prime = distance_fn(&data[u_prime_usize], &data[best_v as usize]);
                 if d_prime < best_d {
                     best_u = u_prime;
                     best_d = d_prime;
@@ -370,10 +370,10 @@ where
         }
 
         // Get neighbors of v that are in component cj
-        for &v_prime in &undirected_graph[edge.v] {
-            let v_prime = v_prime as usize;
-            if node_to_component[v_prime] == cj && v_prime != edge.u {
-                let d_prime = distance_fn(&data[best_u], &data[v_prime]);
+        for &v_prime in &undirected_graph[edge.v as usize] {
+            let v_prime_usize = v_prime as usize;
+            if node_to_component[v_prime_usize] == cj && v_prime != edge.u {
+                let d_prime = distance_fn(&data[best_u as usize], &data[v_prime_usize]);
                 if d_prime < best_d {
                     best_v = v_prime;
                     best_d = d_prime;
@@ -398,7 +398,7 @@ fn extract_mst(ann_graph: &AnnGraph, inter_edges: &[Edge], n: usize) -> Vec<Edge
 
     for i in 0..n {
         for neighbor in ann_graph.neighbors(i) {
-            edges.push(Edge::new(i, neighbor.index as usize, neighbor.distance));
+            edges.push(Edge::new(i as u32, neighbor.index, neighbor.distance));
         }
     }
 
