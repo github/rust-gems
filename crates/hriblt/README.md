@@ -11,9 +11,9 @@ Add the library to your `Cargo.toml` file.
 hriblt = "0.1"
 ```
 
-Create two encoding sessions, one containing your data, and another containing the counter-parties data. This counterparty data might have been sent to you over a network for example.
+Create two encoding sessions, one containing Alice's data, and another containing Bob's data. Bob's data might have been sent to you over a network for example.
 
-The following example attempts to reconcile the differences between two sets of `u64` integers, and is done from the perspective of "Bob", who has recieved some symbols from "Alice".
+The following example attempts to reconcile the differences between two such sets of `u64` integers, and is done from the perspective of "Bob", who has received some symbols from "Alice".
 
 ```rust
 use hriblt::{DecodingSession, EncodingSession, DefaultHashFunctions};

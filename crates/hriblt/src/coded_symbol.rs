@@ -58,8 +58,9 @@ impl<T: Encodable> CodedSymbol<T> {
 
     /// Checks whether this coded symbol is pure, i.e., whether it represents a single entity
     /// A pure coded symbol must satisfy the following conditions:
-    /// - The 1-bit counter must be 1 or -1 (which are both represented by the bit being set)
-    /// - The checksum must match the checksum of the value.
+    /// - The 1-bit counter must be 1 or -1 (which are both represented by the least significant bit being set)
+    /// - The checksum must match the absolute value of the checksum of the value.
+    ///   The sign (-/+) tells you if it was an insertion or deletion
     /// - The indices of the value must match the index of this coded symbol.
     pub(crate) fn is_pure<S: HashFunctions<T>>(
         &self,
@@ -118,10 +119,10 @@ fn indices_contains<T: std::hash::Hash>(
     if stream_len > 32 && i % 32 != 0 {
         let seed = i % 4;
         let j = index_for_seed(state, value, stream_len, seed as u32);
-        if i == j { 1 } else { 0 }
+        i32::from(i == j)
     } else {
         indices(state, value, stream_len)
-            .map(|j| if j == i { 1 } else { 0 })
+            .map(|j| i32::from(i == j))
             .sum()
     }
 }

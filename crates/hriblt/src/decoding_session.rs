@@ -10,7 +10,7 @@ use crate::{
 pub struct DecodingSession<T: Encodable, H: HashFunctions<T>> {
     /// The encoded stream of hashes.
     /// All recovered coded symbols have been removed from this stream.
-    /// If decoded failed, then one can simply append more data and continue decoding.
+    /// If decoded fails, then one can simply append more data and continue decoding.
     encoded: EncodingSession<T, H>,
     /// All the recovered coded symbols.
     recovered: Vec<CodedSymbol<T>>,

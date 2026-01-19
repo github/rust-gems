@@ -6,7 +6,7 @@ Regardless, there are some advantages to getting the size of your decoding sessi
 
 ## Coded Symbol Multiplier
 
-The number of coded symbols required to find the difference between two sets is proportional to the difference between the two sets. The following chart shows the relationship between the number of coded symbols required to decode HRIBLT and the size of the diff. Note that the size of the base set (before diffs were added) was fixed.
+The number of coded symbols required to find the difference between two sets is proportional to the difference between the two sets. The following chart shows the relationship between the number of coded symbols required to decode HRIBLT and the size of the diff. Note that the size of the base set (before diffs were added) was fixed at 1000 entries.
 
 `y = len(coded_symbols) / diff_size`
 
