@@ -181,8 +181,6 @@ pub struct FamstConfig {
     pub max_iterations: usize,
     /// Maximum NN-Descent iterations
     pub nn_descent_iterations: usize,
-    /// Sample rate for NN-Descent (fraction of neighbors to sample)
-    pub nn_descent_sample_rate: f64,
 }
 
 impl Default for FamstConfig {
@@ -192,7 +190,6 @@ impl Default for FamstConfig {
             lambda: 5,
             max_iterations: 100,
             nn_descent_iterations: 10,
-            nn_descent_sample_rate: 0.5,
         }
     }
 }
@@ -715,7 +712,6 @@ mod tests {
             lambda: 5,
             max_iterations: 50,
             nn_descent_iterations: 20,
-            nn_descent_sample_rate: 1.0, // Full sampling for small dataset
         };
 
         let mut famst_rng = StdRng::seed_from_u64(88888);
@@ -817,7 +813,6 @@ mod tests {
             lambda: 5,
             max_iterations: 100,
             nn_descent_iterations: 10,
-            nn_descent_sample_rate: 0.5,
         };
         let mut famst_rng = StdRng::seed_from_u64(54321);
         let start = std::time::Instant::now();
@@ -856,7 +851,6 @@ mod tests {
             lambda: 5,
             max_iterations: 100,
             nn_descent_iterations: 100,
-            nn_descent_sample_rate: 0.5,
         };
         let mut famst_rng = StdRng::seed_from_u64(11111);
         let result = famst_with_rng(&points, distance, &config, &mut famst_rng);
