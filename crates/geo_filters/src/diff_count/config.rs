@@ -20,6 +20,18 @@ use crate::Diff;
 //
 pub type GeoDiffConfig7<H = UnstableDefaultBuildHasher> = FixedConfig<Diff, u16, 7, 112, 12, H>;
 
+/// Diff count configuration with a relative error standard deviation of ~0.04.
+//
+// Precision evaluation:
+//
+//     scripts/accuracy -n 5000 geo_diff/u32/b=10/bytes={768,832,896,960,1024}/msb=64
+//
+// Most-significant bytes evaluation:
+//
+//     scripts/accuracy -n 5000 geo_diff/u32/b=10/bytes=896/msb={32,48,64,80,96,128}
+//
+pub type GeoDiffConfig10<H = UnstableDefaultBuildHasher> = FixedConfig<Diff, u32, 10, 896, 64, H>;
+
 /// Diff count configuration with a relative error standard deviation of ~0.015.
 //
 // Precision evaluation:
@@ -181,6 +193,25 @@ mod tests {
             .reduce(f32::max)
             .expect("a value");
         let bound = 0.0028;
+        assert!(
+            (err - bound).abs() < 0.5e-4,
+            "found max error {err}, expected {bound}"
+        );
+    }
+
+    #[test]
+    fn test_estimation_lut_10() {
+        let c = GeoDiffConfig10::<UnstableDefaultBuildHasher>::default();
+        let err = (0..5000)
+            .step_by(10)
+            .map(|i| {
+                let a = c.expected_items(i); // uses estimation lookup
+                let b = estimate_count(c.phi_f64(), i as f64, expected_diff_buckets).0 as f32;
+                (a - b).abs() / a.max(1.0)
+            })
+            .reduce(f32::max)
+            .expect("a value");
+        let bound = 0.00035;
         assert!(
             (err - bound).abs() < 0.5e-4,
             "found max error {err}, expected {bound}"
