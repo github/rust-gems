@@ -4,6 +4,8 @@
 
 ![geo_diff_7](./accuracy/geo_diff_7.png)
 
+![geo_diff_10](./accuracy/geo_diff_10.png)
+
 ![geo_diff_13](./accuracy/geo_diff_13.png)
 
 ## Geometric Distinct Count

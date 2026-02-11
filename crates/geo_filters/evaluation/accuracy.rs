@@ -9,7 +9,7 @@ use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
 use std::sync::Arc;
 
-use geo_filters::diff_count::{GeoDiffCount, GeoDiffCount13, GeoDiffCount7};
+use geo_filters::diff_count::{GeoDiffCount, GeoDiffCount10, GeoDiffCount13, GeoDiffCount7};
 use geo_filters::distinct_count::{GeoDistinctCount, GeoDistinctCount13, GeoDistinctCount7};
 use geo_filters::evaluation::hll::{Hll, Hll14, Hll8, VariableHllConfig};
 use geo_filters::evaluation::simulation::{
@@ -30,6 +30,7 @@ fn main() {
 #[clap(after_help = "\x1b[1;4;37mConfigurations:\x1b[0;37m
   geo_diff/BUCKET_TYPE/b=N/bytes=N/msb=N
   geo_diff_7
+  geo_diff_10
   geo_diff_13
   geo_distinct/BUCKET_TYPE/b=N/bytes=N/msb=N
   geo_distinct_7
@@ -44,6 +45,7 @@ fn main() {
 #[clap(after_long_help = "\x1b[1;4;37mConfigurations:\x1b[0;37m
   geo_diff/BUCKET_TYPE/b=N/bytes=N/msb=N      Diff count with the given parameters
   geo_diff_7                                  Predefined configuration for b=7
+  geo_diff_10                                 Predefined configuration for b=10
   geo_diff_13                                 Predefined configuration for b=13
 
   geo_distinct/BUCKET_TYPE/b=N/bytes=N/msb=N  Distinct count with the given parameters
@@ -179,6 +181,9 @@ static SIMULATION_CONFIG_FROM_STR: Lazy<Vec<SimulationConfigParser>> = Lazy::new
         }),
         SimulationConfigParser::new(r#"geo_diff_7"#, |_| {
             Box::new(|| Box::new(GeoDiffCount7::default()))
+        }),
+        SimulationConfigParser::new(r#"geo_diff_10"#, |_| {
+            Box::new(|| Box::new(GeoDiffCount10::default()))
         }),
         SimulationConfigParser::new(r#"geo_diff_13"#, |_| {
             Box::new(|| Box::new(GeoDiffCount13::default()))
