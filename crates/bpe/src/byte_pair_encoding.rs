@@ -552,8 +552,9 @@ impl BytePairEncoding {
         encoded
     }
 
-    /// This function computes the shortest possible encoding sequence which will usually differ from the
-    /// tokenization produced by the original BPE algorithm.
+    /// This function computes the encoding while randomly rejecting some merges.
+    /// Result of the encoding will be non-deterministic unless `seed` is provided.
+    /// Implementation loosely follows original BPE dropout paper: https://arxiv.org/abs/1910.13267
     #[cfg(feature = "rand")]
     pub fn encode_minimal_dropout(&self, text: &[u8], dropout: f32, seed: Option<u64>) -> Vec<u32> {
         use rand::rngs::StdRng;
