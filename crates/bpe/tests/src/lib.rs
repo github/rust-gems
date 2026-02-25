@@ -152,7 +152,7 @@ mod tests {
                 let encoded_d_min = bpe.encode_minimal_dropout(&input, 0.2);
                 let encoded_d_max = bpe.encode_minimal_dropout(&input, 0.9);
                 let encoded_d_max_again = bpe.encode_minimal_dropout(&input, 0.9);
-                let decoded= bpe.decode_tokens(&encoded);
+                let decoded = bpe.decode_tokens(&encoded);
                 let decoded_min = bpe.decode_tokens(&encoded_d_min);
                 let decoded_max = bpe.decode_tokens(&encoded_d_max);
                 assert_eq!(decoded, decoded_min);
