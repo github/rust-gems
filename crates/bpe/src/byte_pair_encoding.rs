@@ -551,6 +551,45 @@ impl BytePairEncoding {
         encoded.reverse();
         encoded
     }
+
+    /// This function computes the shortest possible encoding sequence which will usually differ from the
+    /// tokenization produced by the original BPE algorithm.
+    #[cfg(feature = "rand")]
+    pub fn encode_minimal_dropout(&self, text: &[u8], dropout: f32) -> Vec<u32> {
+        use rand::Rng;
+        assert!(0.0 <= dropout);
+        assert!(dropout <= 1.0);
+        let mut rng = rand::rng();
+
+        let mut last_token: Vec<(u32, u32)> = Vec::with_capacity(text.len());
+        let mut state = self.overlapping_searcher.start_state();
+        for (pos, c) in text.iter().enumerate() {
+            let (s, iter) = self.overlapping_searcher.consume(state, pos + 1, *c);
+            state = s;
+            let mut best = (0, u32::MAX);
+            for m in iter {
+                if m.start() == 0 {
+                    best = (m.value(), 1);
+                    break;
+                } else if last_token[m.start() - 1].1 + 1 < best.1 {
+                    best = (m.value(), last_token[m.start() - 1].1 + 1);
+                    if rng.random_range(0.0..=1.0) < dropout {
+                        best = (m.value(), 1);
+                    }
+                }
+            }
+            last_token.push(best);
+        }
+        let mut encoded = Vec::with_capacity(last_token.last().map(|l| l.1 as usize).unwrap_or(0));
+        let mut pos = text.len();
+        while pos > 0 {
+            let token = last_token[pos - 1].0;
+            encoded.push(token);
+            pos -= self.token_len(token);
+        }
+        encoded.reverse();
+        encoded
+    }
 }
 
 /// Create a random test string for the given [`BytePairEncoding`]. The string will be at least [`min_bytes`] long.
