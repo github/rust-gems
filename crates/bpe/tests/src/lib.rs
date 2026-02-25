@@ -145,12 +145,13 @@ mod tests {
     #[test]
     fn test_bpe_dropout() {
         let bpe = &cl100k_base().bpe;
-        for bytes in [1000, 10000] {
+        for bytes in [10000, 20000] {
             for _ in 0..8 {
                 let input = create_test_bytes(bpe, bytes);
                 let encoded = bpe.encode_minimal(&input);
                 let encoded_d_min = bpe.encode_minimal_dropout(&input, 0.2);
                 let encoded_d_max = bpe.encode_minimal_dropout(&input, 0.9);
+                let encoded_d_max_again = bpe.encode_minimal_dropout(&input, 0.9);
                 let decoded= bpe.decode_tokens(&encoded);
                 let decoded_min = bpe.decode_tokens(&encoded_d_min);
                 let decoded_max = bpe.decode_tokens(&encoded_d_max);
@@ -158,8 +159,10 @@ mod tests {
                 assert_eq!(decoded, decoded_max);
                 assert!(encoded_d_min.len() >= encoded.len());
                 assert!(encoded_d_max.len() > encoded.len());
+
                 assert_ne!(encoded, encoded_d_min);
                 assert_ne!(encoded, encoded_d_max);
+                assert_ne!(encoded_d_max, encoded_d_max_again);
             }
         }
     }
