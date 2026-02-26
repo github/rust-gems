@@ -604,7 +604,7 @@ impl BytePairEncoding {
                     best = (m.value(), 1);
                     break;
                 } else if (last_token[m.start() - 1].1 + 1 < best.1)
-                    & !(forbidden_tokens_set.contains(&m.value()))
+                    & (!(forbidden_tokens_set.contains(&m.value())) | ((m.end() - m.start()) == 1))
                 {
                     best = (m.value(), last_token[m.start() - 1].1 + 1);
                 }
