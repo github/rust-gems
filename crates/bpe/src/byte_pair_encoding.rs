@@ -558,8 +558,10 @@ impl BytePairEncoding {
     #[cfg(feature = "rand")]
     pub fn encode_minimal_dropout(&self, text: &[u8], dropout: f32, seed: Option<u64>) -> Vec<u32> {
         use rand::rngs::StdRng;
+        use rand::seq::IndexedRandom;
         use rand::Rng;
         use rand::SeedableRng;
+        use std::collections::HashSet;
 
         fn get_rng(seed: Option<u64>) -> StdRng {
             match seed {
@@ -585,6 +587,13 @@ impl BytePairEncoding {
         assert!(dropout <= 1.0);
 
         let mut last_token: Vec<(u32, u32)> = Vec::with_capacity(text.len());
+
+        let allowed_tokens: Vec<u32> = self.pair_lookup.values().cloned().collect();
+        let tokens_after_dropout = (allowed_tokens.len() as f32) * dropout;
+        let forbidden_tokens_set: HashSet<&u32> = HashSet::from_iter(
+            allowed_tokens.choose_multiple(&mut rng, tokens_after_dropout.floor() as usize),
+        );
+
         let mut state = self.overlapping_searcher.start_state();
         for (pos, c) in text.iter().enumerate() {
             let (s, iter) = self.overlapping_searcher.consume(state, pos + 1, *c);
@@ -594,12 +603,10 @@ impl BytePairEncoding {
                 if m.start() == 0 {
                     best = (m.value(), 1);
                     break;
-                } else if last_token[m.start() - 1].1 + 1 < best.1 {
-                    if rng.random_range(0.0..=1.0) < dropout {
-                        best = (m.value(), last_token[m.start() - 1].1 + 1);
-                    } else {
-                        best = (m.value(), 1);
-                    }
+                } else if (last_token[m.start() - 1].1 + 1 < best.1)
+                    & !(forbidden_tokens_set.contains(&m.value()))
+                {
+                    best = (m.value(), last_token[m.start() - 1].1 + 1);
                 }
             }
             last_token.push(best);
