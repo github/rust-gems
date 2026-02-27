@@ -554,6 +554,20 @@ impl BytePairEncoding {
     /// This function computes the encoding while randomly rejecting some merges.
     /// Result of the encoding will be non-deterministic unless `seed` is provided.
     /// Implementation loosely follows original BPE dropout paper: https://arxiv.org/abs/1910.13267
+    ///
+    /// In more detail: the tokenization uses dynamic programming, i.e. it models the tokenization as a graph,
+    /// where every position between text bytes is a node and two nodes are connected when the text slice between those two nodes matches a token.
+    // It then tries to find the shortest possible path from the beginning of the text till the end, i.e. it finds the shortest possible encoding.
+    // For this is processes the nodes from left to right and visits all edges to the left. Then, it picks the edge which results in the shortest path.
+    // The length of the shortest path is stored as second value, the edge (or rather token) is stored as first value.
+    //
+    // For the dropout (when dropout > 0.0), we uniformly drop edges from the graph, but always keep the one-byte tokens such that the graph stays connected.
+    // Note: this is very different from how BPE works and cannot produce the same output as the algorithm
+    // in the [paper's repository](https://github.com/VProv/BPE-Dropout/blob/master/bpe.py#L98), for two main reasons:
+    //   - `encode_minimal` already doesn't follow the original heap-based BPE procedure
+    //   - randomness source in dropout works differently in rust and python
+    //   - BPE-dropout authors discard all multi-byte tokens for each word separately, while this implementation does not split the "sentence" into words first
+    //     and hence may include previously discarded token later down the byte stream. At the sentence level though we don't expect it to make much difference.
     #[cfg(feature = "rand")]
     pub fn encode_minimal_dropout<R: rand::Rng>(
         &self,
