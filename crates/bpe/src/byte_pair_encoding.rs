@@ -526,9 +526,9 @@ impl BytePairEncoding {
     /// tokenization produced by the original BPE algorithm.
     pub fn encode_minimal(&self, text: &[u8]) -> Vec<u32> {
         let mut last_token: Vec<(u32, u32)> = Vec::with_capacity(text.len());
-        let mut state = self.overlapping_searcher.start_state();
-        for (pos, c) in text.iter().enumerate() {
-            let (s, iter) = self.overlapping_searcher.consume(state, pos + 1, *c);
+        let mut state = self.overlapping_searcher_rev.start_state();
+        for (pos, c) in text.iter().rev().enumerate() {
+            let (s, iter) = self.overlapping_searcher_rev.consume(state, pos + 1, *c);
             state = s;
             let mut best = (0, u32::MAX);
             for m in iter {
@@ -548,7 +548,43 @@ impl BytePairEncoding {
             encoded.push(token);
             pos -= self.token_len(token);
         }
-        encoded.reverse();
+        encoded
+    }
+
+    /// This function computes the encoding while randomly rejecting some merges.
+    /// Result of the encoding will be non-deterministic unless `seed` is provided.
+    /// Implementation loosely follows original BPE dropout paper: https://arxiv.org/abs/1910.13267
+    #[cfg(feature = "rand")]
+    pub fn encode_minimal_dropout<R: rand::Rng>(&self, text: &[u8], dropout: f32, mut rng: R) -> Vec<u32> {
+        assert!(0.0 <= dropout);
+        assert!(dropout <= 1.0);
+
+        let mut last_token: Vec<(u32, u32)> = Vec::with_capacity(text.len());
+        let mut state = self.overlapping_searcher_rev.start_state();
+        for (pos, c) in text.iter().rev().enumerate() {
+            let (s, iter) = self.overlapping_searcher_rev.consume(state, pos + 1, *c);
+            state = s;
+            let mut best = (0, u32::MAX);
+            for m in iter {
+                if m.end() > m.start() + 1 && dropout >= rng.random() {
+                    continue;
+                }
+                if m.start() == 0 {
+                    best = (m.value(), 1);
+                    break;
+                } else if last_token[m.start() - 1].1 + 1 < best.1 {
+                    best = (m.value(), last_token[m.start() - 1].1 + 1);
+                }
+            }
+            last_token.push(best);
+        }
+        let mut encoded = Vec::with_capacity(last_token.last().map(|l| l.1 as usize).unwrap_or(0));
+        let mut pos = text.len();
+        while pos > 0 {
+            let token = last_token[pos - 1].0;
+            encoded.push(token);
+            pos -= self.token_len(token);
+        }
         encoded
     }
 
