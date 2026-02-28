@@ -203,7 +203,7 @@ We benchmarked the following scenarios:
   The data structure we built specifically for this purpose can answer those interval counting requests in typically constant times after the initial linear preprocessing of the text.
   This mode is not available in tiktoken, which only supports counting/encoding a complete text.
 
-All benchmarks were run single-threaded on a MacBook Pro M1.
+All benchmarks were run single-threaded on a MacBook Air M4.
 
 ### Encoding
 
