@@ -34,13 +34,13 @@ rand = { version = "0.9", optional = true }
 rayon = { version = "1.7", optional = true }
 regex = { version = "1", optional = true }
 serde = { version = "1.0", default-features = false, optional = true }
-rand_chacha = { version = "0.9", optional = true }
+rand_chacha = { version = "0.10", optional = true }
 
 [dev-dependencies]
 criterion = "0.8"
 geo_filters = { path = ".", features = ["evaluation"] }
 rand = "0.9"
-rand_chacha = "0.9"
+rand_chacha = "0.10"
 rayon = "1.7"
 
 [[bench]]
