@@ -219,7 +219,7 @@ Two additional encoders are included that are faster but deviate from the origin
 
 - The greedy encoder picks the left-longest token.
 - The minimal encoder computes an encoding with the minimal number of tokens.
-- The minimal_dropout encoder implements BPE-Dropout [algorithm](https://arxiv.org/abs/1910.13267), randomly ignoring some multi-byte tokens at runtime.
+- The minimal_dropout encoder implements BPE-Dropout [algorithm](https://arxiv.org/abs/1910.13267), randomly ignoring some multi-byte tokens at runtime. Note that this implementation differs from the paper, and **has not** been tested in an actual language model training pipeline.
 
 The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original text using the o200k token set.
 (All encodings were computed from scratch for each slice.)
