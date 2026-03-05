@@ -558,7 +558,8 @@ impl BytePairEncoding {
     /// In more detail: the tokenization uses dynamic programming, i.e. it models the tokenization as a graph,
     /// where every position between text bytes is a node and two nodes are connected when the text slice between those two nodes matches a token.
     // It then tries to find the shortest possible path from the beginning of the text till the end, i.e. it finds the shortest possible encoding.
-    // For this is processes the nodes from left to right and visits all edges to the left. Then, it picks the edge which results in the shortest path.
+// For this nodes are processed from right to left. At each node, edges starting at that node and ending on the right are tested and
+// the one producing the shortest path is stored together with the length of the shortest path to that node.
     // The length of the shortest path is stored as second value, the edge (or rather token) is stored as first value.
     //
     // For the dropout (when dropout > 0.0), we uniformly drop edges from the graph, but always keep the one-byte tokens such that the graph stays connected.

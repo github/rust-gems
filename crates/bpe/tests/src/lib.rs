@@ -161,8 +161,8 @@ mod tests {
             for _ in 0..8 {
                 let input = create_test_bytes(bpe, bytes);
                 let encoded = bpe.encode_minimal(&input);
-                let encoded_d_min = bpe.encode_minimal_dropout(&input, 0.2, get_rng(0));
-                let encoded_d_max = bpe.encode_minimal_dropout(&input, 0.9, get_rng(1));
+                let encoded_d_0_2 = bpe.encode_minimal_dropout(&input, 0.2, get_rng(0));
+                let encoded_d_0_9 = bpe.encode_minimal_dropout(&input, 0.9, get_rng(1));
                 let encoded_d_1_0 = bpe.encode_minimal_dropout(&input, 1.0, get_rng(2));
                 let decoded = bpe.decode_tokens(&encoded);
                 let decoded_min = bpe.decode_tokens(&encoded_d_min);
