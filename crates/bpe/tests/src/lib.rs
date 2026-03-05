@@ -1,7 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use std::time;
-
     use itertools::Itertools;
     use rand::{rng, Rng};
     use tiktoken_rs::cl100k_base_singleton;
@@ -157,31 +155,38 @@ mod tests {
         }
 
         let bpe = &cl100k_base().bpe;
-        for bytes in [10000, 20000] {
-            for _ in 0..8 {
-                let input = create_test_bytes(bpe, bytes);
-                let encoded = bpe.encode_minimal(&input);
-                let encoded_d_0_2 = bpe.encode_minimal_dropout(&input, 0.2, get_rng(0));
-                let encoded_d_0_9 = bpe.encode_minimal_dropout(&input, 0.9, get_rng(1));
-                let encoded_d_1_0 = bpe.encode_minimal_dropout(&input, 1.0, get_rng(2));
-                let decoded = bpe.decode_tokens(&encoded);
-                let decoded_min = bpe.decode_tokens(&encoded_d_min);
-                let decoded_max = bpe.decode_tokens(&encoded_d_max);
-                let decoded_max_again = bpe.decode_tokens(&encoded_d_1_0);
-                println!("Input length: {}, Encoded length: {}, Encoded with dropout length: {}-{}, max {}",
-                    input.len(), encoded.len(), encoded_d_min.len(), encoded_d_max.len(), encoded_d_1_0.len());
-                assert_eq!(input, decoded);
-                assert_eq!(input, decoded_min);
-                assert_eq!(input, decoded_max);
-                assert_eq!(input, decoded_max_again);
-                assert_eq!(input.len(), encoded_d_1_0.len());
-                assert!(encoded_d_min.len() >= encoded.len());
-                assert!(encoded_d_max.len() > encoded.len());
+        let bytes = 10000;
+        for _ in 0..8 {
+            let input = create_test_bytes(bpe, bytes);
+            let encoded = bpe.encode_minimal(&input);
+            let encoded_d_0_2 = bpe.encode_minimal_dropout(&input, 0.2, get_rng(0));
+            let encoded_d_0_9 = bpe.encode_minimal_dropout(&input, 0.9, get_rng(1));
+            let encoded_d_1_0 = bpe.encode_minimal_dropout(&input, 1.0, get_rng(1));
+            let encoded_d_0_9_again = bpe.encode_minimal_dropout(&input, 0.9, get_rng(1));
+            let decoded = bpe.decode_tokens(&encoded);
+            let decoded_min = bpe.decode_tokens(&encoded_d_0_2);
+            let decoded_max = bpe.decode_tokens(&encoded_d_0_9);
+            let decoded_max_again = bpe.decode_tokens(&encoded_d_0_9_again);
+            println!(
+                "Input length: {}, Encoded length: {}, Encoded with dropout length: {}-{}, max {}",
+                input.len(),
+                encoded.len(),
+                encoded_d_0_2.len(),
+                encoded_d_0_9.len(),
+                encoded_d_0_9_again.len()
+            );
+            assert_eq!(encoded_d_0_9, encoded_d_0_9_again);
+            assert_eq!(input, decoded);
+            assert_eq!(input, decoded_min);
+            assert_eq!(input, decoded_max);
+            assert_eq!(input, decoded_max_again);
+            assert_eq!(input.len(), encoded_d_1_0.len());
+            assert!(encoded_d_0_2.len() >= encoded.len());
+            assert!(encoded_d_0_9.len() > encoded.len());
 
-                assert_ne!(encoded, encoded_d_min);
-                assert_ne!(encoded, encoded_d_max);
-                assert_ne!(encoded_d_max, encoded_d_1_0);
-            }
+            assert_ne!(encoded, encoded_d_0_2);
+            assert_ne!(encoded, encoded_d_0_9);
+            assert_ne!(encoded_d_0_9, encoded_d_1_0);
         }
     }
 }

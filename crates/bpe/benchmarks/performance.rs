@@ -13,13 +13,6 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rand::{rng, Rng};
 
-fn get_rng(seed: u64) -> StdRng {
-    // Expand the u64 seed to 32 bytes
-    let mut seed_bytes = [0u8; 32];
-    seed_bytes[..8].copy_from_slice(&seed.to_le_bytes());
-    StdRng::from_seed(seed_bytes)
-}
-
 fn counting_benchmark(c: &mut Criterion) {
     for (name, bpe, _, _) in TOKENIZERS.iter() {
         let input = create_test_string(&bpe.bpe, 80_000);
@@ -107,10 +100,7 @@ fn encoding_benchmark(c: &mut Criterion) {
                 |b, bytes| {
                     b.iter_batched(
                         || select_test_string(&text, *bytes),
-                        |text| {
-                            bpe.bpe
-                                .encode_minimal_dropout(text.as_bytes(), 0.1, get_rng(0))
-                        },
+                        |text| bpe.bpe.encode_minimal_dropout(text.as_bytes(), 0.1, rng()),
                         criterion::BatchSize::SmallInput,
                     )
                 },
