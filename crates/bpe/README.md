@@ -203,7 +203,7 @@ We benchmarked the following scenarios:
   The data structure we built specifically for this purpose can answer those interval counting requests in typically constant times after the initial linear preprocessing of the text.
   This mode is not available in tiktoken, which only supports counting/encoding a complete text.
 
-All benchmarks were run single-threaded on a MacBook Pro M1.
+All benchmarks were run single-threaded on a MacBook Air M4.
 
 ### Encoding
 
@@ -219,6 +219,7 @@ Two additional encoders are included that are faster but deviate from the origin
 
 - The greedy encoder picks the left-longest token.
 - The minimal encoder computes an encoding with the minimal number of tokens.
+- The minimal_dropout encoder implements BPE-Dropout [algorithm](https://arxiv.org/abs/1910.13267), randomly ignoring some multi-byte tokens at runtime. Note that this implementation differs from the paper, and **has not** been tested in an actual language model training pipeline.
 
 The benchmark measured the runtime of encoding of slices of lengths 10, 100, 1000, and 10000 from a random 20000 token original text using the o200k token set.
 (All encodings were computed from scratch for each slice.)

@@ -9,6 +9,8 @@ use bpe_benchmarks::*;
 use criterion::{
     criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
 };
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 use rand::{rng, Rng};
 
 fn counting_benchmark(c: &mut Criterion) {
@@ -92,6 +94,17 @@ fn encoding_benchmark(c: &mut Criterion) {
                     criterion::BatchSize::SmallInput,
                 )
             });
+            group.bench_with_input(
+                BenchmarkId::new("minimal_dropout", bytes),
+                &bytes,
+                |b, bytes| {
+                    b.iter_batched(
+                        || select_test_string(&text, *bytes),
+                        |text| bpe.bpe.encode_minimal_dropout(text.as_bytes(), 0.1, rng()),
+                        criterion::BatchSize::SmallInput,
+                    )
+                },
+            );
             group.bench_with_input(
                 BenchmarkId::new("huggingface", bytes),
                 &bytes,

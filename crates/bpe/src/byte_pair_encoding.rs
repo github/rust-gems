@@ -526,9 +526,9 @@ impl BytePairEncoding {
     /// tokenization produced by the original BPE algorithm.
     pub fn encode_minimal(&self, text: &[u8]) -> Vec<u32> {
         let mut last_token: Vec<(u32, u32)> = Vec::with_capacity(text.len());
-        let mut state = self.overlapping_searcher.start_state();
-        for (pos, c) in text.iter().enumerate() {
-            let (s, iter) = self.overlapping_searcher.consume(state, pos + 1, *c);
+        let mut state = self.overlapping_searcher_rev.start_state();
+        for (pos, c) in text.iter().rev().enumerate() {
+            let (s, iter) = self.overlapping_searcher_rev.consume(state, pos + 1, *c);
             state = s;
             let mut best = (0, u32::MAX);
             for m in iter {
@@ -548,7 +548,66 @@ impl BytePairEncoding {
             encoded.push(token);
             pos -= self.token_len(token);
         }
-        encoded.reverse();
+        encoded
+    }
+
+    /// This function computes the encoding while randomly rejecting some merges.
+    /// Result of the encoding will be non-deterministic unless `seed` is provided.
+    /// Implementation loosely follows original BPE dropout paper: https://arxiv.org/abs/1910.13267
+    ///
+    /// In more detail: the tokenization uses dynamic programming, i.e. it models the tokenization as a graph,
+    /// where every position between text bytes is a node and two nodes are connected when the text slice between those two nodes matches a token.
+    // It then tries to find the shortest possible path from the beginning of the text till the end, i.e. it finds the shortest possible encoding.
+    // For this nodes are processed from right to left. At each node, edges starting at that node and ending on the right are tested and
+    // the one producing the shortest path is stored together with the length of the shortest path to that node.
+    // The length of the shortest path is stored as second value, the edge (or rather token) is stored as first value.
+    // Then, we walk in reverse direction through the table along the shortest path.
+    // Note: the reason for constructing the table from back to front is that
+    // the reconstruction outputs the path from start till end (i.e. we don't have to reverse the path afterwards).
+    //
+    // For the dropout (when dropout > 0.0), we uniformly drop edges from the graph, but always keep the one-byte tokens such that the graph stays connected.
+    // Note: this is very different from how BPE works and cannot produce the same output as the algorithm
+    // in the [paper's repository](https://github.com/VProv/BPE-Dropout/blob/master/bpe.py#L98), for two main reasons:
+    //   - `encode_minimal` already doesn't follow the original heap-based BPE procedure
+    //   - BPE-dropout authors discard all multi-byte tokens for each word separately, while this implementation does not split the "sentence" into words first
+    //     and hence may include previously discarded token later down the byte stream. At the sentence level though we don't expect it to make much difference.
+    //     Also, this implementation of BPE constructs merges on the fly from the set of tokens, hence might come up with a different set of merges with the same dictionary.
+    #[cfg(feature = "rand")]
+    pub fn encode_minimal_dropout<R: rand::Rng>(
+        &self,
+        text: &[u8],
+        dropout: f32,
+        mut rng: R,
+    ) -> Vec<u32> {
+        assert!(0.0 <= dropout);
+        assert!(dropout <= 1.0);
+
+        let mut last_token: Vec<(u32, u32)> = Vec::with_capacity(text.len());
+        let mut state = self.overlapping_searcher_rev.start_state();
+        for (pos, c) in text.iter().rev().enumerate() {
+            let (s, iter) = self.overlapping_searcher_rev.consume(state, pos + 1, *c);
+            state = s;
+            let mut best = (0, u32::MAX);
+            for m in iter {
+                if m.end() > m.start() + 1 && dropout >= rng.random() {
+                    continue;
+                }
+                if m.start() == 0 {
+                    best = (m.value(), 1);
+                    break;
+                } else if last_token[m.start() - 1].1 + 1 < best.1 {
+                    best = (m.value(), last_token[m.start() - 1].1 + 1);
+                }
+            }
+            last_token.push(best);
+        }
+        let mut encoded = Vec::with_capacity(last_token.last().map(|l| l.1 as usize).unwrap_or(0));
+        let mut pos = text.len();
+        while pos > 0 {
+            let token = last_token[pos - 1].0;
+            encoded.push(token);
+            pos -= self.token_len(token);
+        }
         encoded
     }
 }
