@@ -1,6 +1,6 @@
 [package]
 name = "geo_filters"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Geometric filters for set cardinality estimation."
 repository = "https://github.com/github/rust-gems"
@@ -33,7 +33,7 @@ once_cell = "1.18"
 rand = { version = "0.9", optional = true }
 rayon = { version = "1.7", optional = true }
 regex = { version = "1", optional = true }
-serde = { version = "1.0", default-features = false, optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 rand_chacha = { version = "0.9", optional = true }
 
 [dev-dependencies]
