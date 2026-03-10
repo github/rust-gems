@@ -32,6 +32,11 @@ test:
 	RUST_BACKTRACE=1 cargo test
 	# Amazingly, `--all-targets` causes doc-tests not to run.
 	RUST_BACKTRACE=1 cargo test --doc
+	# Check that geo_filters compiles with each feature in isolation and with no features
+	cargo check -p geo_filters --no-default-features
+	cargo check -p geo_filters --features test-support
+	cargo check -p geo_filters --features serde
+	cargo check -p geo_filters --features evaluation
 
 .PHONY: test-ignored
 test-ignored:
