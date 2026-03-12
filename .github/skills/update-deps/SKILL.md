@@ -29,7 +29,7 @@ Supporting packages (not published): `bpe-tests`, `bpe-benchmarks`.
 
 | Ecosystem | Directories | Notes |
 |---|---|---|
-| **cargo** | `/` (workspace root) | All Rust deps managed at workspace level via `Cargo.lock` |
+| **cargo** | `/` (workspace root) | Deps declared per-crate; `Cargo.lock` at workspace root pins versions |
 | **github-actions** | `.github/workflows/` | CI and publish workflows |
 | **npm** | `crates/string-offsets/js/` | JS bindings for string-offsets (WASM) |
 
@@ -77,18 +77,18 @@ gh pr list --author 'app/dependabot' --base main --state open --json number,titl
 Fetch open dependabot alerts:
 
 ```bash
-gh api /repos/{owner}/{repo}/dependabot/alerts --jq '[.[] | select(.state=="open") | {number: .number, package: .security_vulnerability.package.name, ecosystem: .security_vulnerability.package.ecosystem, severity: .security_advisory.severity, summary: .security_advisory.summary}]'
+gh api --paginate /repos/{owner}/{repo}/dependabot/alerts --jq '[.[] | select(.state=="open") | {number: .number, package: .security_vulnerability.package.name, ecosystem: .security_vulnerability.package.ecosystem, severity: .security_advisory.severity, summary: .security_advisory.summary}]'
 ```
 
 For ecosystems without dependabot coverage or when running ad-hoc, use native tooling:
 
 - **cargo:** `cargo update --dry-run`
-- **npm:** `cd crates/string-offsets/js && npm outdated --json`
+- **npm:** find directories containing `package.json`, then run `npm outdated --json || true` in each (npm exits non-zero when updates exist)
 
 Also fetch the advisory URLs for any security-related updates. Individual alert details are at `https://github.com/{owner}/{repo}/security/dependabot/{alert_number}`. Fetch alert numbers and GHSA IDs via:
 
 ```bash
-gh api /repos/{owner}/{repo}/dependabot/alerts --jq '[.[] | {number: .number, state, package: .security_vulnerability.package.name, ecosystem: .security_vulnerability.package.ecosystem, severity: .security_advisory.severity, ghsa_id: .security_advisory.ghsa_id, summary: .security_advisory.summary}]'
+gh api --paginate /repos/{owner}/{repo}/dependabot/alerts --jq '[.[] | {number: .number, state, package: .security_vulnerability.package.name, ecosystem: .security_vulnerability.package.ecosystem, severity: .security_advisory.severity, ghsa_id: .security_advisory.ghsa_id, summary: .security_advisory.summary}]'
 ```
 
 Include both open and auto_dismissed/dismissed alerts — the update may resolve alerts in any state.
@@ -258,16 +258,10 @@ gh pr close {dependabot_pr_number} --comment "Superseded by #{new_pr_number} whi
 
 ### 9. Assign for review
 
-Determine the current user:
+Request review from CODEOWNERS or a user-provided reviewer (not the PR author):
 
 ```bash
-gh api user --jq '.login'
-```
-
-Request review:
-
-```bash
-gh pr edit {pr_number} --add-reviewer {user_login}
+gh pr edit {pr_number} --add-reviewer {reviewer_login}
 ```
 
 Report the final PR URL and a summary of what was done.
@@ -278,7 +272,7 @@ Report the final PR URL and a summary of what was done.
 - **Never push to `main` directly.** Always work on a feature branch.
 - **Never push code that doesn't pass `make lint` and `make test`.** If you can't fix it in 3 tries, stop and ask.
 - **Be conservative with major version bumps.** If a major version update breaks things and the fix isn't obvious, skip that package and note it in the PR description.
-- **Preserve lockfiles.** Always regenerate `Cargo.lock` and `package-lock.json` after updating — don't just edit manifests.
+- **Regenerate lockfiles.** Always regenerate `Cargo.lock` and `package-lock.json` after updating — don't just edit manifests.
 - **One ecosystem at a time.** Complete the full cycle (update → build → push → PR → CI green) for one ecosystem before moving to the next.
 - **If no updates are needed** for an ecosystem, skip it and tell the user.
 - **Security alerts take priority.** Address security alerts first within each ecosystem.
@@ -286,8 +280,8 @@ Report the final PR URL and a summary of what was done.
 
 ## Edge cases
 
-- **Cargo workspace:** All Rust dependencies are managed at the workspace root. Always run `cargo update` and `cargo check` from the repo root.
-- **npm is scoped to string-offsets:** The only npm package is in `crates/string-offsets/js/`. Don't look for npm elsewhere.
+- **Cargo workspace:** Dependencies are declared per-crate but share a single `Cargo.lock` at the workspace root. Always run `cargo update` and `cargo check` from the repo root.
+- **npm:** Look for `package.json` files to discover npm packages rather than hardcoding paths — the repo layout may change.
 - **WASM builds:** After updating `wasm-bindgen` or related deps, verify `make build-js` still works — WASM toolchain version mismatches are common.
 - **Rate limits:** If `gh api` hits rate limits, wait and retry. Report to user if persistent.
 - **Nothing to update:** Report cleanly and move to the next ecosystem (or exit).
