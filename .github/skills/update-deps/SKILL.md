@@ -85,11 +85,13 @@ For ecosystems without dependabot coverage or when running ad-hoc, use native to
 - **cargo:** `cargo update --dry-run`
 - **npm:** `cd crates/string-offsets/js && npm outdated --json`
 
-Also fetch the advisory URLs for any security-related updates. The dependabot security dashboard is at `https://github.com/{owner}/{repo}/security/dependabot`. Individual alert details (including GHSA links) are available via:
+Also fetch the advisory URLs for any security-related updates. Individual alert details are at `https://github.com/{owner}/{repo}/security/dependabot/{alert_number}`. Fetch alert numbers and GHSA IDs via:
 
 ```bash
-gh api /repos/{owner}/{repo}/dependabot/alerts --jq '[.[] | select(.state=="open") | {number: .number, package: .security_vulnerability.package.name, severity: .security_advisory.severity, ghsa_id: .security_advisory.ghsa_id, url: .html_url}]'
+gh api /repos/{owner}/{repo}/dependabot/alerts --jq '[.[] | {number: .number, state, package: .security_vulnerability.package.name, ecosystem: .security_vulnerability.package.ecosystem, severity: .security_advisory.severity, ghsa_id: .security_advisory.ghsa_id, summary: .security_advisory.summary}]'
 ```
+
+Include both open and auto_dismissed/dismissed alerts — the update may resolve alerts in any state.
 
 Cross-reference and group all updates by ecosystem. Present a summary to the user:
 
@@ -200,7 +202,7 @@ git push -u origin HEAD
 **Body should include:**
 
 - List of updated dependencies with version changes (old → new)
-- Any security alerts resolved — include severity, GHSA ID, advisory summary, and a link to the advisory (e.g., `https://github.com/advisories/GHSA-xxxx-xxxx-xxxx`). Also link to the repo's dependabot security dashboard: `https://github.com/{owner}/{repo}/security/dependabot`
+- Any security alerts resolved — for each, link to the specific dependabot alert (`https://github.com/{owner}/{repo}/security/dependabot/{alert_number}`) and the GHSA advisory (`https://github.com/advisories/GHSA-xxxx-xxxx-xxxx`), along with severity and summary
 - **High-risk changes flagged for reviewer attention** (major version bumps, wide-blast-radius packages)
 - Code changes made to fix breakage (if any)
 - References to superseded dependabot PRs
