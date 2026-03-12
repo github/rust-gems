@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use rand::{rng, Rng};
+    use rand::{rng, RngExt};
     use tiktoken_rs::cl100k_base_singleton;
 
     use bpe::appendable_encoder::AppendableEncoder;
