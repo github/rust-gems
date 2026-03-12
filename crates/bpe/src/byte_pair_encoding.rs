@@ -168,7 +168,7 @@ pub fn find_hash_factor_for_tiktoken(data: &str) -> Result<u64, base64::DecodeEr
 pub fn find_hash_factor_for_dictionary(tokens: impl IntoIterator<Item = Vec<u8>>) -> u64 {
     use std::collections::HashSet;
 
-    use rand::Rng;
+    use rand::RngExt;
 
     let all_tokens = tokens.into_iter().collect_vec();
     let mut rnd = rand::rng();
@@ -573,7 +573,7 @@ impl BytePairEncoding {
     //     and hence may include previously discarded token later down the byte stream. At the sentence level though we don't expect it to make much difference.
     //     Also, this implementation of BPE constructs merges on the fly from the set of tokens, hence might come up with a different set of merges with the same dictionary.
     #[cfg(feature = "rand")]
-    pub fn encode_minimal_dropout<R: rand::Rng>(
+    pub fn encode_minimal_dropout<R: rand::RngExt>(
         &self,
         text: &[u8],
         dropout: f32,
@@ -627,7 +627,7 @@ pub fn create_test_string_with_predicate(
     min_bytes: usize,
     predicate: impl Fn(&str) -> bool,
 ) -> String {
-    use rand::{rng, Rng};
+    use rand::{rng, RngExt};
     // the string we accumulated thus far
     let mut result = String::new();
     // the tokens we added so we can backtrack
@@ -662,7 +662,7 @@ pub fn create_test_string_with_predicate(
 
 #[cfg(feature = "rand")]
 pub fn select_test_string(text: &str, min_bytes: usize) -> &str {
-    use rand::{rng, Rng};
+    use rand::{rng, RngExt};
     let mut start = rng().random_range(0..text.len() - min_bytes);
     while !text.is_char_boundary(start) {
         start -= 1;
@@ -677,7 +677,7 @@ pub fn select_test_string(text: &str, min_bytes: usize) -> &str {
 /// Generate test bytes by concatenating random tokens.
 #[cfg(feature = "rand")]
 pub fn create_test_bytes(bpe: &BytePairEncoding, min_bytes: usize) -> Vec<u8> {
-    use rand::{rng, Rng};
+    use rand::{rng, RngExt};
     let mut result = Vec::new();
     while result.len() < min_bytes {
         let i = rng().random_range(0..bpe.num_tokens());
