@@ -32,7 +32,9 @@
     "wasm-pack": "^0.14.0"
   },
   "overrides": {
-    "tar": "^7.4.3",
-    "axios": "^1.8.0"
+    "binary-install": {
+      "tar": "^7.4.3",
+      "axios": "^1.8.0"
+    }
   }
 }
