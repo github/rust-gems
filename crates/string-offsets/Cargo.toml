@@ -20,8 +20,8 @@ wasm = ["wasm-bindgen"]
 wasm-bindgen = { version = "0.2", optional = true }
 
 [dev-dependencies]
-rand = "0.9"
-rand_chacha = "0.9"
+rand = "0.10"
+rand_chacha = "0.10"
 criterion = "0.8"
 
 [[bench]]

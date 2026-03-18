@@ -9,9 +9,7 @@ use bpe_benchmarks::*;
 use criterion::{
     criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
 };
-use rand::rngs::StdRng;
-use rand::SeedableRng;
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 
 fn counting_benchmark(c: &mut Criterion) {
     for (name, bpe, _, _) in TOKENIZERS.iter() {

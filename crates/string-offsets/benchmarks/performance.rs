@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 use string_offsets::{AllConfig, OnlyLines, StringOffsets};
 
 fn only_lines_construction_benchmark(c: &mut Criterion) {
