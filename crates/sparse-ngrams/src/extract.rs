@@ -293,44 +293,34 @@ unsafe fn collect_sparse_grams_masked_avx_inner(content: &[u8], out: &mut [NGram
     #[repr(align(32))]
     struct A32([u32; 8]);
 
+    // Shifted layout: lane k stores prefix_hashes[(k - 1) & 7].
+    // This lets the hash step load the needed rotated prefix vector directly.
     let mut prefix_hashes = A32([0u32; 8]);
-    prefix_hashes.0[1] = content[0] as u32;
+    prefix_hashes.0[2] = content[0] as u32;
 
     let mut prio_arr = A32([0u32; 8]);
     let mut active: u32 = 0;
 
-    // dist[k] = len for slot k.  Starts [2, 9, 8, 7, 6, 5, 4, 3].
-    let mut dist_arr = A32([2, 9, 8, 7, 6, 5, 4, 3]);
-    let mut v_dist = _mm256_load_si256(dist_arr.0.as_ptr() as *const __m256i);
-
-    // poly_circ — initialized one power below because the first thing in the loop is multiply.
-    let mut poly_arr = A32([
-        POLY_POWERS[1], POLY_POWERS[8], POLY_POWERS[7], POLY_POWERS[6],
-        POLY_POWERS[5], POLY_POWERS[4], POLY_POWERS[3], POLY_POWERS[2],
-    ]);
-    let mut v_poly = _mm256_load_si256(poly_arr.0.as_ptr() as *const __m256i);
-
-    let v_prime = _mm256_set1_epi32(POLY_HASH_PRIME as i32);
-    let v_one = _mm256_set1_epi32(1);
+    // Doubled LUTs let us load the 8-lane circular view with one unaligned load.
+    let dist_lut = [2u32, 9, 8, 7, 6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3];
+    let poly_pow9 = POLY_POWERS[8].wrapping_mul(POLY_HASH_PRIME);
+    let poly_lut = [
+        POLY_POWERS[2], poly_pow9, POLY_POWERS[8], POLY_POWERS[7],
+        POLY_POWERS[6], POLY_POWERS[5], POLY_POWERS[4], POLY_POWERS[3],
+        POLY_POWERS[2], poly_pow9, POLY_POWERS[8], POLY_POWERS[7],
+        POLY_POWERS[6], POLY_POWERS[5], POLY_POWERS[4], POLY_POWERS[3],
+    ];
 
     for idx in 1..n as u32 {
         let slot = idx as usize & CMASK;
 
-        // --- AVX2: advance dist += 1, poly_circ *= PRIME ---
-        v_dist = _mm256_add_epi32(v_dist, v_one);
-        v_poly = _mm256_mullo_epi32(v_poly, v_prime);
-
-        // Reset current slot: dist[slot] = 2, poly[slot] = POLY_POWERS[2].
-        // Insert into the vector via store-to-array, modify, reload.
-        _mm256_store_si256(dist_arr.0.as_mut_ptr() as *mut __m256i, v_dist);
-        _mm256_store_si256(poly_arr.0.as_mut_ptr() as *mut __m256i, v_poly);
-        dist_arr.0[slot] = 2;
-        poly_arr.0[slot] = POLY_POWERS[2];
-        v_dist = _mm256_load_si256(dist_arr.0.as_ptr() as *const __m256i);
-        v_poly = _mm256_load_si256(poly_arr.0.as_ptr() as *const __m256i);
+        // Load slot-aligned circular views for dist/poly with a single unaligned read.
+        let lut_off = (MAX_SPARSE_GRAM_SIZE as usize - slot) & CMASK;
+        let v_dist = _mm256_loadu_si256(dist_lut.as_ptr().add(lut_off) as *const __m256i);
+        let v_poly = _mm256_loadu_si256(poly_lut.as_ptr().add(lut_off) as *const __m256i);
 
         // --- Scalar: compute end_hash, v1, update prio ---
-        let end_hash = prefix_hashes.0[slot]
+        let end_hash = prefix_hashes.0[(slot + 1) & CMASK]
             .wrapping_mul(POLY_HASH_PRIME)
             .wrapping_add(content[idx as usize] as u32);
 
@@ -338,19 +328,10 @@ unsafe fn collect_sparse_grams_masked_avx_inner(content: &[u8], out: &mut [NGram
             table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
         prio_arr.0[slot] = v1;
 
-        // --- AVX2: compare all 8 priorities with v1 ---
-        // For unsigned >= comparison: (a >= b) iff !(b > a) iff !((b ^ 0x80000000) > (a ^ 0x80000000))
-        // using signed comparison after flipping sign bits.
+        // --- AVX-512: compare all 8 priorities with v1 and get the lane mask directly ---
         let v_prio = _mm256_load_si256(prio_arr.0.as_ptr() as *const __m256i);
         let v_v1 = _mm256_set1_epi32(v1 as i32);
-        let v_sign = _mm256_set1_epi32(i32::MIN);
-        let v_prio_s = _mm256_xor_si256(v_prio, v_sign);
-        let v_v1_s = _mm256_xor_si256(v_v1, v_sign);
-        // gt_mask: bits where v1 > prio[k] (signed after flip = unsigned)
-        let gt = _mm256_cmpgt_epi32(v_v1_s, v_prio_s);
-        // movemask_ps gives 1 bit per 32-bit lane (8 bits total).
-        let gt_mask8 = _mm256_movemask_ps(_mm256_castsi256_ps(gt)) as u32;
-        let ge_bits = (!gt_mask8) & 0xFF;
+        let ge_bits = _mm256_cmp_epu32_mask(v_prio, v_v1, _MM_CMPINT_NLT) as u32;
 
         // --- Scalar bitmask logic (same as masked variant) ---
         let cur_bit = 1u32 << slot;
@@ -366,11 +347,7 @@ unsafe fn collect_sparse_grams_masked_avx_inner(content: &[u8], out: &mut [NGram
 
         // --- AVX2: compute all 8 hashes in parallel ---
         // hash[k] = end_hash - prefix_hashes[(k-1) & 7] * poly_circ[k]
-        // Build rotated prefix_hashes: shift each lane's index by -1 mod 8.
-        // Use _mm256_permutevar8x32_epi32 with indices [(k-1)&7 for k in 0..8].
-        let v_ph = _mm256_load_si256(prefix_hashes.0.as_ptr() as *const __m256i);
-        let v_perm_idx = _mm256_set_epi32(6, 5, 4, 3, 2, 1, 0, 7); // (k-1)&7 for k=7..0
-        let v_ph_rot = _mm256_permutevar8x32_epi32(v_ph, v_perm_idx);
+        let v_ph_rot = _mm256_load_si256(prefix_hashes.0.as_ptr() as *const __m256i);
         let v_prod = _mm256_mullo_epi32(v_ph_rot, v_poly);
         let v_end = _mm256_set1_epi32(end_hash as i32);
         let v_hash = _mm256_sub_epi32(v_end, v_prod);
@@ -393,7 +370,8 @@ unsafe fn collect_sparse_grams_masked_avx_inner(content: &[u8], out: &mut [NGram
         active = (active & !ge_bits) | cur_bit;
         active &= !(1u32 << (idx.wrapping_sub(MAX_D as u32) as usize & CMASK));
 
-        prefix_hashes.0[(idx as usize + 1) & CMASK] = end_hash;
+        let next = (idx as usize + 1) & CMASK;
+        prefix_hashes.0[(next + 1) & CMASK] = end_hash;
     }
     w
 }
