@@ -1,0 +1,20 @@
+[package]
+name = "sparse-ngrams"
+version = "0.1.0"
+edition = "2021"
+description = "Fast sparse n-gram extraction from byte slices."
+repository = "https://github.com/github/rust-gems"
+license = "MIT"
+keywords = ["ngram", "algorithm", "search", "index"]
+categories = ["algorithms", "data-structures", "text-processing"]
+
+[lib]
+bench = false
+
+[[bench]]
+name = "performance"
+path = "benches/performance.rs"
+harness = false
+
+[dev-dependencies]
+criterion = "0.5"
