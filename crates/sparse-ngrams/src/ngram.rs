@@ -35,6 +35,7 @@ pub(crate) const POLY_POWERS: [u32; MAX_SPARSE_GRAM_SIZE as usize + 1] = {
 /// Use [`NGram::from_bytes`] for one-off hashing, or the rolling-hash helpers
 /// inside the extraction loop for amortised O(1) computation per n-gram.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(transparent)]
 pub struct NGram(pub(crate) u32);
 
 impl NGram {

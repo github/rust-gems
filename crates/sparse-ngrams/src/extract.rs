@@ -272,7 +272,7 @@ pub fn collect_sparse_grams_masked_avx(content: &[u8], out: &mut [NGram]) -> usi
 }
 
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,avx512f,avx512vl")]
 unsafe fn collect_sparse_grams_masked_avx_inner(content: &[u8], out: &mut [NGram]) -> usize {
     #[cfg(target_arch = "x86_64")]
     use core::arch::x86_64::*;
@@ -348,12 +348,8 @@ unsafe fn collect_sparse_grams_masked_avx_inner(content: &[u8], out: &mut [NGram
         let v_v1_s = _mm256_xor_si256(v_v1, v_sign);
         // gt_mask: bits where v1 > prio[k] (signed after flip = unsigned)
         let gt = _mm256_cmpgt_epi32(v_v1_s, v_prio_s);
-        // ge = !gt  →  prio[k] >= v1
-        let ge_bits = !(_mm256_movemask_epi8(gt) as u32) & 0xFF;
-        // movemask gives 32 bits (4 per lane); we want 1 bit per lane.
-        // Use _mm256_movemask_ps on the comparison result instead.
-        let gt_ps = _mm256_castsi256_ps(gt);
-        let gt_mask8 = _mm256_movemask_ps(gt_ps) as u32;
+        // movemask_ps gives 1 bit per 32-bit lane (8 bits total).
+        let gt_mask8 = _mm256_movemask_ps(_mm256_castsi256_ps(gt)) as u32;
         let ge_bits = (!gt_mask8) & 0xFF;
 
         // --- Scalar bitmask logic (same as masked variant) ---
@@ -383,18 +379,15 @@ unsafe fn collect_sparse_grams_masked_avx_inner(content: &[u8], out: &mut [NGram
         let v_hash_shifted = _mm256_slli_epi32(v_hash, 8);
         let v_ngram = _mm256_or_si256(v_hash_shifted, v_dist);
 
-        // Store all 8 n-gram candidates to a temp array, then emit selected ones.
-        let mut ngram_arr = A32([0u32; 8]);
-        _mm256_store_si256(ngram_arr.0.as_mut_ptr() as *mut __m256i, v_ngram);
-
-        // --- Emit selected n-grams ---
-        let mut m = emit;
-        while m != 0 {
-            let k = m.trailing_zeros() as usize;
-            out[w] = NGram(ngram_arr.0[k]);
-            w += 1;
-            m &= m - 1;
-        }
+        // --- AVX-512 compressed store (VPCOMPRESSD): selected lanes written contiguously ---
+        let count = emit.count_ones() as usize;
+        // SAFETY: NGram is #[repr(transparent)] over u32, and out[w..w+count] is in bounds.
+        _mm256_mask_compressstoreu_epi32(
+            out.as_mut_ptr().add(w) as *mut i32,
+            emit as __mmask8,
+            v_ngram,
+        );
+        w += count;
 
         // --- Update active ---
         active = (active & !ge_bits) | cur_bit;
