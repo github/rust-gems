@@ -1,7 +1,7 @@
 //! Core sparse n-gram extraction algorithm.
 
 use crate::deque::{FixedDeque, PosStateBytes};
-use crate::ngram::{NGram, POLY_HASH_PRIME, POLY_POWERS, ngram_from_range};
+use crate::ngram::{NGram, POLY_HASH_PRIME, POLY_POWERS};
 use crate::table::get_bigram_table;
 use crate::MAX_SPARSE_GRAM_SIZE;
 
@@ -51,7 +51,9 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
             .wrapping_add(content[idx as usize] as u32);
 
         // Bigram
-        out[w] = ngram_from_range(&prefix_hashes, end_hash, idx as usize - 1, 2);
+        let bigram_hash = end_hash
+            .wrapping_sub(prefix_hashes[(idx as usize - 1) & mask].wrapping_mul(POLY_POWERS[2]));
+        out[w] = NGram::from_rolling_hash(bigram_hash, 2);
         w += 1;
 
         let (v1, _v2) =
@@ -65,8 +67,9 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
 
         while let Some(begin) = queue.back() {
             let start = begin.index as usize - 1;
-            let len = idx as usize + 1 - start;
-            out[w] = ngram_from_range(&prefix_hashes, end_hash, start, len);
+            let len = (idx - begin.index + 2) as usize;
+            let hash = end_hash.wrapping_sub(prefix_hashes[start & mask].wrapping_mul(POLY_POWERS[len]));
+            out[w] = NGram::from_rolling_hash(hash, len);
             w += 1;
             if begin.value < v1 {
                 break;
@@ -103,50 +106,42 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
     let table = get_bigram_table();
     const MASK: usize = MAX_SPARSE_GRAM_SIZE as usize - 1;
     let mut w = 0usize;
-
     let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
     prefix_hashes[1] = content[0] as u32;
-
     let mut priorities = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
-
     for idx in 1..n as u32 {
         let end_hash = prefix_hashes[idx as usize & MASK]
             .wrapping_mul(POLY_HASH_PRIME)
             .wrapping_add(content[idx as usize] as u32);
-
         // Bigram
-        out[w] = ngram_from_range(&prefix_hashes, end_hash, idx as usize - 1, 2);
+        let bigram_hash = end_hash
+            .wrapping_sub(prefix_hashes[(idx as usize - 1) & MASK].wrapping_mul(POLY_POWERS[2]));
+        out[w] = NGram::from_rolling_hash(bigram_hash, 2);
         w += 1;
-
         let (v1, _v2) =
             table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
         priorities[idx as usize & MASK] = v1;
-
         let mut running_min = u32::MAX;
-
         for d in 1..=(MAX_SPARSE_GRAM_SIZE - 2) {
             if d >= idx {
                 break;
             }
-            let p = idx - d;
-            let v_p = priorities[p as usize & MASK];
-
+            let p = (idx - d) as usize;
+            let v_p = priorities[p & MASK];
             if v_p < running_min {
-                let start = p as usize - 1;
-                let len = idx as usize + 1 - start;
-                out[w] = ngram_from_range(&prefix_hashes, end_hash, start, len);
+                running_min = v_p;
+                let start = p - 1;
+                let len = d as usize + 2;
+                let hash = end_hash.wrapping_sub(prefix_hashes[start & MASK].wrapping_mul(POLY_POWERS[len]));
+                out[w] = NGram::from_rolling_hash(hash, len);
                 w += 1;
                 if v_p < v1 {
                     break;
                 }
             }
-
-            running_min = running_min.min(v_p);
         }
-
         prefix_hashes[(idx as usize + 1) & MASK] = end_hash;
     }
-
     w
 }
 
@@ -418,7 +413,9 @@ pub fn collect_sparse_grams_wide(content: &[u8], out: &mut [NGram]) -> usize {
             .wrapping_mul(POLY_HASH_PRIME)
             .wrapping_add(content[idx as usize] as u32);
 
-        out[w] = ngram_from_range(&circ_ph, end_hash, idx as usize - 1, 2);
+        let bigram_hash = end_hash
+            .wrapping_sub(circ_ph[(idx as usize - 1) & MASK].wrapping_mul(POLY_POWERS[2]));
+        out[w] = NGram::from_rolling_hash(bigram_hash, 2);
         w += 1;
 
         let (v1, _) =
@@ -433,8 +430,9 @@ pub fn collect_sparse_grams_wide(content: &[u8], out: &mut [NGram]) -> usize {
             let v_p = circ_prio[(idx - d) as usize & MASK];
             if v_p < running_min {
                 let start = (idx - d) as usize - 1;
-                let len = idx as usize + 1 - start;
-                out[w] = ngram_from_range(&circ_ph, end_hash, start, len);
+                let len = d as usize + 2;
+                let hash = end_hash.wrapping_sub(circ_ph[start & MASK].wrapping_mul(POLY_POWERS[len]));
+                out[w] = NGram::from_rolling_hash(hash, len);
                 w += 1;
                 if v_p < v1 {
                     break;

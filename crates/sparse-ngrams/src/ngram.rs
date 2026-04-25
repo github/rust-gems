@@ -79,21 +79,6 @@ impl fmt::Debug for NGram {
     }
 }
 
-/// Compute the rolling hash for `content[start..start+len]` from prefix hashes.
-#[inline]
-pub(crate) fn ngram_from_range(
-    prefix_hashes: &[u32; MAX_SPARSE_GRAM_SIZE as usize],
-    end_hash: u32,
-    start: usize,
-    len: usize,
-) -> NGram {
-    let hash = end_hash.wrapping_sub(
-        prefix_hashes[start & (MAX_SPARSE_GRAM_SIZE as usize - 1)]
-            .wrapping_mul(POLY_POWERS[len]),
-    );
-    NGram::from_rolling_hash(hash, len)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,7 +120,10 @@ mod tests {
                 .wrapping_mul(POLY_HASH_PRIME)
                 .wrapping_add(content[idx] as u32);
             // Check the bigram content[idx-1..idx+1]
-            let rolling = ngram_from_range(&prefix_hashes, end_hash, idx - 1, 2);
+            let rolling_hash = end_hash
+                .wrapping_sub(prefix_hashes[(idx - 1) & (MAX_SPARSE_GRAM_SIZE as usize - 1)]
+                    .wrapping_mul(POLY_POWERS[2]));
+            let rolling = NGram::from_rolling_hash(rolling_hash, 2);
             let direct = NGram::from_bytes(&content[idx - 1..idx + 1]);
             assert_eq!(rolling, direct, "mismatch at idx={idx}");
             prefix_hashes[(idx + 1) & (MAX_SPARSE_GRAM_SIZE as usize - 1)] = end_hash;
