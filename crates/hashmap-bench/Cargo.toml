@@ -1,0 +1,24 @@
+[package]
+name = "hashmap-bench"
+edition = "2021"
+
+[lib]
+path = "lib.rs"
+test = false
+
+[[bench]]
+name = "hashmap_insert"
+path = "hashmap_insert.rs"
+harness = false
+test = false
+
+[dependencies]
+criterion = "0.7"
+rand = "0.9"
+rustc-hash = "2"
+ahash = "0.8"
+hashbrown = "0.15"
+foldhash = "0.1"
+gxhash = "3"
+smallvec = "1"
+fnv = "1"
