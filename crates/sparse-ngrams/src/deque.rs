@@ -8,7 +8,7 @@ pub(crate) struct PosStateBytes {
     /// Absolute index position between the two bigram characters.
     /// I.e. 1 references the very first bigram.
     pub index: u32,
-    pub value: u32,
+    pub value: u8,
 }
 
 /// Stack-allocated circular buffer holding up to `CAP` elements.

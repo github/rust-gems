@@ -30,7 +30,6 @@
 
 mod deque;
 mod extract;
-mod murmur;
 mod ngram;
 mod table;
 

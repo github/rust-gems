@@ -5,22 +5,21 @@
 
 use std::sync::OnceLock;
 
-use crate::murmur::hash_bigram;
 use crate::NUM_FREQUENT_BIGRAMS;
 
 /// The bigrams in this string are sorted by how frequently they occur in code (descending).
 /// Bigrams are separated by null bytes. Only the first [`NUM_FREQUENT_BIGRAMS`] entries
-/// receive nonzero priority; all other byte pairs default to `(0, 0)`.
+/// receive nonzero priority; all other byte pairs default to 0.
 static BIGRAMS_STR: &str = include_str!("bigrams.bin");
 
 /// Flat 256×256 lookup table indexed by `a as usize * 256 + b`.
-/// Entries default to `(0, 0)` for bigrams not in the frequency table.
-static BIGRAM_TABLE: OnceLock<Box<[(u32, u32); 256 * 256]>> = OnceLock::new();
+/// Entries default to 0 for bigrams not in the frequency table.
+static BIGRAM_TABLE: OnceLock<Box<[u8; 256 * 256]>> = OnceLock::new();
 
 /// Returns the bigram priority table. The first call initializes it (thread-safe).
-pub(crate) fn get_bigram_table() -> &'static [(u32, u32); 256 * 256] {
+pub(crate) fn get_bigram_table() -> &'static [u8; 256 * 256] {
     BIGRAM_TABLE.get_or_init(|| {
-        let mut table = Box::new([(0u32, 0u32); 256 * 256]);
+        let mut table = Box::new([0u8; 256 * 256]);
         for (idx, s) in BIGRAMS_STR
             .split('\0')
             .take(NUM_FREQUENT_BIGRAMS)
@@ -36,7 +35,7 @@ pub(crate) fn get_bigram_table() -> &'static [(u32, u32); 256 * 256] {
             // Higher-frequency bigrams get HIGHER values so they are more often
             // encompassed by longer grams.
             table[a as usize * 256 + b as usize] =
-                ((NUM_FREQUENT_BIGRAMS - idx) as u32, hash_bigram((a, b)));
+                (NUM_FREQUENT_BIGRAMS - idx) as u8;
         }
         table
     })

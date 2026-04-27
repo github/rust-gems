@@ -36,13 +36,11 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
         return 0;
     }
     assert!(out.len() >= max_sparse_grams(n));
-
     let table = get_bigram_table();
     let mut queue = FixedDeque::<{ MAX_SPARSE_GRAM_SIZE as usize }>::new();
-    let mut w = 0usize;
-
     let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
     prefix_hashes[1] = content[0] as u32;
+    let mut w = 0usize;
 
     for idx in 1..n as u32 {
         let mask = MAX_SPARSE_GRAM_SIZE as usize - 1;
@@ -56,7 +54,7 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
         out[w] = NGram::from_rolling_hash(bigram_hash, 2);
         w += 1;
 
-        let (v1, _v2) =
+        let v1 =
             table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
 
         if let Some(begin) = queue.front() {
@@ -64,27 +62,26 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
                 queue.pop_front();
             }
         }
-
         while let Some(begin) = queue.back() {
             let start = begin.index as usize - 1;
             let len = (idx - begin.index + 2) as usize;
             let hash = end_hash.wrapping_sub(prefix_hashes[start & mask].wrapping_mul(POLY_POWERS[len]));
             out[w] = NGram::from_rolling_hash(hash, len);
             w += 1;
-            if begin.value < v1 {
+            if begin.value == v1 {
+                queue.pop_back();
+                break;
+            } else if begin.value <= v1 {
                 break;
             }
             queue.pop_back();
         }
-
         queue.push_back(PosStateBytes {
             index: idx,
             value: v1,
         });
-
         prefix_hashes[(idx as usize + 1) & mask] = end_hash;
     }
-
     w
 }
 
@@ -108,7 +105,7 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
     let mut w = 0usize;
     let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
     prefix_hashes[1] = content[0] as u32;
-    let mut priorities = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
+    let mut priorities = [u8::MAX; MAX_SPARSE_GRAM_SIZE as usize];
     for idx in 1..n as u32 {
         let end_hash = prefix_hashes[idx as usize & MASK]
             .wrapping_mul(POLY_HASH_PRIME)
@@ -118,24 +115,24 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
             .wrapping_sub(prefix_hashes[(idx as usize - 1) & MASK].wrapping_mul(POLY_POWERS[2]));
         out[w] = NGram::from_rolling_hash(bigram_hash, 2);
         w += 1;
-        let (v1, _v2) =
+        let v1 =
             table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
         priorities[idx as usize & MASK] = v1;
-        let mut running_min = u32::MAX;
+        let mut running_min = u8::MAX;
         for d in 1..=(MAX_SPARSE_GRAM_SIZE - 2) {
             if d >= idx {
                 break;
             }
-            let p = (idx - d) as usize;
-            let v_p = priorities[p & MASK];
+            let p = idx.wrapping_sub(d) as usize & MASK;
+            let v_p = priorities[p];
             if v_p < running_min {
                 running_min = v_p;
-                let start = p - 1;
+                let start = p.wrapping_sub(1) & MASK;
                 let len = d as usize + 2;
-                let hash = end_hash.wrapping_sub(prefix_hashes[start & MASK].wrapping_mul(POLY_POWERS[len]));
+                let hash = end_hash.wrapping_sub(prefix_hashes[start].wrapping_mul(POLY_POWERS[len]));
                 out[w] = NGram::from_rolling_hash(hash, len);
                 w += 1;
-                if v_p < v1 {
+                if v_p <= v1 {
                     break;
                 }
             }
@@ -176,7 +173,7 @@ pub fn collect_sparse_grams_masked(content: &[u8], out: &mut [NGram]) -> usize {
     let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
     prefix_hashes[1] = content[0] as u32;
 
-    let mut prio_circ = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
+    let mut prio_circ = [0u8; MAX_SPARSE_GRAM_SIZE as usize];
     let mut active: u32 = 0; // bitmask: bit k ↔ array slot k is in the deque
     let mut dist = [2usize, 9, 8, 7, 6, 5, 4, 3]; // dist[k] = ((idx - k) & CMASK) + 2
     // poly_circ[k] = POLY_HASH_PRIME^(dist[k] + 2) — tracks the poly power for each slot.
@@ -204,7 +201,7 @@ pub fn collect_sparse_grams_masked(content: &[u8], out: &mut [NGram]) -> usize {
         let end_hash = prefix_hashes[idx as usize & CMASK]
             .wrapping_mul(POLY_HASH_PRIME)
             .wrapping_add(content[idx as usize] as u32);
-        let (v1, _) =
+        let v1 =
             table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
         prio_circ[idx as usize & CMASK] = v1;
         // Compare all lookback priorities with v1 (no idx dependency in the loop).
@@ -213,21 +210,28 @@ pub fn collect_sparse_grams_masked(content: &[u8], out: &mut [NGram]) -> usize {
             ge_bits |= ((prio_circ[k] >= v1) as u32) << k;
         }
         // Emit from active deque positions:
-        //  - all with v >= v1 (they get popped)
-        //  - plus the nearest one with v < v1 (it stays)
+        //  - all with v > v1 (they get popped)
+        //  - plus the nearest one with v <= v1 (it stays if v < v1, cleaned up if v == v1)
         let cur_bit = 1u32 << (idx as usize & CMASK);
-        let emit_ge = active & ge_bits;
-        let active_lt = active & !ge_bits;
-        // Find nearest (smallest distance) active position with v < v1.
+        let gt_bits: u32 = ge_bits & ge_bits.wrapping_sub(/* eq mask */ {
+            let mut eq: u32 = 0;
+            for k in 0..MAX_SPARSE_GRAM_SIZE as usize {
+                eq |= ((prio_circ[k] == v1) as u32) << k;
+            }
+            eq
+        });
+        let emit_gt = active & gt_bits;
+        let active_le = active & !gt_bits;
+        // Find nearest (smallest distance) active position with v <= v1.
         // Rotate so bit 7 = distance 1, bit 6 = distance 2, ..., bit 1 = distance 7.
-        // Bit 0 = distance 0 (cur_bit's slot, never in active_lt) → used as sentinel.
-        // When empty, leading_zeros finds the sentinel; first_lt becomes cur_bit (harmless).
-        let doubled = active_lt | (active_lt << 8);
+        // Bit 0 = distance 0 (cur_bit's slot, never in active_le) → used as sentinel.
+        // When empty, leading_zeros finds the sentinel; first_le becomes cur_bit (harmless).
+        let doubled = active_le | (active_le << 8);
         let shift = idx as usize & CMASK;
         let rotated = ((doubled >> shift) & 0xFF) | 1;
         let b = 31 - rotated.leading_zeros() as usize;
-        let first_lt = 1u32 << ((shift + b) & CMASK);
-        let emit = emit_ge | first_lt | cur_bit;
+        let first_le = 1u32 << ((shift + b) & CMASK);
+        let emit = emit_gt | first_le | cur_bit;
         // Write emitted ngrams.
         let mut m = emit;
         while m != 0 {
@@ -239,8 +243,8 @@ pub fn collect_sparse_grams_masked(content: &[u8], out: &mut [NGram]) -> usize {
             w += 1;
             m &= m - 1;
         }
-        // Update active: keep survivors with v < v1, add current position,
-        // and evict the slot that just left the lookback window.
+        // Update active: keep survivors with v < v1 (ge_bits clears >= v1 including == v1),
+        // add current position, and evict the slot that just left the lookback window.
         active = (active & !ge_bits) | (1 << (idx as usize & CMASK));
         active &= !(1u32 << (idx.wrapping_sub(MAX_D as u32) as usize & CMASK));
         prefix_hashes[(idx as usize + 1) & CMASK] = end_hash;
@@ -319,26 +323,27 @@ unsafe fn collect_sparse_grams_masked_avx_inner(content: &[u8], out: &mut [NGram
             .wrapping_mul(POLY_HASH_PRIME)
             .wrapping_add(content[idx as usize] as u32);
 
-        let (v1, _) =
+        let v1 =
             table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
-        prio_arr.0[slot] = v1;
+        prio_arr.0[slot] = v1 as u32;
 
         // --- AVX-512: compare all 8 priorities with v1 and get the lane mask directly ---
         let v_prio = _mm256_load_si256(prio_arr.0.as_ptr() as *const __m256i);
         let v_v1 = _mm256_set1_epi32(v1 as i32);
         let ge_bits = _mm256_cmp_epu32_mask(v_prio, v_v1, _MM_CMPINT_NLT) as u32;
+        let gt_bits = _mm256_cmp_epu32_mask(v_prio, v_v1, _MM_CMPINT_NLE) as u32;
 
         // --- Scalar bitmask logic (same as masked variant) ---
         let cur_bit = 1u32 << slot;
-        let emit_ge = active & ge_bits;
-        let active_lt = active & !ge_bits;
+        let emit_gt = active & gt_bits;
+        let active_le = active & !gt_bits;
 
-        let doubled = active_lt | (active_lt << 8);
+        let doubled = active_le | (active_le << 8);
         let shift = idx as usize & CMASK;
         let rotated = ((doubled >> shift) & 0xFF) | 1;
         let b = 31 - rotated.leading_zeros() as usize;
-        let first_lt = 1u32 << ((shift + b) & CMASK);
-        let emit = emit_ge | first_lt | cur_bit;
+        let first_le = 1u32 << ((shift + b) & CMASK);
+        let emit = emit_gt | first_le | cur_bit;
 
         // --- AVX2: compute all 8 hashes in parallel ---
         // hash[k] = end_hash - prefix_hashes[(k-1) & 7] * poly_circ[k]
@@ -361,7 +366,7 @@ unsafe fn collect_sparse_grams_masked_avx_inner(content: &[u8], out: &mut [NGram
         );
         w += count;
 
-        // --- Update active ---
+        // --- Update active: ge_bits (>= v1) clears both > v1 and == v1 entries ---
         active = (active & !ge_bits) | cur_bit;
         active &= !(1u32 << (idx.wrapping_sub(MAX_D as u32) as usize & CMASK));
 
@@ -406,7 +411,7 @@ pub fn collect_sparse_grams_wide(content: &[u8], out: &mut [NGram]) -> usize {
 
     let mut circ_ph = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
     circ_ph[1] = content[0] as u32;
-    let mut circ_prio = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
+    let mut circ_prio = [0u8; MAX_SPARSE_GRAM_SIZE as usize];
 
     for idx in 1..=scalar_prefix as u32 {
         let end_hash = circ_ph[idx as usize & MASK]
@@ -418,11 +423,11 @@ pub fn collect_sparse_grams_wide(content: &[u8], out: &mut [NGram]) -> usize {
         out[w] = NGram::from_rolling_hash(bigram_hash, 2);
         w += 1;
 
-        let (v1, _) =
+        let v1 =
             table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
         circ_prio[idx as usize & MASK] = v1;
 
-        let mut running_min = u32::MAX;
+        let mut running_min = u8::MAX;
         for d in 1..=(MAX_SPARSE_GRAM_SIZE - 2) {
             if d >= idx {
                 break;
@@ -434,7 +439,7 @@ pub fn collect_sparse_grams_wide(content: &[u8], out: &mut [NGram]) -> usize {
                 let hash = end_hash.wrapping_sub(circ_ph[start & MASK].wrapping_mul(POLY_POWERS[len]));
                 out[w] = NGram::from_rolling_hash(hash, len);
                 w += 1;
-                if v_p < v1 {
+                if v_p <= v1 {
                     break;
                 }
             }
@@ -467,7 +472,7 @@ pub fn collect_sparse_grams_wide(content: &[u8], out: &mut [NGram]) -> usize {
     }
     for j in 0..LANES {
         prio_buf[LANES + j] =
-            table[content[j] as usize * 256 + content[j + 1] as usize].0;
+            table[content[j] as usize * 256 + content[j + 1] as usize] as u32;
     }
 
     // --- Wide chunk loop (includes partial last chunk) -----------------------
@@ -494,7 +499,7 @@ pub fn collect_sparse_grams_wide(content: &[u8], out: &mut [NGram]) -> usize {
         for j in 0..chunk_lanes {
             let ci = content_pos + j;
             prio_buf[LANES + j] =
-                table[content[ci] as usize * 256 + content[ci + 1] as usize].0;
+                table[content[ci] as usize * 256 + content[ci + 1] as usize] as u32;
         }
 
         let lane_mask: u32 = (1u32 << chunk_lanes) - 1; // bits 0..chunk_lanes
@@ -544,7 +549,7 @@ pub fn collect_sparse_grams_wide(content: &[u8], out: &mut [NGram]) -> usize {
                 candidate_hashes[i] = end_hashes[i]
                     .wrapping_sub(ph_buf[LANES + i - d - 1].wrapping_mul(poly_power));
                 is_suffix_min[i] = v_shifted[i] < running_min[i];
-                should_break[i] = is_suffix_min[i] && v_shifted[i] < v_current[i];
+                should_break[i] = is_suffix_min[i] && v_shifted[i] <= v_current[i];
                 running_min[i] = running_min[i].min(v_shifted[i]);
             }
 
@@ -608,7 +613,7 @@ unsafe fn collect_sparse_grams_wide_avx_inner(content: &[u8], out: &mut [NGram])
 
     let mut circ_ph = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
     circ_ph[1] = content[0] as u32;
-    let mut circ_prio = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
+    let mut circ_prio = [0u8; MAX_SPARSE_GRAM_SIZE as usize];
 
     for idx in 1..=scalar_prefix as u32 {
         let end_hash = circ_ph[idx as usize & MASK]
@@ -620,11 +625,11 @@ unsafe fn collect_sparse_grams_wide_avx_inner(content: &[u8], out: &mut [NGram])
         out[w] = NGram::from_rolling_hash(bigram_hash, 2);
         w += 1;
 
-        let (v1, _) =
+        let v1 =
             table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
         circ_prio[idx as usize & MASK] = v1;
 
-        let mut running_min = u32::MAX;
+        let mut running_min = u8::MAX;
         for d in 1..=(MAX_SPARSE_GRAM_SIZE - 2) {
             if d >= idx {
                 break;
@@ -637,7 +642,7 @@ unsafe fn collect_sparse_grams_wide_avx_inner(content: &[u8], out: &mut [NGram])
                     end_hash.wrapping_sub(circ_ph[start & MASK].wrapping_mul(POLY_POWERS[len]));
                 out[w] = NGram::from_rolling_hash(hash, len);
                 w += 1;
-                if v_p < v1 {
+                if v_p <= v1 {
                     break;
                 }
             }
@@ -661,7 +666,7 @@ unsafe fn collect_sparse_grams_wide_avx_inner(content: &[u8], out: &mut [NGram])
             .wrapping_add(content[j] as u32);
     }
     for j in 0..LANES {
-        prio_buf[LANES + j] = table[content[j] as usize * 256 + content[j + 1] as usize].0;
+        prio_buf[LANES + j] = table[content[j] as usize * 256 + content[j + 1] as usize] as u32;
     }
 
     let remaining = num_bigrams - LANES;
@@ -684,7 +689,7 @@ unsafe fn collect_sparse_grams_wide_avx_inner(content: &[u8], out: &mut [NGram])
         }
         for j in 0..chunk_lanes {
             let ci = content_pos + j;
-            prio_buf[LANES + j] = table[content[ci] as usize * 256 + content[ci + 1] as usize].0;
+            prio_buf[LANES + j] = table[content[ci] as usize * 256 + content[ci + 1] as usize] as u32;
         }
 
         let lane_mask: u32 = (1u32 << chunk_lanes) - 1;
@@ -728,7 +733,7 @@ unsafe fn collect_sparse_grams_wide_avx_inner(content: &[u8], out: &mut [NGram])
                 let v_is_suffix_min =
                     _mm512_cmp_epu32_mask(v_shifted, v_running_min, _MM_CMPINT_LT);
                 let v_should_break =
-                    v_is_suffix_min & _mm512_cmp_epu32_mask(v_shifted, v_current, _MM_CMPINT_LT);
+                    v_is_suffix_min & _mm512_cmp_epu32_mask(v_shifted, v_current, _MM_CMPINT_LE);
 
                 let v_prev = _mm512_loadu_si512(
                     ph_buf[LANES - $d - 1..].as_ptr() as *const __m512i,
