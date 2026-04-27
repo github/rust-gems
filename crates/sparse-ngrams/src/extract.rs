@@ -572,3 +572,234 @@ pub fn collect_sparse_grams_wide(content: &[u8], out: &mut [NGram]) -> usize {
 
     w
 }
+
+/// AVX-512 version of [`collect_sparse_grams_wide`].
+///
+/// Keeps the same high-level algorithm and output set, but vectorizes the
+/// 16-lane suffix-min/hash inner step explicitly with AVX-512 intrinsics.
+#[cfg(target_arch = "x86_64")]
+pub fn collect_sparse_grams_wide_avx(content: &[u8], out: &mut [NGram]) -> usize {
+    // SAFETY: AVX-512 is enabled globally via .cargo/config.toml target-feature flags.
+    unsafe { collect_sparse_grams_wide_avx_inner(content, out) }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,avx512f,avx512vl")]
+unsafe fn collect_sparse_grams_wide_avx_inner(content: &[u8], out: &mut [NGram]) -> usize {
+    use core::arch::x86_64::*;
+
+    const LANES: usize = 16;
+    const BUF: usize = LANES * 2;
+    const MASK: usize = MAX_SPARSE_GRAM_SIZE as usize - 1;
+
+    let n = content.len();
+    if n < 2 {
+        return 0;
+    }
+
+    let table = get_bigram_table();
+    let num_bigrams = n - 1;
+    assert!(out.len() >= max_sparse_grams(n));
+
+    let mut w = 0usize;
+
+    // Scalar prefix (same as wide) to seed buffers.
+    let scalar_prefix = LANES.min(num_bigrams);
+
+    let mut circ_ph = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
+    circ_ph[1] = content[0] as u32;
+    let mut circ_prio = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
+
+    for idx in 1..=scalar_prefix as u32 {
+        let end_hash = circ_ph[idx as usize & MASK]
+            .wrapping_mul(POLY_HASH_PRIME)
+            .wrapping_add(content[idx as usize] as u32);
+
+        let bigram_hash = end_hash
+            .wrapping_sub(circ_ph[(idx as usize - 1) & MASK].wrapping_mul(POLY_POWERS[2]));
+        out[w] = NGram::from_rolling_hash(bigram_hash, 2);
+        w += 1;
+
+        let (v1, _) =
+            table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
+        circ_prio[idx as usize & MASK] = v1;
+
+        let mut running_min = u32::MAX;
+        for d in 1..=(MAX_SPARSE_GRAM_SIZE - 2) {
+            if d >= idx {
+                break;
+            }
+            let v_p = circ_prio[(idx - d) as usize & MASK];
+            if v_p < running_min {
+                let start = (idx - d) as usize - 1;
+                let len = d as usize + 2;
+                let hash =
+                    end_hash.wrapping_sub(circ_ph[start & MASK].wrapping_mul(POLY_POWERS[len]));
+                out[w] = NGram::from_rolling_hash(hash, len);
+                w += 1;
+                if v_p < v1 {
+                    break;
+                }
+            }
+            running_min = running_min.min(v_p);
+        }
+
+        circ_ph[(idx as usize + 1) & MASK] = end_hash;
+    }
+
+    if num_bigrams <= LANES {
+        return w;
+    }
+
+    let mut ph_buf = [0u32; BUF + 1];
+    let mut prio_buf = [0u32; BUF];
+
+    ph_buf[LANES] = content[0] as u32;
+    for j in 1..=LANES {
+        ph_buf[LANES + j] = ph_buf[LANES + j - 1]
+            .wrapping_mul(POLY_HASH_PRIME)
+            .wrapping_add(content[j] as u32);
+    }
+    for j in 0..LANES {
+        prio_buf[LANES + j] = table[content[j] as usize * 256 + content[j + 1] as usize].0;
+    }
+
+    let remaining = num_bigrams - LANES;
+    let total_chunks = (remaining + LANES - 1) / LANES;
+    let mut content_pos = LANES;
+
+    for _chunk in 0..total_chunks {
+        let chunk_lanes = LANES.min(num_bigrams - content_pos);
+
+        prio_buf.copy_within(LANES..BUF, 0);
+        ph_buf.copy_within(LANES..BUF + 1, 0);
+
+        ph_buf[LANES] = ph_buf[LANES - 1]
+            .wrapping_mul(POLY_HASH_PRIME)
+            .wrapping_add(content[content_pos] as u32);
+        for j in 1..=chunk_lanes {
+            ph_buf[LANES + j] = ph_buf[LANES + j - 1]
+                .wrapping_mul(POLY_HASH_PRIME)
+                .wrapping_add(content[content_pos + j] as u32);
+        }
+        for j in 0..chunk_lanes {
+            let ci = content_pos + j;
+            prio_buf[LANES + j] = table[content[ci] as usize * 256 + content[ci + 1] as usize].0;
+        }
+
+        let lane_mask: u32 = (1u32 << chunk_lanes) - 1;
+
+        for j in chunk_lanes..LANES {
+            prio_buf[LANES + j] = 0;
+            ph_buf[LANES + j + 1] = ph_buf[LANES + chunk_lanes];
+        }
+
+        // Emit bigrams.
+        for i in 0..chunk_lanes {
+            let hash = ph_buf[LANES + i + 1]
+                .wrapping_sub(ph_buf[LANES + i - 1].wrapping_mul(POLY_POWERS[2]));
+            out[w + i] = NGram::from_rolling_hash(hash, 2);
+        }
+        w += chunk_lanes;
+
+        let v_current = _mm512_loadu_si512(prio_buf[LANES..].as_ptr() as *const __m512i);
+        let v_end_hashes = _mm512_loadu_si512(ph_buf[LANES + 1..].as_ptr() as *const __m512i);
+        let mut v_running_min = _mm512_set1_epi32(-1);
+        let mut active: u32 = lane_mask;
+
+        let poly3 = _mm512_set1_epi32(POLY_POWERS[3] as i32);
+        let poly4 = _mm512_set1_epi32(POLY_POWERS[4] as i32);
+        let poly5 = _mm512_set1_epi32(POLY_POWERS[5] as i32);
+        let poly6 = _mm512_set1_epi32(POLY_POWERS[6] as i32);
+        let poly7 = _mm512_set1_epi32(POLY_POWERS[7] as i32);
+        let poly8 = _mm512_set1_epi32(POLY_POWERS[8] as i32);
+
+        let len3 = _mm512_set1_epi32(3);
+        let len4 = _mm512_set1_epi32(4);
+        let len5 = _mm512_set1_epi32(5);
+        let len6 = _mm512_set1_epi32(6);
+        let len7 = _mm512_set1_epi32(7);
+        let len8 = _mm512_set1_epi32(8);
+
+        macro_rules! step {
+            ($d:expr, $poly:expr, $vlen:expr) => {{
+                let v_shifted =
+                    _mm512_loadu_si512(prio_buf[LANES - $d..].as_ptr() as *const __m512i);
+                let v_is_suffix_min =
+                    _mm512_cmp_epu32_mask(v_shifted, v_running_min, _MM_CMPINT_LT);
+                let v_should_break =
+                    v_is_suffix_min & _mm512_cmp_epu32_mask(v_shifted, v_current, _MM_CMPINT_LT);
+
+                let v_prev = _mm512_loadu_si512(
+                    ph_buf[LANES - $d - 1..].as_ptr() as *const __m512i,
+                );
+                let v_prod = _mm512_mullo_epi32(v_prev, $poly);
+                let v_hashes = _mm512_sub_epi32(v_end_hashes, v_prod);
+
+                let emit_mask = active & v_is_suffix_min as u32;
+                let break_mask = active & v_should_break as u32;
+
+                let v_hash_shifted = _mm512_slli_epi32(v_hashes, 8);
+                let v_ngram = _mm512_add_epi32(v_hash_shifted, $vlen);
+                _mm512_mask_compressstoreu_epi32(
+                    out.as_mut_ptr().add(w) as *mut i32,
+                    emit_mask as __mmask16,
+                    v_ngram,
+                );
+                w += emit_mask.count_ones() as usize;
+
+                active &= !break_mask;
+                v_running_min = _mm512_min_epu32(v_running_min, v_shifted);
+            }};
+        }
+
+        macro_rules! step_last {
+            ($d:expr, $poly:expr, $vlen:expr) => {{
+                let v_shifted =
+                    _mm512_loadu_si512(prio_buf[LANES - $d..].as_ptr() as *const __m512i);
+                let v_is_suffix_min =
+                    _mm512_cmp_epu32_mask(v_shifted, v_running_min, _MM_CMPINT_LT);
+
+                let v_prev = _mm512_loadu_si512(
+                    ph_buf[LANES - $d - 1..].as_ptr() as *const __m512i,
+                );
+                let v_prod = _mm512_mullo_epi32(v_prev, $poly);
+                let v_hashes = _mm512_sub_epi32(v_end_hashes, v_prod);
+
+                let emit_mask = active & v_is_suffix_min as u32;
+
+                let v_hash_shifted = _mm512_slli_epi32(v_hashes, 8);
+                let v_ngram = _mm512_add_epi32(v_hash_shifted, $vlen);
+                _mm512_mask_compressstoreu_epi32(
+                    out.as_mut_ptr().add(w) as *mut i32,
+                    emit_mask as __mmask16,
+                    v_ngram,
+                );
+                w += emit_mask.count_ones() as usize;
+            }};
+        }
+
+        if active != 0 {
+            step!(1, poly3, len3);
+            if active != 0 {
+                step!(2, poly4, len4);
+                if active != 0 {
+                    step!(3, poly5, len5);
+                    if active != 0 {
+                        step!(4, poly6, len6);
+                        if active != 0 {
+                            step!(5, poly7, len7);
+                            if active != 0 {
+                                step_last!(6, poly8, len8);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        content_pos += chunk_lanes;
+    }
+
+    w
+}

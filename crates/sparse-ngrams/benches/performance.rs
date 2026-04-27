@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use sparse_ngrams::{NGram, collect_sparse_grams_deque, collect_sparse_grams_scan, collect_sparse_grams_masked, collect_sparse_grams_masked_avx, collect_sparse_grams_wide, max_sparse_grams};
+use sparse_ngrams::{NGram, collect_sparse_grams_deque, collect_sparse_grams_scan, collect_sparse_grams_masked, collect_sparse_grams_masked_avx, collect_sparse_grams_wide, collect_sparse_grams_wide_avx, max_sparse_grams};
 
 fn bench_collect(c: &mut Criterion) {
     let inputs: Vec<(&str, Vec<u8>)> = vec![
@@ -32,6 +32,9 @@ fn bench_collect(c: &mut Criterion) {
         });
         group.bench_with_input(BenchmarkId::new("wide", name), input, |b, input| {
             b.iter(|| collect_sparse_grams_wide(black_box(input), &mut buf))
+        });
+        group.bench_with_input(BenchmarkId::new("wide_avx", name), input, |b, input| {
+            b.iter(|| collect_sparse_grams_wide_avx(black_box(input), &mut buf))
         });
     }
     group.finish();
