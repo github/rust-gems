@@ -280,6 +280,46 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
         self.get_hashed(hash, key)
     }
 
+    /// Returns a mutable reference to the value for `key`, inserting `f()` if absent.
+    #[inline]
+    pub fn get_or_insert_with<F: FnOnce() -> V>(&mut self, key: K, f: F) -> &mut V {
+        self.entry(key).or_insert_with(f)
+    }
+
+    /// Returns a mutable reference to the value for `key`, inserting `V::default()` if absent.
+    pub fn get_or_default(&mut self, key: K) -> &mut V
+    where
+        V: Default,
+    {
+        self.get_or_insert_with(key, V::default)
+    }
+
+    /// Returns an [`Entry`] for `key`, providing in-place access to its value
+    /// (insertion, mutation, or read). The lookup chain is walked exactly once;
+    /// the resulting `VacantEntry` already knows where to write.
+    #[inline]
+    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, S> {
+        let hash = self.hash_builder.hash_one(&key);
+        match self.find_or_insertion_slot(hash, &key) {
+            FindResult::Found(ptr) => Entry::Occupied(OccupiedEntry {
+                // SAFETY: pointer is valid for `'_` (bounded by `&mut self`).
+                value: unsafe { &mut *ptr },
+            }),
+            FindResult::Empty { group, slot } => Entry::Vacant(VacantEntry {
+                map: self,
+                hash,
+                key,
+                insertion: Insertion::Empty { group, slot },
+            }),
+            FindResult::NeedsOverflow { tail } => Entry::Vacant(VacantEntry {
+                map: self,
+                hash,
+                key,
+                insertion: Insertion::NeedsOverflow { tail },
+            }),
+        }
+    }
+
     fn insert_hashed(&mut self, hash: u64, key: K, value: V) -> Option<V> {
         let tag = tag(hash);
         let hint = slot_hint(hash);
@@ -302,7 +342,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
                     unsafe { group.values[hint].assume_init_mut() },
                     value,
                 );
-                drop(key);
                 return Some(old);
             }
 
@@ -315,7 +354,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
                         unsafe { group.values[i].assume_init_mut() },
                         value,
                     );
-                    drop(key);
                     return Some(old);
                 }
             }
@@ -338,7 +376,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
             } else {
                 if self.num_groups as usize == self.groups.len() {
                     self.grow();
-                    return self.insert_hashed(hash, key, value);
+                    // n_bits changed; recompute the primary group and retry.
+                    gi = self.group_index(hash);
+                    continue;
                 }
                 let new_gi = self.num_groups as usize;
                 self.num_groups += 1;
@@ -358,6 +398,17 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
         K: Borrow<Q>,
         Q: Eq + ?Sized,
     {
+        let (gi, slot) = self.find_slot(hash, key)?;
+        Some(unsafe { self.groups[gi].values[slot].assume_init_ref() })
+    }
+
+    /// Look up `key` and return its `(group_index, slot)` if present.
+    /// Pure read-only lookup — does not allocate or modify the table.
+    fn find_slot<Q>(&self, hash: u64, key: &Q) -> Option<(usize, usize)>
+    where
+        K: Borrow<Q>,
+        Q: Eq + ?Sized,
+    {
         let tag = tag(hash);
         let hint = slot_hint(hash);
         let mut gi = self.group_index(hash);
@@ -370,7 +421,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
             if c == tag
                 && unsafe { group.keys[hint].assume_init_ref() }.borrow() == key
             {
-                return Some(unsafe { group.values[hint].assume_init_ref() });
+                return Some((gi, hint));
             }
 
             // Slow path: SIMD scan group.
@@ -378,7 +429,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
             tag_mask = group_ops::clear_slot(tag_mask, hint);
             while let Some(i) = group_ops::next_match(&mut tag_mask) {
                 if unsafe { group.keys[i].assume_init_ref() }.borrow() == key {
-                    return Some(unsafe { group.values[i].assume_init_ref() });
+                    return Some((gi, i));
                 }
             }
 
@@ -388,6 +439,53 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
 
             if group.overflow == NO_OVERFLOW {
                 return None;
+            }
+            gi = group.overflow as usize;
+        }
+    }
+
+    /// Single-walk variant that returns either the found slot or precise
+    /// information about where to insert. Used by [`entry`].
+    ///
+    /// Returns raw pointers (instead of indices) so the caller can write
+    /// directly without re-indexing. Pointers remain valid for the lifetime
+    /// of `&mut self` until any reallocation (`grow`).
+    fn find_or_insertion_slot(&mut self, hash: u64, key: &K) -> FindResult<K, V> {
+        let tag = tag(hash);
+        let hint = slot_hint(hash);
+        let mut gi = self.group_index(hash);
+
+        loop {
+            let group = &mut self.groups[gi];
+
+            // Fast path: preferred slot.
+            let c = group.ctrl[hint];
+            if c == CTRL_EMPTY {
+                return FindResult::Empty { group: group as *mut _, slot: hint };
+            }
+            if c == tag && unsafe { group.keys[hint].assume_init_ref() } == key {
+                return FindResult::Found(group.values[hint].as_mut_ptr());
+            }
+
+            // Slow path: SIMD scan group for tag match.
+            let mut tag_mask = group_ops::match_tag(&group.ctrl, tag);
+            tag_mask = group_ops::clear_slot(tag_mask, hint);
+            while let Some(i) = group_ops::next_match(&mut tag_mask) {
+                if unsafe { group.keys[i].assume_init_ref() } == key {
+                    return FindResult::Found(group.values[i].as_mut_ptr());
+                }
+            }
+
+            // Check for empty slot in this group.
+            let empty_mask = group_ops::match_empty(&group.ctrl);
+            if empty_mask != 0 {
+                let i = group_ops::lowest(empty_mask);
+                return FindResult::Empty { group: group as *mut _, slot: i };
+            }
+
+            // Group full — follow or report end of chain.
+            if group.overflow == NO_OVERFLOW {
+                return FindResult::NeedsOverflow { tail: group as *mut _ };
             }
             gi = group.overflow as usize;
         }
@@ -453,6 +551,196 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
         unsafe { group.keys[hint].as_mut_ptr().copy_from_nonoverlapping(key_src, 1) };
         unsafe { group.values[hint].as_mut_ptr().copy_from_nonoverlapping(value_src, 1) };
         self.len += 1;
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Entry API
+// ────────────────────────────────────────────────────────────────────────
+
+/// Result of a single chain walk during `entry()`: either the existing slot
+/// for the key, an empty slot ready for insertion, or end-of-chain when no
+/// empty slot exists (and a new overflow group must be allocated).
+enum FindResult<K, V> {
+    /// Pointer to the existing value.
+    Found(*mut V),
+    /// Pointer to the group with an empty slot at index `slot`.
+    Empty { group: *mut Group<K, V>, slot: usize },
+    /// End of chain — the caller must allocate an overflow group and link it
+    /// via `tail`'s overflow field.
+    NeedsOverflow { tail: *mut Group<K, V> },
+}
+
+/// Pre-computed insertion location stashed inside [`VacantEntry`] so that
+/// `insert()` doesn't need to re-walk the chain. Pointers remain valid as
+/// long as no reallocation occurs (the grow path re-walks via the slow path).
+enum Insertion<K, V> {
+    /// An empty slot is waiting at `(group, slot)`.
+    Empty { group: *mut Group<K, V>, slot: usize },
+    /// The chain is full; allocate a new overflow group and link via `tail`.
+    NeedsOverflow { tail: *mut Group<K, V> },
+}
+
+/// View into a single entry in a [`SimdPrefixHashMap`], either occupied or vacant.
+pub enum Entry<'a, K, V, S> {
+    Occupied(OccupiedEntry<'a, V>),
+    Vacant(VacantEntry<'a, K, V, S>),
+}
+
+/// View into an occupied entry.
+pub struct OccupiedEntry<'a, V> {
+    value: &'a mut V,
+}
+
+/// View into a vacant entry. Holds the borrow of the map plus the hash, key,
+/// and pre-computed insertion slot.
+pub struct VacantEntry<'a, K, V, S> {
+    map: &'a mut SimdPrefixHashMap<K, V, S>,
+    hash: u64,
+    key: K,
+    insertion: Insertion<K, V>,
+}
+
+impl<'a, K: Hash + Eq, V, S: BuildHasher> Entry<'a, K, V, S> {
+    /// Insert `default` if vacant; return a mutable reference to the value either way.
+    #[inline]
+    pub fn or_insert(self, default: V) -> &'a mut V {
+        match self {
+            Entry::Occupied(o) => o.into_mut(),
+            Entry::Vacant(v) => v.insert(default),
+        }
+    }
+
+    /// Insert `f()` if vacant; `f` runs only on the vacant branch.
+    #[inline]
+    pub fn or_insert_with<F: FnOnce() -> V>(self, f: F) -> &'a mut V {
+        match self {
+            Entry::Occupied(o) => o.into_mut(),
+            Entry::Vacant(v) => v.insert(f()),
+        }
+    }
+
+    /// Insert `V::default()` if vacant.
+    #[inline]
+    pub fn or_default(self) -> &'a mut V
+    where
+        V: Default,
+    {
+        self.or_insert_with(V::default)
+    }
+
+    /// Apply `f` to the value if occupied; pass through unchanged otherwise.
+    #[inline]
+    pub fn and_modify<F: FnOnce(&mut V)>(self, f: F) -> Self {
+        match self {
+            Entry::Occupied(mut o) => {
+                f(o.get_mut());
+                Entry::Occupied(o)
+            }
+            v @ Entry::Vacant(_) => v,
+        }
+    }
+}
+
+impl<'a, V> OccupiedEntry<'a, V> {
+    /// Get a shared reference to the value.
+    #[inline]
+    pub fn get(&self) -> &V {
+        &*self.value
+    }
+
+    /// Get a mutable reference to the value.
+    #[inline]
+    pub fn get_mut(&mut self) -> &mut V {
+        self.value
+    }
+
+    /// Consume the entry, returning the mutable reference with the entry's lifetime.
+    #[inline]
+    pub fn into_mut(self) -> &'a mut V {
+        self.value
+    }
+}
+
+impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
+    /// Insert `value` and return a mutable reference to it.
+    /// Writes directly to the slot pre-computed during `entry()`; only re-walks
+    /// the chain on the rare grow path (where the pre-computed pointers become
+    /// stale because grow re-allocates the groups buffer).
+    #[inline]
+    pub fn insert(self, value: V) -> &'a mut V {
+        let map = self.map;
+        let hash = self.hash;
+        let key = self.key;
+
+        let (group_ptr, slot) = match self.insertion {
+            Insertion::Empty { group, slot } => (group, slot),
+            Insertion::NeedsOverflow { tail } => {
+                if map.num_groups as usize == map.groups.len() {
+                    return insert_after_grow(map, hash, key, value);
+                }
+                let new_gi = map.num_groups as usize;
+                map.num_groups += 1;
+                // SAFETY: `tail` was obtained from `&mut self.groups[..]` and
+                // remains valid because no reallocation occurred between
+                // `entry()` and now (we hold the only `&mut self`).
+                unsafe {
+                    (*tail).overflow = new_gi as u32;
+                }
+                let new_group: *mut Group<K, V> = &mut map.groups[new_gi];
+                (new_group, slot_hint(hash))
+            }
+        };
+
+        let tag = tag(hash);
+        // SAFETY: `group_ptr` points into `map.groups` and is valid for `'a`.
+        unsafe {
+            let group = &mut *group_ptr;
+            group.ctrl[slot] = tag;
+            group.keys[slot] = MaybeUninit::new(key);
+            group.values[slot] = MaybeUninit::new(value);
+            map.len += 1;
+            group.values[slot].assume_init_mut()
+        }
+    }
+}
+
+/// Cold path: the chain was full, the table is at capacity, and we need to
+/// grow before inserting. Re-walks via the slow path after grow.
+///
+/// After `grow()` doubles `num_primary` (`n_bits += 1`), our key's new
+/// primary group can have at most ~half the old chain's keys, so hitting
+/// `NeedsOverflow` again would require `GROUP_SIZE` keys to all collide on
+/// one extra bit of hash — essentially impossible for any reasonable hash.
+/// (`insert_for_grow` relies on the same assumption to skip its own
+/// capacity check.)
+#[cold]
+#[inline(never)]
+fn insert_after_grow<'a, K: Hash + Eq, V, S: BuildHasher>(
+    map: &'a mut SimdPrefixHashMap<K, V, S>,
+    hash: u64,
+    key: K,
+    value: V,
+) -> &'a mut V {
+    map.grow();
+    match map.find_or_insertion_slot(hash, &key) {
+        FindResult::Empty { group, slot } => {
+            let tag = tag(hash);
+            // SAFETY: `group` points into `map.groups` and is valid for `'a`.
+            unsafe {
+                let g = &mut *group;
+                g.ctrl[slot] = tag;
+                g.keys[slot] = MaybeUninit::new(key);
+                g.values[slot] = MaybeUninit::new(value);
+                map.len += 1;
+                g.values[slot].assume_init_mut()
+            }
+        }
+        // After grow, the new primary group for `key` cannot be full (see
+        // function docs), and the key wasn't in the table before grow.
+        FindResult::NeedsOverflow { .. } | FindResult::Found(_) => {
+            unreachable!("post-grow walk must hit an empty slot")
+        }
     }
 }
 
@@ -560,5 +848,89 @@ mod tests {
         assert_eq!(map.insert("hello".to_string(), 3), Some(1));
         assert_eq!(map.get("hello"), Some(&3));
         assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn get_or_default_basics() {
+        let mut map: SimdPrefixHashMap<&str, i32> = SimdPrefixHashMap::new();
+        // Inserts default (0), then mutates.
+        *map.get_or_default("a") += 5;
+        *map.get_or_default("b") += 7;
+        // Subsequent calls return the existing value.
+        *map.get_or_default("a") += 3;
+        assert_eq!(map.get(&"a"), Some(&8));
+        assert_eq!(map.get(&"b"), Some(&7));
+        assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn get_or_insert_with_lazy() {
+        let mut map: SimdPrefixHashMap<u32, String> = SimdPrefixHashMap::new();
+        let mut call_count = 0;
+        let mut make = |s: &str| {
+            call_count += 1;
+            s.to_string()
+        };
+        // First call: f runs, inserts "first".
+        assert_eq!(map.get_or_insert_with(1, || make("first")), &mut "first".to_string());
+        // Second call with same key: f does NOT run; returns existing.
+        assert_eq!(map.get_or_insert_with(1, || make("second")), &mut "first".to_string());
+        // New key: f runs.
+        assert_eq!(map.get_or_insert_with(2, || make("third")), &mut "third".to_string());
+        assert_eq!(call_count, 2);
+        assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn get_or_default_survives_grow() {
+        let mut map: SimdPrefixHashMap<u32, u32> = SimdPrefixHashMap::with_capacity(1);
+        for i in 0..500u32 {
+            *map.get_or_default(i) = i * 2;
+        }
+        assert_eq!(map.len(), 500);
+        for i in 0..500u32 {
+            assert_eq!(map.get(&i), Some(&(i * 2)), "missing key {i}");
+        }
+    }
+
+    #[test]
+    fn entry_or_default_counting() {
+        // Classic counting workload via Entry API.
+        let mut map: SimdPrefixHashMap<&str, u32> = SimdPrefixHashMap::new();
+        for word in ["a", "b", "a", "c", "b", "a"] {
+            *map.entry(word).or_default() += 1;
+        }
+        assert_eq!(map.get(&"a"), Some(&3));
+        assert_eq!(map.get(&"b"), Some(&2));
+        assert_eq!(map.get(&"c"), Some(&1));
+        assert_eq!(map.len(), 3);
+    }
+
+    #[test]
+    fn entry_or_insert_lazy() {
+        let mut map: SimdPrefixHashMap<u32, String> = SimdPrefixHashMap::new();
+        let mut call_count = 0;
+        let mut make = |s: &str| {
+            call_count += 1;
+            s.to_string()
+        };
+        // First call: f runs, inserts.
+        let v = map.entry(1).or_insert_with(|| make("first"));
+        assert_eq!(v, "first");
+        // Second call with same key: f does NOT run.
+        let v = map.entry(1).or_insert_with(|| make("second"));
+        assert_eq!(v, "first");
+        assert_eq!(call_count, 1);
+    }
+
+    #[test]
+    fn entry_and_modify() {
+        let mut map: SimdPrefixHashMap<u32, u32> = SimdPrefixHashMap::new();
+        // Vacant: and_modify is a no-op, then or_insert(0) runs.
+        *map.entry(7).and_modify(|v| *v *= 10).or_insert(1) += 100;
+        assert_eq!(map.get(&7), Some(&101));
+        // Occupied: and_modify runs, or_insert is skipped.
+        *map.entry(7).and_modify(|v| *v *= 2).or_insert(99) += 1;
+        assert_eq!(map.get(&7), Some(&203));
     }
 }

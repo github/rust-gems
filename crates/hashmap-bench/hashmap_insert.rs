@@ -220,6 +220,66 @@ fn bench_hashmap_insert(c: &mut Criterion) {
     });
 
     group3.finish();
+
+    // ── get_or_default: count trigram occurrences ──────────────────────
+    // Counting workload: most lookups hit existing keys, so this stresses
+    // the find-existing path of get_or_default / entry().or_insert().
+    let mut counted_trigrams = Vec::with_capacity(trigrams.len() * 4);
+    for _ in 0..4 {
+        counted_trigrams.extend_from_slice(&trigrams);
+    }
+
+    let mut group4 = c.benchmark_group("count_4000_trigrams_get_or_default");
+
+    group4.bench_function("hashbrown+Identity entry()", |b| {
+        b.iter_batched(
+            || hashbrown::HashMap::<u32, u32, hashmap_bench::IdentityBuildHasher>::with_capacity_and_hasher(
+                trigrams.len(),
+                Default::default(),
+            ),
+            |mut map| {
+                for &key in &counted_trigrams {
+                    *map.entry(key).or_insert(0) += 1;
+                }
+                map
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group4.bench_function("PrefixHashMap get_or_default", |b| {
+        b.iter_batched(
+            || hashmap_bench::prefix_map_simd::SimdPrefixHashMap::<u32, u32, _>::with_capacity_and_hasher(
+                trigrams.len(),
+                hashmap_bench::IdentityBuildHasher::default(),
+            ),
+            |mut map| {
+                for &key in &counted_trigrams {
+                    *map.get_or_default(key) += 1;
+                }
+                map
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group4.bench_function("PrefixHashMap entry().or_default()", |b| {
+        b.iter_batched(
+            || hashmap_bench::prefix_map_simd::SimdPrefixHashMap::<u32, u32, _>::with_capacity_and_hasher(
+                trigrams.len(),
+                hashmap_bench::IdentityBuildHasher::default(),
+            ),
+            |mut map| {
+                for &key in &counted_trigrams {
+                    *map.entry(key).or_default() += 1;
+                }
+                map
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group4.finish();
 }
 
 criterion_group!(benches, bench_hashmap_insert);
