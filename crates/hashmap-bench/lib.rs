@@ -1,4 +1,3 @@
-pub mod prefix_map;
 pub mod prefix_map_simd;
 
 use rand::Rng;

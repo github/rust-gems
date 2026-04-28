@@ -119,22 +119,6 @@ fn bench_hashmap_insert(c: &mut Criterion) {
 
     group.bench_function("PrefixHashMap", |b| {
         b.iter_batched(
-            || hashmap_bench::prefix_map::PrefixHashMap::with_capacity_and_hasher(
-                trigrams.len(),
-                hashmap_bench::IdentityBuildHasher::default(),
-            ),
-            |mut map| {
-                for (i, &key) in trigrams.iter().enumerate() {
-                    map.insert(key, i);
-                }
-                map
-            },
-            BatchSize::SmallInput,
-        );
-    });
-
-    group.bench_function("SimdPrefixHashMap", |b| {
-        b.iter_batched(
             || hashmap_bench::prefix_map_simd::SimdPrefixHashMap::with_capacity_and_hasher(
                 trigrams.len(),
                 hashmap_bench::IdentityBuildHasher::default(),
@@ -179,28 +163,6 @@ fn bench_hashmap_insert(c: &mut Criterion) {
     group2.bench_function("PrefixHashMap", |b| {
         b.iter_batched(
             || {
-                let mut map = hashmap_bench::prefix_map::PrefixHashMap::with_capacity_and_hasher(
-                    trigrams.len(),
-                    hashmap_bench::IdentityBuildHasher::default(),
-                );
-                for (i, &key) in trigrams.iter().enumerate() {
-                    map.insert(key, i);
-                }
-                map
-            },
-            |mut map| {
-                for (i, &key) in trigrams.iter().enumerate() {
-                    map.insert(key, i + 1000);
-                }
-                map
-            },
-            BatchSize::SmallInput,
-        );
-    });
-
-    group2.bench_function("SimdPrefixHashMap", |b| {
-        b.iter_batched(
-            || {
                 let mut map = hashmap_bench::prefix_map_simd::SimdPrefixHashMap::with_capacity_and_hasher(
                     trigrams.len(),
                     hashmap_bench::IdentityBuildHasher::default(),
@@ -242,22 +204,6 @@ fn bench_hashmap_insert(c: &mut Criterion) {
     });
 
     group3.bench_function("PrefixHashMap", |b| {
-        b.iter_batched(
-            || hashmap_bench::prefix_map::PrefixHashMap::with_capacity_and_hasher(
-                128,
-                hashmap_bench::IdentityBuildHasher::default(),
-            ),
-            |mut map| {
-                for (i, &key) in trigrams.iter().enumerate() {
-                    map.insert(key, i);
-                }
-                map
-            },
-            BatchSize::SmallInput,
-        );
-    });
-
-    group3.bench_function("SimdPrefixHashMap", |b| {
         b.iter_batched(
             || hashmap_bench::prefix_map_simd::SimdPrefixHashMap::with_capacity_and_hasher(
                 128,
