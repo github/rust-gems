@@ -208,7 +208,8 @@ impl<K, V> Group<K, V> {
 /// Uses NEON on aarch64, SSE2 on x86_64, scalar fallback elsewhere.
 /// Generic over key type `K`, value type `V`, and hash builder `S`.
 pub struct SimdPrefixHashMap<K, V, S = RandomState> {
-    groups: Vec<Group<K, V>>,
+    groups: Box<[Group<K, V>]>,
+    num_groups: u32,
     n_bits: u32,
     len: usize,
     hash_builder: S,
@@ -233,16 +234,25 @@ impl<K, V, S> SimdPrefixHashMap<K, V, S> {
         let adjusted = capacity.checked_mul(8).unwrap_or(usize::MAX) / 7;
         let min_groups = (adjusted / GROUP_SIZE).max(1).next_power_of_two();
         let n_bits = min_groups.trailing_zeros().max(1);
-        let num_primary = 1usize << n_bits;
-        let total = num_primary + num_primary / 8 + 1;
-        let mut groups = Vec::with_capacity(total);
-        groups.resize_with(num_primary, Group::new);
+        let (groups, num_primary) = Self::alloc_groups(n_bits);
         Self {
             groups,
+            num_groups: num_primary,
             n_bits,
             len: 0,
             hash_builder,
         }
+    }
+
+    /// Allocate a fully default-initialized boxed slice sized for `n_bits` primary groups
+    /// plus the standard 12.5% overflow reserve. Returns the slice and the number of
+    /// primary groups (which is also the initial in-use count).
+    fn alloc_groups(n_bits: u32) -> (Box<[Group<K, V>]>, u32) {
+        let num_primary = 1usize << n_bits;
+        let total = num_primary + num_primary / 8 + 1;
+        let mut groups: Vec<Group<K, V>> = Vec::with_capacity(total);
+        groups.resize_with(total, Group::new);
+        (groups.into_boxed_slice(), num_primary as u32)
     }
 
     #[inline]
@@ -276,12 +286,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
         let mut gi = self.group_index(hash);
 
         loop {
-            let group = &self.groups[gi];
+            let group = &mut self.groups[gi];
 
             // Fast path: check preferred slot.
             let c = group.ctrl[hint];
             if c == CTRL_EMPTY {
-                let group = &mut self.groups[gi];
                 group.ctrl[hint] = tag;
                 group.keys[hint] = MaybeUninit::new(key);
                 group.values[hint] = MaybeUninit::new(value);
@@ -290,7 +299,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
             }
             if c == tag && unsafe { group.keys[hint].assume_init_ref() } == &key {
                 let old = std::mem::replace(
-                    unsafe { self.groups[gi].values[hint].assume_init_mut() },
+                    unsafe { group.values[hint].assume_init_mut() },
                     value,
                 );
                 drop(key);
@@ -303,7 +312,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
             while let Some(i) = group_ops::next_match(&mut tag_mask) {
                 if unsafe { group.keys[i].assume_init_ref() } == &key {
                     let old = std::mem::replace(
-                        unsafe { self.groups[gi].values[i].assume_init_mut() },
+                        unsafe { group.values[i].assume_init_mut() },
                         value,
                     );
                     drop(key);
@@ -315,7 +324,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
             let empty_mask = group_ops::match_empty(&group.ctrl);
             if empty_mask != 0 {
                 let i = group_ops::lowest(empty_mask);
-                let group = &mut self.groups[gi];
                 group.ctrl[i] = tag;
                 group.keys[i] = MaybeUninit::new(key);
                 group.values[i] = MaybeUninit::new(value);
@@ -324,16 +332,16 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
             }
 
             // Group full — follow or create overflow chain.
-            let overflow = self.groups[gi].overflow;
+            let overflow = group.overflow;
             if overflow != NO_OVERFLOW {
                 gi = overflow as usize;
             } else {
-                if self.groups.len() == self.groups.capacity() {
+                if self.num_groups as usize == self.groups.len() {
                     self.grow();
                     return self.insert_hashed(hash, key, value);
                 }
-                let new_gi = self.groups.len();
-                self.groups.push(Group::new());
+                let new_gi = self.num_groups as usize;
+                self.num_groups += 1;
                 self.groups[gi].overflow = new_gi as u32;
                 let group = &mut self.groups[new_gi];
                 group.ctrl[hint] = tag;
@@ -386,17 +394,20 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
     }
 
     fn grow(&mut self) {
-        let old_groups = std::mem::take(&mut self.groups);
+        let old_groups = std::mem::replace(
+            &mut self.groups,
+            Vec::<Group<K, V>>::new().into_boxed_slice(),
+        );
+        let old_num_groups = self.num_groups as usize;
         let old_len = self.len;
 
         self.n_bits += 1;
-        let num_primary = 1usize << self.n_bits;
-        let total = num_primary + num_primary / 8 + 1;
-        self.groups = Vec::with_capacity(total);
-        self.groups.resize_with(num_primary, Group::new);
+        let (new_groups, num_primary) = Self::alloc_groups(self.n_bits);
+        self.groups = new_groups;
+        self.num_groups = num_primary;
         self.len = 0;
 
-        for group in &old_groups {
+        for group in &old_groups[..old_num_groups] {
             let mut full_mask = group_ops::match_full(&group.ctrl);
             while let Some(i) = group_ops::next_match(&mut full_mask) {
                 let hash = self.hash_builder.hash_one(unsafe {
@@ -414,53 +425,40 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
 
     fn insert_for_grow(&mut self, hash: u64, key_src: *const K, value_src: *const V) {
         let tag = tag(hash);
-        let hint = slot_hint(hash);
-        let mut gi = self.group_index(hash);
+        let mut hint = slot_hint(hash);
+        let gi = self.group_index(hash);
+        let mut group = &mut self.groups[gi];
 
         loop {
-            let group = &self.groups[gi];
-
             if group.ctrl[hint] == CTRL_EMPTY {
-                let group = &mut self.groups[gi];
-                group.ctrl[hint] = tag;
-                unsafe { group.keys[hint].as_mut_ptr().copy_from_nonoverlapping(key_src, 1) };
-                unsafe { group.values[hint].as_mut_ptr().copy_from_nonoverlapping(value_src, 1) };
-                self.len += 1;
-                return;
+                break;
             }
-
             let empty_mask = group_ops::match_empty(&group.ctrl);
             if empty_mask != 0 {
-                let i = group_ops::lowest(empty_mask);
-                let group = &mut self.groups[gi];
-                group.ctrl[i] = tag;
-                unsafe { group.keys[i].as_mut_ptr().copy_from_nonoverlapping(key_src, 1) };
-                unsafe { group.values[i].as_mut_ptr().copy_from_nonoverlapping(value_src, 1) };
-                self.len += 1;
-                return;
+                hint = group_ops::lowest(empty_mask);
+                break;
             }
-
-            let overflow = self.groups[gi].overflow;
+            let overflow = group.overflow;
             if overflow != NO_OVERFLOW {
-                gi = overflow as usize;
+                group = &mut self.groups[overflow as usize];
             } else {
-                let new_gi = self.groups.len();
-                self.groups.push(Group::new());
+                let new_gi = self.num_groups as usize;
                 self.groups[gi].overflow = new_gi as u32;
-                let group = &mut self.groups[new_gi];
-                group.ctrl[hint] = tag;
-                unsafe { group.keys[hint].as_mut_ptr().copy_from_nonoverlapping(key_src, 1) };
-                unsafe { group.values[hint].as_mut_ptr().copy_from_nonoverlapping(value_src, 1) };
-                self.len += 1;
-                return;
+                self.num_groups += 1;
+                group = &mut self.groups[new_gi];
+                break;
             }
         }
+        group.ctrl[hint] = tag;
+        unsafe { group.keys[hint].as_mut_ptr().copy_from_nonoverlapping(key_src, 1) };
+        unsafe { group.values[hint].as_mut_ptr().copy_from_nonoverlapping(value_src, 1) };
+        self.len += 1;
     }
 }
 
 impl<K, V, S> Drop for SimdPrefixHashMap<K, V, S> {
     fn drop(&mut self) {
-        for group in &mut self.groups {
+        for group in &mut self.groups[..self.num_groups as usize] {
             for i in 0..GROUP_SIZE {
                 if group.ctrl[i] != CTRL_EMPTY {
                     unsafe { group.keys[i].assume_init_drop() };
