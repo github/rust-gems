@@ -305,17 +305,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
                 // SAFETY: pointer is valid for `'_` (bounded by `&mut self`).
                 value: unsafe { &mut *ptr },
             }),
-            FindResult::Empty { group, slot } => Entry::Vacant(VacantEntry {
+            FindResult::Vacant(insertion) => Entry::Vacant(VacantEntry {
                 map: self,
                 hash,
                 key,
-                insertion: Insertion::Empty { group, slot },
-            }),
-            FindResult::NeedsOverflow { tail } => Entry::Vacant(VacantEntry {
-                map: self,
-                hash,
-                key,
-                insertion: Insertion::NeedsOverflow { tail },
+                insertion,
             }),
         }
     }
@@ -324,10 +318,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
         let tag = tag(hash);
         let hint = slot_hint(hash);
         let mut gi = self.group_index(hash);
-
         loop {
             let group = &mut self.groups[gi];
-
             // Fast path: check preferred slot.
             let c = group.ctrl[hint];
             if c == CTRL_EMPTY {
@@ -344,7 +336,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
                 );
                 return Some(old);
             }
-
             // Slow path: SIMD scan group for tag match.
             let mut tag_mask = group_ops::match_tag(&group.ctrl, tag);
             tag_mask = group_ops::clear_slot(tag_mask, hint);
@@ -357,7 +348,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
                     return Some(old);
                 }
             }
-
             // Check for empty slot in this group.
             let empty_mask = group_ops::match_empty(&group.ctrl);
             if empty_mask != 0 {
@@ -368,7 +358,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
                 self.len += 1;
                 return None;
             }
-
             // Group full — follow or create overflow chain.
             let overflow = group.overflow;
             if overflow != NO_OVERFLOW {
@@ -450,7 +439,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
             // Fast path: preferred slot.
             let c = group.ctrl[hint];
             if c == CTRL_EMPTY {
-                return FindResult::Empty { group: group as *mut _, slot: hint };
+                return FindResult::Vacant(Insertion::Empty {
+                    group: group as *mut _,
+                    slot: hint,
+                });
             }
             if c == tag && unsafe { group.keys[hint].assume_init_ref() } == key {
                 return FindResult::Found(group.values[hint].as_mut_ptr());
@@ -469,12 +461,17 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
             let empty_mask = group_ops::match_empty(&group.ctrl);
             if empty_mask != 0 {
                 let i = group_ops::lowest(empty_mask);
-                return FindResult::Empty { group: group as *mut _, slot: i };
+                return FindResult::Vacant(Insertion::Empty {
+                    group: group as *mut _,
+                    slot: i,
+                });
             }
 
             // Group full — follow or report end of chain.
             if group.overflow == NO_OVERFLOW {
-                return FindResult::NeedsOverflow { tail: group as *mut _ };
+                return FindResult::Vacant(Insertion::NeedsOverflow {
+                    tail: group as *mut _,
+                });
             }
             gi = group.overflow as usize;
         }
@@ -548,16 +545,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
 // ────────────────────────────────────────────────────────────────────────
 
 /// Result of a single chain walk during `entry()`: either the existing slot
-/// for the key, an empty slot ready for insertion, or end-of-chain when no
-/// empty slot exists (and a new overflow group must be allocated).
+/// for the key or a pre-computed insertion location for a vacant entry.
 enum FindResult<K, V> {
     /// Pointer to the existing value.
     Found(*mut V),
-    /// Pointer to the group with an empty slot at index `slot`.
-    Empty { group: *mut Group<K, V>, slot: usize },
-    /// End of chain — the caller must allocate an overflow group and link it
-    /// via `tail`'s overflow field.
-    NeedsOverflow { tail: *mut Group<K, V> },
+    /// Where to insert if the caller decides to add a new entry.
+    Vacant(Insertion<K, V>),
 }
 
 /// Pre-computed insertion location stashed inside [`VacantEntry`] so that
@@ -713,7 +706,7 @@ fn insert_after_grow<'a, K: Hash + Eq, V, S: BuildHasher>(
 ) -> &'a mut V {
     map.grow();
     match map.find_or_insertion_slot(hash, &key) {
-        FindResult::Empty { group, slot } => {
+        FindResult::Vacant(Insertion::Empty { group, slot }) => {
             let tag = tag(hash);
             // SAFETY: `group` points into `map.groups` and is valid for `'a`.
             unsafe {
@@ -727,7 +720,7 @@ fn insert_after_grow<'a, K: Hash + Eq, V, S: BuildHasher>(
         }
         // After grow, the new primary group for `key` cannot be full (see
         // function docs), and the key wasn't in the table before grow.
-        FindResult::NeedsOverflow { .. } | FindResult::Found(_) => {
+        FindResult::Vacant(Insertion::NeedsOverflow { .. }) | FindResult::Found(_) => {
             unreachable!("post-grow walk must hit an empty slot")
         }
     }
