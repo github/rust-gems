@@ -206,7 +206,8 @@ impl<V> SimdPrefixHashMap<V> {
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
-        let min_groups = (capacity / GROUP_SIZE).max(1).next_power_of_two();
+        let adjusted = capacity.checked_mul(8).unwrap_or(usize::MAX) / 7;
+        let min_groups = (adjusted / GROUP_SIZE).max(1).next_power_of_two();
         let n_bits = min_groups.trailing_zeros().max(1);
         let num_primary = 1usize << n_bits;
         let total = num_primary + num_primary / 8 + 1;
@@ -276,9 +277,7 @@ impl<V> SimdPrefixHashMap<V> {
             if overflow != NO_OVERFLOW {
                 gi = overflow as usize;
             } else {
-                let max_overflow = self.num_primary / 8 + 1;
-                let num_overflow = self.groups.len() as u32 - self.num_primary;
-                if num_overflow >= max_overflow {
+                if self.groups.len() == self.groups.capacity() {
                     self.grow();
                     return self.insert(key, value);
                 }
@@ -347,18 +346,68 @@ impl<V> SimdPrefixHashMap<V> {
         self.groups.resize_with(num_primary, Group::new);
         self.len = 0;
 
-        for group in old_groups {
-            for i in 0..GROUP_SIZE {
-                if group.ctrl[i] != CTRL_EMPTY {
-                    let key = group.keys[i];
-                    let value = unsafe { group.values[i].assume_init_read() };
-                    self.insert(key, value);
-                }
+        for group in &old_groups {
+            let ctrl_word = u64::from_ne_bytes(group.ctrl);
+            if ctrl_word == 0 {
+                continue;
             }
-            std::mem::forget(group);
+            let mut full_mask = ctrl_word & 0x8080808080808080;
+            while full_mask != 0 {
+                let i = (full_mask.trailing_zeros() >> 3) as usize;
+                full_mask &= full_mask - 1;
+                let key = group.keys[i];
+                self.insert_for_grow(key, group.values[i].as_ptr());
+            }
         }
+        std::mem::forget(old_groups);
 
         debug_assert_eq!(self.len, old_len);
+    }
+
+    /// Fast insert for grow: no duplicate check, raw pointer copy.
+    fn insert_for_grow(&mut self, key: u32, value_src: *const V) {
+        let tag = tag(key);
+        let hint = slot_hint(key);
+        let mut gi = self.group_index(key);
+
+        loop {
+            let group = &self.groups[gi];
+
+            if group.ctrl[hint] == CTRL_EMPTY {
+                let group = &mut self.groups[gi];
+                group.ctrl[hint] = tag;
+                group.keys[hint] = key;
+                unsafe { group.values[hint].as_mut_ptr().copy_from_nonoverlapping(value_src, 1) };
+                self.len += 1;
+                return;
+            }
+
+            let empty_mask = group_ops::match_empty(&group.ctrl);
+            if empty_mask != 0 {
+                let i = group_ops::lowest(empty_mask);
+                let group = &mut self.groups[gi];
+                group.ctrl[i] = tag;
+                group.keys[i] = key;
+                unsafe { group.values[i].as_mut_ptr().copy_from_nonoverlapping(value_src, 1) };
+                self.len += 1;
+                return;
+            }
+
+            let overflow = self.groups[gi].overflow;
+            if overflow != NO_OVERFLOW {
+                gi = overflow as usize;
+            } else {
+                let new_gi = self.groups.len();
+                self.groups.push(Group::new());
+                self.groups[gi].overflow = new_gi as u32;
+                let group = &mut self.groups[new_gi];
+                group.ctrl[hint] = tag;
+                group.keys[hint] = key;
+                unsafe { group.values[hint].as_mut_ptr().copy_from_nonoverlapping(value_src, 1) };
+                self.len += 1;
+                return;
+            }
+        }
     }
 }
 
@@ -396,7 +445,8 @@ impl<V> NoHintPrefixHashMap<V> {
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
-        let min_groups = (capacity / GROUP_SIZE).max(1).next_power_of_two();
+        let adjusted = capacity.checked_mul(8).unwrap_or(usize::MAX) / 7;
+        let min_groups = (adjusted / GROUP_SIZE).max(1).next_power_of_two();
         let n_bits = min_groups.trailing_zeros().max(1);
         let num_primary = 1usize << n_bits;
         let total = num_primary + num_primary / 8 + 1;
@@ -446,9 +496,7 @@ impl<V> NoHintPrefixHashMap<V> {
             if overflow != NO_OVERFLOW {
                 gi = overflow as usize;
             } else {
-                let max_overflow = self.num_primary / 8 + 1;
-                let num_overflow = self.groups.len() as u32 - self.num_primary;
-                if num_overflow >= max_overflow {
+                if self.groups.len() == self.groups.capacity() {
                     self.grow();
                     return self.insert(key, value);
                 }

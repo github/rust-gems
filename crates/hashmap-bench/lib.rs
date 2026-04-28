@@ -4,8 +4,19 @@ pub mod prefix_map_simd;
 use rand::Rng;
 use std::hash::{BuildHasherDefault, Hasher};
 
-/// A hasher that returns the input unchanged. Only valid for u32 keys
-/// that are already well-distributed hashes.
+/// Folded multiply: full u64×u64→u128, then XOR the two halves.
+/// Produces a u64 with good bit independence between high and low halves.
+#[inline(always)]
+pub fn folded_multiply(x: u64, y: u64) -> u64 {
+    let full = (x as u128).wrapping_mul(y as u128);
+    (full as u64) ^ ((full >> 64) as u64)
+}
+
+const ARBITRARY0: u64 = 0x243f6a8885a308d3;
+
+/// A hasher that expands a u32 key into a well-distributed u64 using
+/// folded_multiply so that both hashbrown's bucket index (low bits) and
+/// tag (top 7 bits) have independent entropy.
 #[derive(Default)]
 pub struct IdentityHasher(u64);
 
@@ -14,7 +25,7 @@ impl Hasher for IdentityHasher {
         unimplemented!("IdentityHasher only supports write_u32");
     }
     fn write_u32(&mut self, i: u32) {
-        self.0 = i as u64;
+        self.0 = (i as u64) | ((i as u64) << 32);
     }
     fn finish(&self) -> u64 {
         self.0
@@ -24,7 +35,7 @@ impl Hasher for IdentityHasher {
 pub type IdentityBuildHasher = BuildHasherDefault<IdentityHasher>;
 
 /// Generate `n` random trigrams as well-distributed u32 hashes.
-/// Each trigram is packed into a u32, then scrambled with a murmur3 finalizer.
+/// Each trigram is packed into a u32, then scrambled with folded_multiply.
 pub fn random_trigram_hashes(n: usize) -> Vec<u32> {
     let mut rng = rand::rng();
     (0..n)
@@ -33,13 +44,7 @@ pub fn random_trigram_hashes(n: usize) -> Vec<u32> {
             let b = rng.random_range(b'a'..=b'z') as u32;
             let c = rng.random_range(b'a'..=b'z') as u32;
             let packed = a | (b << 8) | (c << 16);
-            let mut h = packed;
-            h ^= h >> 16;
-            h = h.wrapping_mul(0x85ebca6b);
-            h ^= h >> 13;
-            h = h.wrapping_mul(0xc2b2ae35);
-            h ^= h >> 16;
-            h
+            folded_multiply(packed as u64, ARBITRARY0) as u32
         })
         .collect()
 }
