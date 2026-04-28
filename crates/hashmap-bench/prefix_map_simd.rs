@@ -398,17 +398,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
         K: Borrow<Q>,
         Q: Eq + ?Sized,
     {
-        let (gi, slot) = self.find_slot(hash, key)?;
-        Some(unsafe { self.groups[gi].values[slot].assume_init_ref() })
-    }
-
-    /// Look up `key` and return its `(group_index, slot)` if present.
-    /// Pure read-only lookup — does not allocate or modify the table.
-    fn find_slot<Q>(&self, hash: u64, key: &Q) -> Option<(usize, usize)>
-    where
-        K: Borrow<Q>,
-        Q: Eq + ?Sized,
-    {
         let tag = tag(hash);
         let hint = slot_hint(hash);
         let mut gi = self.group_index(hash);
@@ -421,7 +410,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
             if c == tag
                 && unsafe { group.keys[hint].assume_init_ref() }.borrow() == key
             {
-                return Some((gi, hint));
+                return Some(unsafe { group.values[hint].assume_init_ref() });
             }
 
             // Slow path: SIMD scan group.
@@ -429,7 +418,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
             tag_mask = group_ops::clear_slot(tag_mask, hint);
             while let Some(i) = group_ops::next_match(&mut tag_mask) {
                 if unsafe { group.keys[i].assume_init_ref() }.borrow() == key {
-                    return Some((gi, i));
+                    return Some(unsafe { group.values[i].assume_init_ref() });
                 }
             }
 
