@@ -289,8 +289,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> PrefixHashMap<K, V, S> {
                 self.insert_for_grow(hash, group.keys[i].as_ptr(), group.values[i].as_ptr());
             }
         }
-        // Prevent double-drop — keys/values were copied out via raw pointers.
-        std::mem::forget(old_groups);
+        // Group<K, V> has no Drop (keys/values are MaybeUninit), so dropping
+        // old_groups runs no destructors but does free the backing buffer.
+        drop(old_groups);
 
         debug_assert_eq!(self.len, old_len);
     }

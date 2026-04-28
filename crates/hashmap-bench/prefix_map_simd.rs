@@ -42,6 +42,16 @@ mod group_ops {
         match_tag(ctrl, super::CTRL_EMPTY)
     }
 
+    /// Mask of slots whose ctrl byte has the high bit set (occupied).
+    /// Uses SSE2 `_mm_movemask_epi8` which extracts the top bit of each byte.
+    #[inline(always)]
+    pub fn match_full(ctrl: &[u8; GROUP_SIZE]) -> Mask {
+        unsafe {
+            let group = x86::_mm_loadu_si128(ctrl.as_ptr() as *const x86::__m128i);
+            x86::_mm_movemask_epi8(group) as u32
+        }
+    }
+
     #[inline(always)]
     pub fn lowest(mask: Mask) -> usize {
         mask.trailing_zeros() as usize
@@ -87,6 +97,15 @@ mod group_ops {
         }
     }
 
+    /// Mask of slots whose ctrl byte has the high bit set (occupied).
+    #[inline(always)]
+    pub fn match_full(ctrl: &[u8; GROUP_SIZE]) -> Mask {
+        unsafe {
+            let group = neon::vld1_u8(ctrl.as_ptr());
+            neon::vget_lane_u64(neon::vreinterpret_u64_u8(group), 0) & 0x8080808080808080
+        }
+    }
+
     #[inline(always)]
     pub fn lowest(mask: Mask) -> usize {
         (mask.trailing_zeros() >> 3) as usize
@@ -124,6 +143,13 @@ mod group_ops {
     pub fn match_empty(ctrl: &[u8; GROUP_SIZE]) -> Mask {
         let word = u64::from_ne_bytes(*ctrl);
         !word & 0x8080808080808080
+    }
+
+    /// Mask of slots whose ctrl byte has the high bit set (occupied).
+    #[inline(always)]
+    pub fn match_full(ctrl: &[u8; GROUP_SIZE]) -> Mask {
+        let word = u64::from_ne_bytes(*ctrl);
+        word & 0x8080808080808080
     }
 
     #[inline(always)]
@@ -371,21 +397,17 @@ impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
         self.len = 0;
 
         for group in &old_groups {
-            let ctrl_word = u64::from_ne_bytes(group.ctrl);
-            if ctrl_word == 0 {
-                continue;
-            }
-            let mut full_mask = ctrl_word & 0x8080808080808080;
-            while full_mask != 0 {
-                let i = (full_mask.trailing_zeros() >> 3) as usize;
-                full_mask &= full_mask - 1;
+            let mut full_mask = group_ops::match_full(&group.ctrl);
+            while let Some(i) = group_ops::next_match(&mut full_mask) {
                 let hash = self.hash_builder.hash_one(unsafe {
                     group.keys[i].assume_init_ref()
                 });
                 self.insert_for_grow(hash, group.keys[i].as_ptr(), group.values[i].as_ptr());
             }
         }
-        std::mem::forget(old_groups);
+        // Group<K, V> has no Drop (keys/values are MaybeUninit), so dropping
+        // old_groups runs no destructors but does free the backing buffer.
+        drop(old_groups);
 
         debug_assert_eq!(self.len, old_len);
     }
