@@ -1,12 +1,31 @@
-# hashmap-bench
+# hash-sorted-map
 
-Benchmarks comparing `PrefixHashMap` — an insertion-only hash map with
-overflow chaining and SIMD group scanning — against Rust's standard library
-and several third-party hash map implementations.
+A hash map whose groups are ordered by hash prefix, enabling efficient
+sorted-order iteration and linear-time merging of two maps.
+
+## Motivation
+
+In a search index, each document produces a **term map** (term → frequency).
+At index time, term maps from many documents must be **merged** into a single
+posting list, and the result is **serialized in hash-key order** so that
+lookups can use a skip-list approach, leveraging the hash ordering to
+efficiently jump to the right region of the serialized data.
+
+A conventional hash map stores entries in arbitrary order, so merging two maps
+requires collecting, sorting, and reshuffling all entries — an expensive step
+that dominates indexing time for large term maps typical of code search, where
+documents contain massive numbers of tokens.
+
+`HashSortedMap` avoids this by organizing its groups by hash prefix.
+Iterating through the groups in order yields entries sorted by their hashed
+keys, which means:
+
+- **Merging** two maps is a single linear scan (like merge-sort's merge step).
+- **Serialization** in hash-key order requires no extra sorting or copying.
 
 ## Design
 
-`PrefixHashMap<K, V, S>` is a Swiss-table-inspired hash map that uses:
+`HashSortedMap<K, V, S>` is a Swiss-table-inspired hash map that uses:
 
 - **Overflow chaining** instead of open addressing — groups that fill up link
   to overflow groups rather than probing into neighbours.
@@ -34,7 +53,7 @@ M-series (aarch64).
 | 🥇 | FoldHashMap | 2.44 | — |
 | 🥈 | FxHashMap | 2.61 | +7% |
 | 🥉 | hashbrown::HashMap | 2.67 | +9% |
-| 4 | **PrefixHashMap** | **2.71** | +11% |
+| 4 | **HashSortedMap** | **2.71** | +11% |
 | 5 | hashbrown+Identity | 2.74 | +12% |
 | 6 | std::HashMap+FNV | 3.27 | +34% |
 | 7 | AHashMap | 3.22 | +32% |
@@ -45,19 +64,19 @@ M-series (aarch64).
 
 | Map | Time (µs) |
 |-----|-----------|
-| **PrefixHashMap** | **2.36** ✅ |
+| **HashSortedMap** | **2.36** ✅ |
 | hashbrown+Identity | 2.58 |
 
 ### Growth from small (`with_capacity(128)`, 3 resize rounds)
 
 | Map | Time (µs) | Growth penalty |
 |-----|-----------|----------------|
-| **PrefixHashMap** | **4.85** | +2.14 |
+| **HashSortedMap** | **4.85** | +2.14 |
 | hashbrown+Identity | 9.77 | +7.03 |
 
 ### Key takeaways
 
-- **PrefixHashMap matches the fastest hashbrown configurations** on pre-sized
+- **HashSortedMap matches the fastest hashbrown configurations** on pre-sized
   first-time inserts and is **the fastest for overwrites**.
 - **Growth is ~2× faster** than hashbrown thanks to the optimized
   `insert_for_grow` path that skips duplicate checking and uses raw copies.

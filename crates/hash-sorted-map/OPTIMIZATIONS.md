@@ -1,8 +1,8 @@
-# PrefixHashMap vs. Rust Swiss Table (hashbrown): Optimization Analysis
+# HashSortedMap vs. Rust Swiss Table (hashbrown): Optimization Analysis
 
 ## Executive Summary
 
-`PrefixHashMap` is a Swiss-table-inspired hash map that uses **overflow
+`HashSortedMap` is a Swiss-table-inspired hash map that uses **overflow
 chaining** (instead of open addressing), **SIMD group scanning** (NEON/SSE2),
 a **slot-hint fast path**, and an **optimized growth strategy**. It is generic
 over key type, value type, and hash builder.
@@ -29,7 +29,7 @@ experimental results that guided the current design.
 └──────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
-│                      PrefixHashMap                               │
+│                      HashSortedMap                               │
 │                                                                  │
 │  Vec<Group<K,V>> where each Group (AoS):                         │
 │  { ctrl: [u8; 8], keys: [MaybeUninit<K>; 8],                    │
@@ -58,7 +58,7 @@ modest because the slot-hint fast path often skips the group scan entirely.
 
 ### 2. Open Addressing with Triangular Probing ❌ Rejected
 
-Tested an open-addressing variant (`OpenPrefixHashMap`) with triangular
+Tested an open-addressing variant (`OpenHashSortedMap`) with triangular
 probing over AoS groups.
 
 **Benchmark result**: **40% slower** than overflow chaining. With the AoS
@@ -68,7 +68,7 @@ faster because most inserts land in the first group.
 
 ### 3. SoA Memory Layout ❌ Rejected
 
-Tested a SoA variant (`SoaPrefixHashMap`) with separate control byte and
+Tested a SoA variant (`SoaHashSortedMap`) with separate control byte and
 key/value arrays, combined with triangular probing.
 
 **Benchmark result**: **Slowest variant** — even slower than AoS open
@@ -82,7 +82,7 @@ The original `with_capacity` allocated `capacity / 8` groups, giving ~100%
 slot utilization. hashbrown uses `capacity * 8 / 7`, giving ~50% load.
 
 **Fix**: Changed to `capacity * 8 / 7` (87.5% max load factor), matching
-hashbrown. This was the **single biggest improvement** — PrefixHashMap went
+hashbrown. This was the **single biggest improvement** — HashSortedMap went
 from 2× slower to matching hashbrown.
 
 ### 5. Optimized Growth ✅ Implemented
@@ -108,9 +108,9 @@ the overflow path.
 SIMD version** by pessimizing NEON code generation. Removed from the SIMD
 implementation, kept in the scalar version.
 
-### 7. Slot Hint Fast Path (Unique to PrefixHashMap)
+### 7. Slot Hint Fast Path (Unique to HashSortedMap)
 
-PrefixHashMap checks a preferred slot before scanning the group:
+HashSortedMap checks a preferred slot before scanning the group:
 ```rust
 let hint = slot_hint(hash);  // 3 bits from hash → slot index
 if ctrl[hint] == EMPTY { /* direct insert */ }
@@ -172,5 +172,5 @@ entropy in both halves. Also changed trigram generation to use
 | Branch hints (scalar only) | **−2–6%** |
 | IdentityHasher fix | Enabled fair comparison |
 
-The current PrefixHashMap **matches hashbrown+FxHash** on pre-sized inserts,
+The current HashSortedMap **matches hashbrown+FxHash** on pre-sized inserts,
 **beats all hashbrown variants** on overwrites, and has **2× faster growth**.

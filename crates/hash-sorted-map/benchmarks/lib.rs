@@ -1,21 +1,18 @@
-pub mod prefix_map_simd;
-
-use rand::Rng;
 use std::hash::{BuildHasherDefault, Hasher};
 
+use rand::Rng;
+
+const ARBITRARY0: u64 = 0x243f6a8885a308d3;
+
 /// Folded multiply: full u64×u64→u128, then XOR the two halves.
-/// Produces a u64 with good bit independence between high and low halves.
 #[inline(always)]
 pub fn folded_multiply(x: u64, y: u64) -> u64 {
     let full = (x as u128).wrapping_mul(y as u128);
     (full as u64) ^ ((full >> 64) as u64)
 }
 
-const ARBITRARY0: u64 = 0x243f6a8885a308d3;
-
-/// A hasher that expands a u32 key into a well-distributed u64 using
-/// folded_multiply so that both hashbrown's bucket index (low bits) and
-/// tag (top 7 bits) have independent entropy.
+/// A hasher that passes through u32 keys without hashing, suitable for
+/// keys that are already well-distributed.
 #[derive(Default)]
 pub struct IdentityHasher(u64);
 

@@ -1,11 +1,13 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use hashmap_bench::random_trigram_hashes;
+use hash_sorted_map_benchmarks::{random_trigram_hashes, IdentityBuildHasher};
 
-fn bench_hashmap_insert(c: &mut Criterion) {
-    let trigrams = random_trigram_hashes(1000);
+fn trigrams() -> Vec<u32> {
+    random_trigram_hashes(1000)
+}
 
-    // ── Main comparison: insert 1000 trigrams ───────────────────────────
-    let mut group = c.benchmark_group("hashmap_insert_1000_trigrams");
+fn bench_insert(c: &mut Criterion) {
+    let trigrams = trigrams();
+    let mut group = c.benchmark_group("presized_insert_1000_trigrams");
 
     group.bench_function("std::HashMap", |b| {
         b.iter_batched(
@@ -103,7 +105,7 @@ fn bench_hashmap_insert(c: &mut Criterion) {
 
     group.bench_function("hashbrown+Identity", |b| {
         b.iter_batched(
-            || hashbrown::HashMap::<u32, usize, hashmap_bench::IdentityBuildHasher>::with_capacity_and_hasher(
+            || hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
                 trigrams.len(),
                 Default::default(),
             ),
@@ -117,11 +119,11 @@ fn bench_hashmap_insert(c: &mut Criterion) {
         );
     });
 
-    group.bench_function("PrefixHashMap", |b| {
+    group.bench_function("HashSortedMap", |b| {
         b.iter_batched(
-            || hashmap_bench::prefix_map_simd::SimdPrefixHashMap::with_capacity_and_hasher(
+            || hash_sorted_map::hash_sorted_map::HashSortedMap::with_capacity_and_hasher(
                 trigrams.len(),
-                hashmap_bench::IdentityBuildHasher::default(),
+                IdentityBuildHasher::default(),
             ),
             |mut map| {
                 for (i, &key) in trigrams.iter().enumerate() {
@@ -134,14 +136,16 @@ fn bench_hashmap_insert(c: &mut Criterion) {
     });
 
     group.finish();
+}
 
-    // ── Re-insert: insert same keys twice (second pass = all overwrites) ─
-    let mut group2 = c.benchmark_group("reinsert_1000_trigrams");
+fn bench_reinsert(c: &mut Criterion) {
+    let trigrams = trigrams();
+    let mut group = c.benchmark_group("reinsert_1000_trigrams");
 
-    group2.bench_function("hashbrown+Identity", |b| {
+    group.bench_function("hashbrown+Identity", |b| {
         b.iter_batched(
             || {
-                let mut map = hashbrown::HashMap::<u32, usize, hashmap_bench::IdentityBuildHasher>::with_capacity_and_hasher(
+                let mut map = hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
                     trigrams.len(),
                     Default::default(),
                 );
@@ -160,12 +164,12 @@ fn bench_hashmap_insert(c: &mut Criterion) {
         );
     });
 
-    group2.bench_function("PrefixHashMap", |b| {
+    group.bench_function("HashSortedMap", |b| {
         b.iter_batched(
             || {
-                let mut map = hashmap_bench::prefix_map_simd::SimdPrefixHashMap::with_capacity_and_hasher(
+                let mut map = hash_sorted_map::hash_sorted_map::HashSortedMap::with_capacity_and_hasher(
                     trigrams.len(),
-                    hashmap_bench::IdentityBuildHasher::default(),
+                    IdentityBuildHasher::default(),
                 );
                 for (i, &key) in trigrams.iter().enumerate() {
                     map.insert(key, i);
@@ -182,14 +186,16 @@ fn bench_hashmap_insert(c: &mut Criterion) {
         );
     });
 
-    group2.finish();
+    group.finish();
+}
 
-    // ── Growth penalty: start small (128), force 3 growths ──────────────
-    let mut group3 = c.benchmark_group("grow_from_128_insert_1000_trigrams");
+fn bench_grow(c: &mut Criterion) {
+    let trigrams = trigrams();
+    let mut group = c.benchmark_group("grow_from_128_insert_1000_trigrams");
 
-    group3.bench_function("hashbrown+Identity", |b| {
+    group.bench_function("hashbrown+Identity", |b| {
         b.iter_batched(
-            || hashbrown::HashMap::<u32, usize, hashmap_bench::IdentityBuildHasher>::with_capacity_and_hasher(
+            || hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
                 128,
                 Default::default(),
             ),
@@ -203,11 +209,11 @@ fn bench_hashmap_insert(c: &mut Criterion) {
         );
     });
 
-    group3.bench_function("PrefixHashMap", |b| {
+    group.bench_function("HashSortedMap", |b| {
         b.iter_batched(
-            || hashmap_bench::prefix_map_simd::SimdPrefixHashMap::with_capacity_and_hasher(
+            || hash_sorted_map::hash_sorted_map::HashSortedMap::with_capacity_and_hasher(
                 128,
-                hashmap_bench::IdentityBuildHasher::default(),
+                IdentityBuildHasher::default(),
             ),
             |mut map| {
                 for (i, &key) in trigrams.iter().enumerate() {
@@ -219,21 +225,21 @@ fn bench_hashmap_insert(c: &mut Criterion) {
         );
     });
 
-    group3.finish();
+    group.finish();
+}
 
-    // ── get_or_default: count trigram occurrences ──────────────────────
-    // Counting workload: most lookups hit existing keys, so this stresses
-    // the find-existing path of get_or_default / entry().or_insert().
+fn bench_count(c: &mut Criterion) {
+    let trigrams = trigrams();
     let mut counted_trigrams = Vec::with_capacity(trigrams.len() * 4);
     for _ in 0..4 {
         counted_trigrams.extend_from_slice(&trigrams);
     }
 
-    let mut group4 = c.benchmark_group("count_4000_trigrams_get_or_default");
+    let mut group = c.benchmark_group("count_4000_trigrams_get_or_default");
 
-    group4.bench_function("hashbrown+Identity entry()", |b| {
+    group.bench_function("hashbrown+Identity entry()", |b| {
         b.iter_batched(
-            || hashbrown::HashMap::<u32, u32, hashmap_bench::IdentityBuildHasher>::with_capacity_and_hasher(
+            || hashbrown::HashMap::<u32, u32, IdentityBuildHasher>::with_capacity_and_hasher(
                 trigrams.len(),
                 Default::default(),
             ),
@@ -247,11 +253,11 @@ fn bench_hashmap_insert(c: &mut Criterion) {
         );
     });
 
-    group4.bench_function("PrefixHashMap get_or_default", |b| {
+    group.bench_function("HashSortedMap get_or_default", |b| {
         b.iter_batched(
-            || hashmap_bench::prefix_map_simd::SimdPrefixHashMap::<u32, u32, _>::with_capacity_and_hasher(
+            || hash_sorted_map::hash_sorted_map::HashSortedMap::<u32, u32, _>::with_capacity_and_hasher(
                 trigrams.len(),
-                hashmap_bench::IdentityBuildHasher::default(),
+                IdentityBuildHasher::default(),
             ),
             |mut map| {
                 for &key in &counted_trigrams {
@@ -263,11 +269,11 @@ fn bench_hashmap_insert(c: &mut Criterion) {
         );
     });
 
-    group4.bench_function("PrefixHashMap entry().or_default()", |b| {
+    group.bench_function("HashSortedMap entry().or_default()", |b| {
         b.iter_batched(
-            || hashmap_bench::prefix_map_simd::SimdPrefixHashMap::<u32, u32, _>::with_capacity_and_hasher(
+            || hash_sorted_map::hash_sorted_map::HashSortedMap::<u32, u32, _>::with_capacity_and_hasher(
                 trigrams.len(),
-                hashmap_bench::IdentityBuildHasher::default(),
+                IdentityBuildHasher::default(),
             ),
             |mut map| {
                 for &key in &counted_trigrams {
@@ -279,8 +285,8 @@ fn bench_hashmap_insert(c: &mut Criterion) {
         );
     });
 
-    group4.finish();
+    group.finish();
 }
 
-criterion_group!(benches, bench_hashmap_insert);
+criterion_group!(benches, bench_insert, bench_reinsert, bench_grow, bench_count);
 criterion_main!(benches);

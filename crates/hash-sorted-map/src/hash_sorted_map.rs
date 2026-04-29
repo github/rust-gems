@@ -3,175 +3,9 @@ use std::borrow::Borrow;
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hash};
 
-// Platform-dependent group size: 16 on x86_64 (SSE2), 8 everywhere else.
-#[cfg(target_arch = "x86_64")]
-const GROUP_SIZE: usize = 16;
-#[cfg(not(target_arch = "x86_64"))]
-const GROUP_SIZE: usize = 8;
+use super::group_ops::{self, CTRL_EMPTY, GROUP_SIZE};
 
-const CTRL_EMPTY: u8 = 0x00;
 const NO_OVERFLOW: u32 = u32::MAX;
-
-#[cfg(target_arch = "x86_64")]
-type Mask = u32;
-#[cfg(not(target_arch = "x86_64"))]
-type Mask = u64;
-
-// ── SIMD group operations ───────────────────────────────────────────────────
-
-#[cfg(target_arch = "x86_64")]
-mod group_ops {
-    #[cfg(target_arch = "x86")]
-    use core::arch::x86 as x86;
-    #[cfg(target_arch = "x86_64")]
-    use core::arch::x86_64 as x86;
-
-    use super::{Mask, GROUP_SIZE};
-
-    #[inline(always)]
-    pub fn match_tag(ctrl: &[u8; GROUP_SIZE], tag: u8) -> Mask {
-        unsafe {
-            let group = x86::_mm_loadu_si128(ctrl.as_ptr() as *const x86::__m128i);
-            let cmp = x86::_mm_cmpeq_epi8(group, x86::_mm_set1_epi8(tag as i8));
-            x86::_mm_movemask_epi8(cmp) as u32
-        }
-    }
-
-    #[inline(always)]
-    pub fn match_empty(ctrl: &[u8; GROUP_SIZE]) -> Mask {
-        match_tag(ctrl, super::CTRL_EMPTY)
-    }
-
-    /// Mask of slots whose ctrl byte has the high bit set (occupied).
-    /// Uses SSE2 `_mm_movemask_epi8` which extracts the top bit of each byte.
-    #[inline(always)]
-    pub fn match_full(ctrl: &[u8; GROUP_SIZE]) -> Mask {
-        unsafe {
-            let group = x86::_mm_loadu_si128(ctrl.as_ptr() as *const x86::__m128i);
-            x86::_mm_movemask_epi8(group) as u32
-        }
-    }
-
-    #[inline(always)]
-    pub fn lowest(mask: Mask) -> usize {
-        mask.trailing_zeros() as usize
-    }
-
-    #[inline(always)]
-    pub fn clear_slot(mask: Mask, slot: usize) -> Mask {
-        mask & !(1u32 << slot)
-    }
-
-    #[inline(always)]
-    pub fn next_match(mask: &mut Mask) -> Option<usize> {
-        if *mask == 0 {
-            return None;
-        }
-        let i = lowest(*mask);
-        *mask &= *mask - 1;
-        Some(i)
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-mod group_ops {
-    use core::arch::aarch64 as neon;
-
-    use super::{Mask, GROUP_SIZE};
-
-    #[inline(always)]
-    pub fn match_tag(ctrl: &[u8; GROUP_SIZE], tag: u8) -> Mask {
-        unsafe {
-            let group = neon::vld1_u8(ctrl.as_ptr());
-            let cmp = neon::vceq_u8(group, neon::vdup_n_u8(tag));
-            neon::vget_lane_u64(neon::vreinterpret_u64_u8(cmp), 0) & 0x8080808080808080
-        }
-    }
-
-    #[inline(always)]
-    pub fn match_empty(ctrl: &[u8; GROUP_SIZE]) -> Mask {
-        unsafe {
-            let group = neon::vld1_u8(ctrl.as_ptr());
-            let cmp = neon::vceq_u8(group, neon::vdup_n_u8(0));
-            neon::vget_lane_u64(neon::vreinterpret_u64_u8(cmp), 0) & 0x8080808080808080
-        }
-    }
-
-    /// Mask of slots whose ctrl byte has the high bit set (occupied).
-    #[inline(always)]
-    pub fn match_full(ctrl: &[u8; GROUP_SIZE]) -> Mask {
-        unsafe {
-            let group = neon::vld1_u8(ctrl.as_ptr());
-            neon::vget_lane_u64(neon::vreinterpret_u64_u8(group), 0) & 0x8080808080808080
-        }
-    }
-
-    #[inline(always)]
-    pub fn lowest(mask: Mask) -> usize {
-        (mask.trailing_zeros() >> 3) as usize
-    }
-
-    #[inline(always)]
-    pub fn clear_slot(mask: Mask, slot: usize) -> Mask {
-        mask & !(0x80u64 << (slot * 8))
-    }
-
-    #[inline(always)]
-    pub fn next_match(mask: &mut Mask) -> Option<usize> {
-        if *mask == 0 {
-            return None;
-        }
-        let i = lowest(*mask);
-        *mask &= *mask - 1;
-        Some(i)
-    }
-}
-
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-mod group_ops {
-    use super::{Mask, GROUP_SIZE};
-
-    #[inline(always)]
-    pub fn match_tag(ctrl: &[u8; GROUP_SIZE], tag: u8) -> Mask {
-        let word = u64::from_ne_bytes(*ctrl);
-        let broadcast = 0x0101010101010101u64 * (tag as u64);
-        let xor = word ^ broadcast;
-        (xor.wrapping_sub(0x0101010101010101)) & !xor & 0x8080808080808080
-    }
-
-    #[inline(always)]
-    pub fn match_empty(ctrl: &[u8; GROUP_SIZE]) -> Mask {
-        let word = u64::from_ne_bytes(*ctrl);
-        !word & 0x8080808080808080
-    }
-
-    /// Mask of slots whose ctrl byte has the high bit set (occupied).
-    #[inline(always)]
-    pub fn match_full(ctrl: &[u8; GROUP_SIZE]) -> Mask {
-        let word = u64::from_ne_bytes(*ctrl);
-        word & 0x8080808080808080
-    }
-
-    #[inline(always)]
-    pub fn lowest(mask: Mask) -> usize {
-        (mask.trailing_zeros() >> 3) as usize
-    }
-
-    #[inline(always)]
-    pub fn clear_slot(mask: Mask, slot: usize) -> Mask {
-        mask & !(0x80u64 << (slot * 8))
-    }
-
-    #[inline(always)]
-    pub fn next_match(mask: &mut Mask) -> Option<usize> {
-        if *mask == 0 {
-            return None;
-        }
-        let i = lowest(*mask);
-        *mask &= *mask - 1;
-        Some(i)
-    }
-}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -207,7 +41,7 @@ impl<K, V> Group<K, V> {
 ///
 /// Uses NEON on aarch64, SSE2 on x86_64, scalar fallback elsewhere.
 /// Generic over key type `K`, value type `V`, and hash builder `S`.
-pub struct SimdPrefixHashMap<K, V, S = RandomState> {
+pub struct HashSortedMap<K, V, S = RandomState> {
     groups: Box<[Group<K, V>]>,
     num_groups: u32,
     n_bits: u32,
@@ -215,7 +49,7 @@ pub struct SimdPrefixHashMap<K, V, S = RandomState> {
     hash_builder: S,
 }
 
-impl<K: Hash + Eq, V> SimdPrefixHashMap<K, V> {
+impl<K: Hash + Eq, V> HashSortedMap<K, V> {
     pub fn new() -> Self {
         Self::with_capacity_and_hasher(0, RandomState::new())
     }
@@ -225,7 +59,7 @@ impl<K: Hash + Eq, V> SimdPrefixHashMap<K, V> {
     }
 }
 
-impl<K, V, S> SimdPrefixHashMap<K, V, S> {
+impl<K, V, S> HashSortedMap<K, V, S> {
     pub fn with_hasher(hash_builder: S) -> Self {
         Self::with_capacity_and_hasher(0, hash_builder)
     }
@@ -265,7 +99,7 @@ impl<K, V, S> SimdPrefixHashMap<K, V, S> {
     }
 }
 
-impl<K: Hash + Eq, V, S: BuildHasher> SimdPrefixHashMap<K, V, S> {
+impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         let hash = self.hash_builder.hash_one(&key);
         self.insert_hashed(hash, key, value)
@@ -563,7 +397,7 @@ enum Insertion<K, V> {
     NeedsOverflow { tail: *mut Group<K, V> },
 }
 
-/// View into a single entry in a [`SimdPrefixHashMap`], either occupied or vacant.
+/// View into a single entry in a [`HashSortedMap`], either occupied or vacant.
 pub enum Entry<'a, K, V, S> {
     Occupied(OccupiedEntry<'a, V>),
     Vacant(VacantEntry<'a, K, V, S>),
@@ -577,7 +411,7 @@ pub struct OccupiedEntry<'a, V> {
 /// View into a vacant entry. Holds the borrow of the map plus the hash, key,
 /// and pre-computed insertion slot.
 pub struct VacantEntry<'a, K, V, S> {
-    map: &'a mut SimdPrefixHashMap<K, V, S>,
+    map: &'a mut HashSortedMap<K, V, S>,
     hash: u64,
     key: K,
     insertion: Insertion<K, V>,
@@ -645,6 +479,7 @@ impl<'a, V> OccupiedEntry<'a, V> {
 }
 
 impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
+
     /// Insert `value` and return a mutable reference to it.
     /// Writes directly to the slot pre-computed during `entry()`; only re-walks
     /// the chain on the rare grow path (where the pre-computed pointers become
@@ -699,7 +534,7 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
 #[cold]
 #[inline(never)]
 fn insert_after_grow<'a, K: Hash + Eq, V, S: BuildHasher>(
-    map: &'a mut SimdPrefixHashMap<K, V, S>,
+    map: &'a mut HashSortedMap<K, V, S>,
     hash: u64,
     key: K,
     value: V,
@@ -726,7 +561,7 @@ fn insert_after_grow<'a, K: Hash + Eq, V, S: BuildHasher>(
     }
 }
 
-impl<K, V, S> Drop for SimdPrefixHashMap<K, V, S> {
+impl<K, V, S> Drop for HashSortedMap<K, V, S> {
     fn drop(&mut self) {
         for group in &mut self.groups[..self.num_groups as usize] {
             for i in 0..GROUP_SIZE {
@@ -745,7 +580,7 @@ mod tests {
 
     #[test]
     fn insert_and_get() {
-        let mut map = SimdPrefixHashMap::new();
+        let mut map = HashSortedMap::new();
         map.insert(100, "hello");
         map.insert(200, "world");
         assert_eq!(map.get(&100), Some(&"hello"));
@@ -756,7 +591,7 @@ mod tests {
 
     #[test]
     fn insert_overwrite() {
-        let mut map = SimdPrefixHashMap::new();
+        let mut map = HashSortedMap::new();
         map.insert(42, "a");
         assert_eq!(map.insert(42, "b"), Some("a"));
         assert_eq!(map.get(&42), Some(&"b"));
@@ -765,7 +600,7 @@ mod tests {
 
     #[test]
     fn grow_preserves_entries() {
-        let mut map = SimdPrefixHashMap::new();
+        let mut map = HashSortedMap::new();
         for i in 0..200u32 {
             map.insert(i, i * 10);
         }
@@ -777,7 +612,7 @@ mod tests {
 
     #[test]
     fn many_entries() {
-        let mut map = SimdPrefixHashMap::with_capacity(2000);
+        let mut map = HashSortedMap::with_capacity(2000);
         for i in 0..2000u32 {
             map.insert(i.wrapping_mul(2654435761), i);
         }
@@ -789,7 +624,7 @@ mod tests {
 
     #[test]
     fn overflow_chain() {
-        let mut map = SimdPrefixHashMap::with_capacity(8);
+        let mut map = HashSortedMap::with_capacity(8);
         for i in 0..20u32 {
             let key = i | 0xAB000000;
             map.insert(key, i);
@@ -803,7 +638,7 @@ mod tests {
 
     #[test]
     fn grow_on_overflow_exhaustion() {
-        let mut map = SimdPrefixHashMap::with_capacity(1);
+        let mut map = HashSortedMap::with_capacity(1);
         let old_n_bits = map.n_bits;
         for i in 0..100u32 {
             let key = i | 0xFF000000;
@@ -819,7 +654,7 @@ mod tests {
 
     #[test]
     fn string_keys() {
-        let mut map = SimdPrefixHashMap::new();
+        let mut map = HashSortedMap::new();
         map.insert("hello".to_string(), 1);
         map.insert("world".to_string(), 2);
         assert_eq!(map.get("hello"), Some(&1));
@@ -834,7 +669,7 @@ mod tests {
 
     #[test]
     fn get_or_default_basics() {
-        let mut map: SimdPrefixHashMap<&str, i32> = SimdPrefixHashMap::new();
+        let mut map: HashSortedMap<&str, i32> = HashSortedMap::new();
         // Inserts default (0), then mutates.
         *map.get_or_default("a") += 5;
         *map.get_or_default("b") += 7;
@@ -847,7 +682,7 @@ mod tests {
 
     #[test]
     fn get_or_insert_with_lazy() {
-        let mut map: SimdPrefixHashMap<u32, String> = SimdPrefixHashMap::new();
+        let mut map: HashSortedMap<u32, String> = HashSortedMap::new();
         let mut call_count = 0;
         let mut make = |s: &str| {
             call_count += 1;
@@ -865,7 +700,7 @@ mod tests {
 
     #[test]
     fn get_or_default_survives_grow() {
-        let mut map: SimdPrefixHashMap<u32, u32> = SimdPrefixHashMap::with_capacity(1);
+        let mut map: HashSortedMap<u32, u32> = HashSortedMap::with_capacity(1);
         for i in 0..500u32 {
             *map.get_or_default(i) = i * 2;
         }
@@ -878,7 +713,7 @@ mod tests {
     #[test]
     fn entry_or_default_counting() {
         // Classic counting workload via Entry API.
-        let mut map: SimdPrefixHashMap<&str, u32> = SimdPrefixHashMap::new();
+        let mut map: HashSortedMap<&str, u32> = HashSortedMap::new();
         for word in ["a", "b", "a", "c", "b", "a"] {
             *map.entry(word).or_default() += 1;
         }
@@ -890,7 +725,7 @@ mod tests {
 
     #[test]
     fn entry_or_insert_lazy() {
-        let mut map: SimdPrefixHashMap<u32, String> = SimdPrefixHashMap::new();
+        let mut map: HashSortedMap<u32, String> = HashSortedMap::new();
         let mut call_count = 0;
         let mut make = |s: &str| {
             call_count += 1;
@@ -907,7 +742,7 @@ mod tests {
 
     #[test]
     fn entry_and_modify() {
-        let mut map: SimdPrefixHashMap<u32, u32> = SimdPrefixHashMap::new();
+        let mut map: HashSortedMap<u32, u32> = HashSortedMap::new();
         // Vacant: and_modify is a no-op, then or_insert(0) runs.
         *map.entry(7).and_modify(|v| *v *= 10).or_insert(1) += 100;
         assert_eq!(map.get(&7), Some(&101));
