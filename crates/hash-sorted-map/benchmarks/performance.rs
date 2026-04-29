@@ -77,19 +77,6 @@ fn bench_insert(c: &mut Criterion) {
         );
     });
 
-    group.bench_function("GxHashMap", |b| {
-        b.iter_batched(
-            || gxhash::HashMap::with_capacity_and_hasher(trigrams.len(), Default::default()),
-            |mut map| {
-                for (i, &key) in trigrams.iter().enumerate() {
-                    map.insert(key, i);
-                }
-                map
-            },
-            BatchSize::SmallInput,
-        );
-    });
-
     group.bench_function("std::HashMap+FNV", |b| {
         b.iter_batched(
             || std::collections::HashMap::with_capacity_and_hasher(trigrams.len(), fnv::FnvBuildHasher::default()),

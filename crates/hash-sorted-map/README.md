@@ -57,8 +57,7 @@ M-series (aarch64).
 | 5 | hashbrown+Identity | 2.74 | +12% |
 | 6 | std::HashMap+FNV | 3.27 | +34% |
 | 7 | AHashMap | 3.22 | +32% |
-| 8 | GxHashMap | 3.69 | +51% |
-| 9 | std::HashMap | 8.49 | +248% |
+| 8 | std::HashMap | 8.49 | +248% |
 
 ### Re-insert same keys (all overwrites)
 
