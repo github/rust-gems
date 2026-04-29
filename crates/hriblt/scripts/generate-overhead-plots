@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+
+## Run overhead evaluation and generate the plots for the documentation.
+
+set -eu
+
+cd "$(dirname "$0")/.."
+
+plots_dir=evaluation/overhead
+tmp_dir=$(mktemp -d)
+trap "rm -rf $tmp_dir" EXIT
+
+# Run benchmark with a good range of diff sizes and enough trials for statistical significance
+# Performs 100 trials per diff size
+cargo run --release --features bin --bin hriblt-bench -- \
+    --trials 20000 \
+    --set-size 1000 \
+    --diff-size '1..=200' \
+    --diff-mode incremental \
+    --tsv \
+    --seed 42 \
+    > "$tmp_dir/overhead.tsv"
+
+# Generate the PDF plot
+evaluation/plot-overhead.r "$tmp_dir/overhead.tsv" "$tmp_dir/overhead.pdf"
+
+# Create output directory
+rm -rf "$plots_dir"
+mkdir -p "$plots_dir"
+
+# Convert PDF to PNG for documentation (requires ghostscript for PDF support)
+# Use 'magick' for ImageMagick v7+, fall back to 'convert' for older versions
+if command -v magick &> /dev/null; then
+    magick -density 300 "$tmp_dir/overhead.pdf" -resize 1024x1024 -alpha remove -alpha off "$plots_dir/overhead.png"
+else
+    convert -density 300 "$tmp_dir/overhead.pdf" -resize 1024x1024 -alpha remove -alpha off "$plots_dir/overhead.png"
+fi
+
+echo "Generated plots in $plots_dir/"
