@@ -65,8 +65,8 @@ impl<K, V, S> HashSortedMap<K, V, S> {
     }
 
     pub fn with_capacity_and_hasher(capacity: usize, hash_builder: S) -> Self {
-        let adjusted = capacity.checked_mul(8).unwrap_or(usize::MAX) / 7;
-        let min_groups = (adjusted / GROUP_SIZE).max(1).next_power_of_two();
+        let adjusted = (capacity as f64 / group_ops::MAX_FILL).ceil() as usize;
+        let min_groups = (adjusted.div_ceil(GROUP_SIZE)).max(1).next_power_of_two();
         let n_bits = min_groups.trailing_zeros().max(1);
         let (groups, num_primary) = Self::alloc_groups(n_bits);
         Self {

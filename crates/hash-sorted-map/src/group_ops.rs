@@ -4,6 +4,13 @@ pub const GROUP_SIZE: usize = 16;
 #[cfg(not(target_arch = "x86_64"))]
 pub const GROUP_SIZE: usize = 8;
 
+/// Maximum safe fill ratio (keys / primary slots) that keeps overflow within
+/// the 12.5% reserve budget at p95 confidence. Derived from simulation.
+#[cfg(target_arch = "x86_64")]
+pub const MAX_FILL: f64 = 0.71;
+#[cfg(not(target_arch = "x86_64"))]
+pub const MAX_FILL: f64 = 0.67;
+
 pub const CTRL_EMPTY: u8 = 0x00;
 
 #[cfg(target_arch = "x86_64")]
