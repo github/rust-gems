@@ -1,2 +1,4 @@
-pub mod group_ops;
-pub mod hash_sorted_map;
+mod group_ops;
+mod hash_sorted_map;
+
+pub use hash_sorted_map::{Entry, HashSortedMap, OccupiedEntry, VacandEntry};
