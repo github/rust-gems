@@ -174,10 +174,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 return None;
             }
             if c == tag && unsafe { group.keys[hint].assume_init_ref() } == &key {
-                let old = std::mem::replace(
-                    unsafe { group.values[hint].assume_init_mut() },
-                    value,
-                );
+                let old = std::mem::replace(unsafe { group.values[hint].assume_init_mut() }, value);
                 return Some(old);
             }
             // Slow path: SIMD scan group for tag match.
@@ -185,10 +182,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
             tag_mask = group_ops::clear_slot(tag_mask, hint);
             while let Some(i) = group_ops::next_match(&mut tag_mask) {
                 if unsafe { group.keys[i].assume_init_ref() } == &key {
-                    let old = std::mem::replace(
-                        unsafe { group.values[i].assume_init_mut() },
-                        value,
-                    );
+                    let old =
+                        std::mem::replace(unsafe { group.values[i].assume_init_mut() }, value);
                     return Some(old);
                 }
             }
@@ -240,9 +235,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
 
             // Fast path: preferred slot.
             let c = group.ctrl[hint];
-            if c == tag
-                && unsafe { group.keys[hint].assume_init_ref() }.borrow() == key
-            {
+            if c == tag && unsafe { group.keys[hint].assume_init_ref() }.borrow() == key {
                 return Some(unsafe { group.values[hint].assume_init_ref() });
             }
 
@@ -338,9 +331,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
         for group in &old_groups[..old_num_groups] {
             let mut full_mask = group_ops::match_full(&group.ctrl);
             while let Some(i) = group_ops::next_match(&mut full_mask) {
-                let hash = self.hash_builder.hash_one(unsafe {
-                    group.keys[i].assume_init_ref()
-                });
+                let hash = self
+                    .hash_builder
+                    .hash_one(unsafe { group.keys[i].assume_init_ref() });
                 self.insert_for_grow(hash, group.keys[i].as_ptr(), group.values[i].as_ptr());
             }
         }
@@ -378,8 +371,16 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
             }
         }
         group.ctrl[hint] = tag;
-        unsafe { group.keys[hint].as_mut_ptr().copy_from_nonoverlapping(key_src, 1) };
-        unsafe { group.values[hint].as_mut_ptr().copy_from_nonoverlapping(value_src, 1) };
+        unsafe {
+            group.keys[hint]
+                .as_mut_ptr()
+                .copy_from_nonoverlapping(key_src, 1)
+        };
+        unsafe {
+            group.values[hint]
+                .as_mut_ptr()
+                .copy_from_nonoverlapping(value_src, 1)
+        };
         self.len += 1;
     }
 }
@@ -402,7 +403,10 @@ enum FindResult<K, V> {
 /// long as no reallocation occurs (the grow path re-walks via the slow path).
 enum Insertion<K, V> {
     /// An empty slot is waiting at `(group, slot)`.
-    Empty { group: *mut Group<K, V>, slot: usize },
+    Empty {
+        group: *mut Group<K, V>,
+        slot: usize,
+    },
     /// The chain is full; allocate a new overflow group and link via `tail`.
     NeedsOverflow { tail: *mut Group<K, V> },
 }
@@ -489,7 +493,6 @@ impl<'a, V> OccupiedEntry<'a, V> {
 }
 
 impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
-
     /// Insert `value` and return a mutable reference to it.
     /// Writes directly to the slot pre-computed during `entry()`; only re-walks
     /// the chain on the rare grow path (where the pre-computed pointers become
@@ -699,11 +702,20 @@ mod tests {
             s.to_string()
         };
         // First call: f runs, inserts "first".
-        assert_eq!(map.get_or_insert_with(1, || make("first")), &mut "first".to_string());
+        assert_eq!(
+            map.get_or_insert_with(1, || make("first")),
+            &mut "first".to_string()
+        );
         // Second call with same key: f does NOT run; returns existing.
-        assert_eq!(map.get_or_insert_with(1, || make("second")), &mut "first".to_string());
+        assert_eq!(
+            map.get_or_insert_with(1, || make("second")),
+            &mut "first".to_string()
+        );
         // New key: f runs.
-        assert_eq!(map.get_or_insert_with(2, || make("third")), &mut "third".to_string());
+        assert_eq!(
+            map.get_or_insert_with(2, || make("third")),
+            &mut "third".to_string()
+        );
         assert_eq!(call_count, 2);
         assert_eq!(map.len(), 2);
     }

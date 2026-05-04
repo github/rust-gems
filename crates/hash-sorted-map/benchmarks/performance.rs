@@ -80,7 +80,12 @@ fn bench_insert(c: &mut Criterion) {
 
     group.bench_function("std::HashMap+FNV", |b| {
         b.iter_batched(
-            || std::collections::HashMap::with_capacity_and_hasher(trigrams.len(), fnv::FnvBuildHasher::default()),
+            || {
+                std::collections::HashMap::with_capacity_and_hasher(
+                    trigrams.len(),
+                    fnv::FnvBuildHasher::default(),
+                )
+            },
             |mut map| {
                 for (i, &key) in trigrams.iter().enumerate() {
                     map.insert(key, i);
@@ -93,10 +98,12 @@ fn bench_insert(c: &mut Criterion) {
 
     group.bench_function("hashbrown+Identity", |b| {
         b.iter_batched(
-            || hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
-                trigrams.len(),
-                Default::default(),
-            ),
+            || {
+                hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
+                    trigrams.len(),
+                    Default::default(),
+                )
+            },
             |mut map| {
                 for (i, &key) in trigrams.iter().enumerate() {
                     map.insert(key, i);
@@ -109,10 +116,12 @@ fn bench_insert(c: &mut Criterion) {
 
     group.bench_function("HashSortedMap", |b| {
         b.iter_batched(
-            || HashSortedMap::with_capacity_and_hasher(
-                trigrams.len(),
-                IdentityBuildHasher::default(),
-            ),
+            || {
+                HashSortedMap::with_capacity_and_hasher(
+                    trigrams.len(),
+                    IdentityBuildHasher::default(),
+                )
+            },
             |mut map| {
                 for (i, &key) in trigrams.iter().enumerate() {
                     map.insert(key, i);
@@ -133,10 +142,11 @@ fn bench_reinsert(c: &mut Criterion) {
     group.bench_function("hashbrown+Identity", |b| {
         b.iter_batched(
             || {
-                let mut map = hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
-                    trigrams.len(),
-                    Default::default(),
-                );
+                let mut map =
+                    hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
+                        trigrams.len(),
+                        Default::default(),
+                    );
                 for (i, &key) in trigrams.iter().enumerate() {
                     map.insert(key, i);
                 }
@@ -183,10 +193,12 @@ fn bench_grow(c: &mut Criterion) {
 
     group.bench_function("hashbrown+Identity", |b| {
         b.iter_batched(
-            || hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
-                128,
-                Default::default(),
-            ),
+            || {
+                hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
+                    128,
+                    Default::default(),
+                )
+            },
             |mut map| {
                 for (i, &key) in trigrams.iter().enumerate() {
                     map.insert(key, i);
@@ -199,10 +211,7 @@ fn bench_grow(c: &mut Criterion) {
 
     group.bench_function("HashSortedMap", |b| {
         b.iter_batched(
-            || HashSortedMap::with_capacity_and_hasher(
-                128,
-                IdentityBuildHasher::default(),
-            ),
+            || HashSortedMap::with_capacity_and_hasher(128, IdentityBuildHasher::default()),
             |mut map| {
                 for (i, &key) in trigrams.iter().enumerate() {
                     map.insert(key, i);
@@ -227,10 +236,12 @@ fn bench_count(c: &mut Criterion) {
 
     group.bench_function("hashbrown+Identity entry()", |b| {
         b.iter_batched(
-            || hashbrown::HashMap::<u32, u32, IdentityBuildHasher>::with_capacity_and_hasher(
-                trigrams.len(),
-                Default::default(),
-            ),
+            || {
+                hashbrown::HashMap::<u32, u32, IdentityBuildHasher>::with_capacity_and_hasher(
+                    trigrams.len(),
+                    Default::default(),
+                )
+            },
             |mut map| {
                 for &key in &counted_trigrams {
                     *map.entry(key).or_insert(0) += 1;
@@ -243,10 +254,12 @@ fn bench_count(c: &mut Criterion) {
 
     group.bench_function("HashSortedMap get_or_default", |b| {
         b.iter_batched(
-            || HashSortedMap::<u32, u32, _>::with_capacity_and_hasher(
-                trigrams.len(),
-                IdentityBuildHasher::default(),
-            ),
+            || {
+                HashSortedMap::<u32, u32, _>::with_capacity_and_hasher(
+                    trigrams.len(),
+                    IdentityBuildHasher::default(),
+                )
+            },
             |mut map| {
                 for &key in &counted_trigrams {
                     *map.get_or_default(key) += 1;
@@ -259,10 +272,12 @@ fn bench_count(c: &mut Criterion) {
 
     group.bench_function("HashSortedMap entry().or_default()", |b| {
         b.iter_batched(
-            || HashSortedMap::<u32, u32, _>::with_capacity_and_hasher(
-                trigrams.len(),
-                IdentityBuildHasher::default(),
-            ),
+            || {
+                HashSortedMap::<u32, u32, _>::with_capacity_and_hasher(
+                    trigrams.len(),
+                    IdentityBuildHasher::default(),
+                )
+            },
             |mut map| {
                 for &key in &counted_trigrams {
                     *map.entry(key).or_default() += 1;
@@ -276,5 +291,11 @@ fn bench_count(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_insert, bench_reinsert, bench_grow, bench_count);
+criterion_group!(
+    benches,
+    bench_insert,
+    bench_reinsert,
+    bench_grow,
+    bench_count
+);
 criterion_main!(benches);

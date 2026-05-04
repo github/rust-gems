@@ -23,7 +23,7 @@ pub type Mask = u64;
 #[cfg(target_arch = "x86_64")]
 mod arch {
     #[cfg(target_arch = "x86")]
-    use core::arch::x86 as x86;
+    use core::arch::x86;
     #[cfg(target_arch = "x86_64")]
     use core::arch::x86_64 as x86;
 
