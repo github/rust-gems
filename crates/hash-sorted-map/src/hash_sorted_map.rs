@@ -49,6 +49,12 @@ pub struct HashSortedMap<K, V, S = RandomState> {
     hash_builder: S,
 }
 
+impl<K: Hash + Eq, V> Default for HashSortedMap<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K: Hash + Eq, V> HashSortedMap<K, V> {
     pub fn new() -> Self {
         Self::with_capacity_and_hasher(0, RandomState::new())
@@ -96,6 +102,10 @@ impl<K, V, S> HashSortedMap<K, V, S> {
 
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 }
 
@@ -533,12 +543,12 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
 /// capacity check.)
 #[cold]
 #[inline(never)]
-fn insert_after_grow<'a, K: Hash + Eq, V, S: BuildHasher>(
-    map: &'a mut HashSortedMap<K, V, S>,
+fn insert_after_grow<K: Hash + Eq, V, S: BuildHasher>(
+    map: &mut HashSortedMap<K, V, S>,
     hash: u64,
     key: K,
     value: V,
-) -> &'a mut V {
+) -> &mut V {
     map.grow();
     match map.find_or_insertion_slot(hash, &key) {
         FindResult::Vacant(Insertion::Empty { group, slot }) => {

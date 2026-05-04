@@ -1,4 +1,5 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use hash_sorted_map::HashSortedMap;
 use hash_sorted_map_benchmarks::{random_trigram_hashes, IdentityBuildHasher};
 
 fn trigrams() -> Vec<u32> {
@@ -108,7 +109,7 @@ fn bench_insert(c: &mut Criterion) {
 
     group.bench_function("HashSortedMap", |b| {
         b.iter_batched(
-            || hash_sorted_map::hash_sorted_map::HashSortedMap::with_capacity_and_hasher(
+            || HashSortedMap::with_capacity_and_hasher(
                 trigrams.len(),
                 IdentityBuildHasher::default(),
             ),
@@ -154,7 +155,7 @@ fn bench_reinsert(c: &mut Criterion) {
     group.bench_function("HashSortedMap", |b| {
         b.iter_batched(
             || {
-                let mut map = hash_sorted_map::hash_sorted_map::HashSortedMap::with_capacity_and_hasher(
+                let mut map = HashSortedMap::with_capacity_and_hasher(
                     trigrams.len(),
                     IdentityBuildHasher::default(),
                 );
@@ -198,7 +199,7 @@ fn bench_grow(c: &mut Criterion) {
 
     group.bench_function("HashSortedMap", |b| {
         b.iter_batched(
-            || hash_sorted_map::hash_sorted_map::HashSortedMap::with_capacity_and_hasher(
+            || HashSortedMap::with_capacity_and_hasher(
                 128,
                 IdentityBuildHasher::default(),
             ),
@@ -242,7 +243,7 @@ fn bench_count(c: &mut Criterion) {
 
     group.bench_function("HashSortedMap get_or_default", |b| {
         b.iter_batched(
-            || hash_sorted_map::hash_sorted_map::HashSortedMap::<u32, u32, _>::with_capacity_and_hasher(
+            || HashSortedMap::<u32, u32, _>::with_capacity_and_hasher(
                 trigrams.len(),
                 IdentityBuildHasher::default(),
             ),
@@ -258,7 +259,7 @@ fn bench_count(c: &mut Criterion) {
 
     group.bench_function("HashSortedMap entry().or_default()", |b| {
         b.iter_batched(
-            || hash_sorted_map::hash_sorted_map::HashSortedMap::<u32, u32, _>::with_capacity_and_hasher(
+            || HashSortedMap::<u32, u32, _>::with_capacity_and_hasher(
                 trigrams.len(),
                 IdentityBuildHasher::default(),
             ),
