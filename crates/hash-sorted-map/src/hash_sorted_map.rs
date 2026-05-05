@@ -589,6 +589,8 @@ impl<K, V, S> Drop for HashSortedMap<K, V, S> {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::{BuildHasher, Hasher};
+
     use super::*;
 
     #[test]
@@ -771,5 +773,38 @@ mod tests {
         // Occupied: and_modify runs, or_insert is skipped.
         *map.entry(7).and_modify(|v| *v *= 2).or_insert(99) += 1;
         assert_eq!(map.get(&7), Some(&203));
+    }
+
+    /// Degenerate hasher that returns a fixed hash code, for forcing collisions.
+    struct FixedHasher(u64);
+
+    impl Hasher for FixedHasher {
+        fn finish(&self) -> u64 {
+            self.0
+        }
+        fn write(&mut self, _bytes: &[u8]) {}
+    }
+
+    #[derive(Clone)]
+    struct FixedState(u64);
+
+    impl BuildHasher for FixedState {
+        type Hasher = FixedHasher;
+        fn build_hasher(&self) -> FixedHasher {
+            FixedHasher(self.0)
+        }
+    }
+
+    #[test]
+    fn test_collisions() {
+        // Tiny initial capacity + all collisions
+        let mut m = HashSortedMap::with_capacity_and_hasher(1, FixedState(0));
+        for i in 0..200u32 {
+            m.insert(i, i);
+        }
+        assert_eq!(m.len(), 200);
+        for i in 0..200u32 {
+            assert_eq!(m.get(&i), Some(&i));
+        }
     }
 }
