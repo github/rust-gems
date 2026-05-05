@@ -374,13 +374,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
         unsafe {
             group.keys[hint]
                 .as_mut_ptr()
-                .copy_from_nonoverlapping(key_src, 1)
-        };
-        unsafe {
+                .copy_from_nonoverlapping(key_src, 1);
             group.values[hint]
                 .as_mut_ptr()
-                .copy_from_nonoverlapping(value_src, 1)
-        };
+                .copy_from_nonoverlapping(value_src, 1);
+        }
         self.len += 1;
     }
 }
