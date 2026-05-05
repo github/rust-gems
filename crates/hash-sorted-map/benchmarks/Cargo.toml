@@ -14,8 +14,8 @@ test = false
 
 [dependencies]
 hash-sorted-map = { path = ".." }
-criterion = "0.7"
-rand = "0.9"
+criterion = "0.8"
+rand = "0.10"
 rustc-hash = "2"
 ahash = "0.8"
 hashbrown = "0.15"

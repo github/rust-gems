@@ -1,6 +1,6 @@
 use std::hash::{BuildHasherDefault, Hasher};
 
-use rand::Rng;
+use rand::RngExt;
 
 const ARBITRARY0: u64 = 0x243f6a8885a308d3;
 

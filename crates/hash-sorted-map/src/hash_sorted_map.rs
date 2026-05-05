@@ -2,6 +2,7 @@ use core::mem::MaybeUninit;
 use std::borrow::Borrow;
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hash};
+use std::marker::PhantomData;
 
 use super::group_ops::{self, CTRL_EMPTY, GROUP_SIZE};
 
@@ -150,6 +151,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 value: unsafe { &mut *ptr },
             }),
             FindResult::Vacant(insertion) => Entry::Vacant(VacantEntry {
+                phantom: PhantomData,
                 map: self,
                 hash,
                 key,
@@ -364,7 +366,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 group = &mut self.groups[overflow as usize];
             } else {
                 let new_gi = self.num_groups as usize;
-                self.groups[gi].overflow = new_gi as u32;
+                group.overflow = new_gi as u32;
                 self.num_groups += 1;
                 group = &mut self.groups[new_gi];
                 break;
@@ -505,30 +507,34 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
         let (group_ptr, slot) = match self.insertion {
             Insertion::Empty { group, slot } => (group, slot),
             Insertion::NeedsOverflow { tail } => {
-                if map.num_groups as usize == map.groups.len() {
-                    return insert_after_grow(map, hash, key, value);
-                }
-                let new_gi = map.num_groups as usize;
-                map.num_groups += 1;
-                // SAFETY: `tail` was obtained from `&mut self.groups[..]` and
-                // remains valid because no reallocation occurred between
-                // `entry()` and now (we hold the only `&mut self`).
+                let (new_gi, new_group) = unsafe {
+                    let map = &mut *map;
+                    if map.num_groups as usize == map.groups.len() {
+                        return insert_after_grow(map, hash, key, value);
+                    }
+                    let new_gi = map.num_groups as usize;
+                    map.num_groups += 1;
+                    let new_group: *mut Group<K, V> = &mut map.groups[new_gi];
+                    (new_gi, new_group)
+                };
                 unsafe {
+                    // SAFETY: `tail` was obtained from `&mut self.groups[..]` and
+                    // remains valid because no reallocation occurred between
+                    // `entry()` and now (we hold the only `&mut self`).
                     (*tail).overflow = new_gi as u32;
                 }
-                let new_group: *mut Group<K, V> = &mut map.groups[new_gi];
                 (new_group, slot_hint(hash))
             }
         };
 
         let tag = tag(hash);
-        // SAFETY: `group_ptr` points into `map.groups` and is valid for `'a`.
         unsafe {
+            (*map).len += 1;
+            // SAFETY: `group_ptr` points into `map.groups` and is valid for `'a`.
             let group = &mut *group_ptr;
             group.ctrl[slot] = tag;
             group.keys[slot] = MaybeUninit::new(key);
             group.values[slot] = MaybeUninit::new(value);
-            map.len += 1;
             group.values[slot].assume_init_mut()
         }
     }
