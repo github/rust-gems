@@ -425,7 +425,8 @@ pub struct OccupiedEntry<'a, V> {
 /// View into a vacant entry. Holds the borrow of the map plus the hash, key,
 /// and pre-computed insertion slot.
 pub struct VacantEntry<'a, K, V, S> {
-    map: &'a mut HashSortedMap<K, V, S>,
+    phantom: PhantomData<&'a mut HashSortedMap<K, V, S>>,
+    map: *mut HashSortedMap<K, V, S>,
     hash: u64,
     key: K,
     insertion: Insertion<K, V>,
