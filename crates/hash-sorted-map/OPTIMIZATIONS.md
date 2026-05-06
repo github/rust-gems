@@ -20,8 +20,8 @@ experimental results that guided the current design.
 │                   hashbrown Swiss Table                          │
 │                                                                  │
 │  Single contiguous allocation (SoA):                             │
-│  [Padding] [T_n ... T_1  T_0] [CT_0 CT_1 ... CT_n] [CT_extra]  │
-│                data               control bytes      (mirrored) │
+│  [Padding] [T_n ... T_1  T_0] [CT_0 CT_1 ... CT_n] [CT_extra]    │
+│                data               control bytes    (mirrored)    │
 │                                                                  │
 │  • Open addressing, triangular probing                           │
 │  • 16-byte groups (SSE2) or 8-byte groups (NEON/generic)         │
@@ -32,7 +32,7 @@ experimental results that guided the current design.
 │                      HashSortedMap                               │
 │                                                                  │
 │  Vec<Group<K,V>> where each Group (AoS):                         │
-│  { ctrl: [u8; 8], keys: [MaybeUninit<K>; 8],                    │
+│  { ctrl: [u8; 8], keys: [MaybeUninit<K>; 8],                     │
 │    values: [MaybeUninit<V>; 8], overflow: u32 }                  │
 │                                                                  │
 │  • Overflow chaining (linked groups)                             │
@@ -58,8 +58,9 @@ modest because the slot-hint fast path often skips the group scan entirely.
 
 ### 2. Open Addressing with Triangular Probing ❌ Rejected
 
-Tested an open-addressing variant (`OpenHashSortedMap`) with triangular
-probing over AoS groups.
+This is not really an option for this hash map, since it would prevent efficient sorting.
+Additionally, we didn't observe any performance improvement in comparison to the linked overflow buffer approach.
+The biggest benefit of triangular probing is that it allows a much higher load factor, i.e. reduces memory consumption which isn't our main concern though.
 
 **Benchmark result**: **40% slower** than overflow chaining. With the AoS
 layout, each group is ~112 bytes, so probing to the next group jumps over
@@ -78,12 +79,9 @@ SoA is worse than AoS for this use case.
 
 ### 4. Capacity Sizing ✅ Implemented
 
-The original `with_capacity` allocated `capacity / 8` groups, giving ~100%
-slot utilization. hashbrown uses `capacity * 8 / 7`, giving ~50% load.
+Without the correct sizing, there was always the penality of a grow operation.
 
-**Fix**: Changed to `capacity * 8 / 7` (87.5% max load factor), matching
-hashbrown. This was the **single biggest improvement** — HashSortedMap went
-from 2× slower to matching hashbrown.
+**Fix**: Changed to ~70% max load factor. This was the **single biggest improvement** — HashSortedMap went from 2× slower to matching hashbrown.
 
 ### 5. Optimized Growth ✅ Implemented
 
@@ -118,25 +116,22 @@ if ctrl[hint] == tag && keys[hint] == key { /* direct hit */ }
 ```
 
 hashbrown does **not** have this optimization — it always does a full SIMD
-group scan. At ~50% load, the hint hits ~58% of the time, avoiding the scan
-entirely.
+group scan. The reason why the performance is different is probably due to the different overflow strategies and the different load factors.
 
 ### 8. Overflow Reserve Sizing ✅ Validated
 
 Tested overflow reserves from 0% to 100% of primary groups:
 
 | Reserve | Growth scenario (µs) |
-|---------|---------------------|
-| m/8 (12.5%, default) | 8.04 |
-| m/4 (25%) | 8.33 |
-| m/2 (50%) | 8.93 |
-| m/1 (100%) | 10.31 |
-| 0 (grow immediately) | 6.96 |
+|---------|----------------------|
+| m/8 (12.5%, default) |  8.04   |
+| m/4 (25%)            |  8.33   |
+| m/2 (50%)            |  8.93   |
+| m/1 (100%)           | 10.31   |
+| 0 (grow immediately) |  6.96   |
 
 **Conclusion**: Smaller reserves are faster — growing early is cheaper than
-traversing overflow chains. The `m/8` default implicitly enforces ~62.5% max
-load, which aligns with the mathematical analysis (Poisson model, 3σ
-confidence).
+traversing overflow chains.
 
 ### 9. IdentityHasher Fix ✅ Implemented
 
@@ -152,25 +147,25 @@ entropy in both halves. Also changed trigram generation to use
 
 ## Optimizations Not Implemented (and Why)
 
-| Optimization | Reason |
-|---|---|
+| Optimization                    | Reason                                   |
+|---------------------------------|------------------------------------------|
 | **Tombstone / DELETED support** | Insertion-only map — no deletions needed |
-| **In-place rehashing** | No tombstones to reclaim |
-| **Control byte mirroring** | Not needed with overflow chaining (no wrap-around) |
-| **Custom allocator support** | Out of scope for benchmarking |
-| **Over-allocation utilization** | Uses `Vec` (no raw allocator control) |
+| **In-place rehashing**          | No tombstones to reclaim                 |
+| **Control byte mirroring**      | Not needed with overflow chaining (no wrap-around) |
+| **Custom allocator support**    | Out of scope for benchmarking            |
+| **Over-allocation utilization** | Uses `Vec` (no raw allocator control)    |
 
 ---
 
 ## Summary of Impact
 
-| Change | Effect on insert time |
-|---|---|
-| Capacity sizing fix (`*8/7`) | **−50%** (biggest win) |
-| Optimized growth path | **−10%** on growth scenarios |
-| SIMD group scanning | **−5%** |
-| Branch hints (scalar only) | **−2–6%** |
-| IdentityHasher fix | Enabled fair comparison |
+| Change                     | Effect on insert time        |
+|----------------------------|------------------------------|
+| Capacity sizing fix        | **−50%** (biggest win)       |
+| Optimized growth path      | **−10%** on growth scenarios |
+| SIMD group scanning        | **−5%**                      |
+| Branch hints (scalar only) | **−2–6%**                    |
+| IdentityHasher fix         | Enabled fair comparison      |
 
 The current HashSortedMap **matches hashbrown+FxHash** on pre-sized inserts,
 **beats all hashbrown variants** on overwrites, and has **2× faster growth**.
