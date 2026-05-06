@@ -291,11 +291,114 @@ fn bench_count(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_iter(c: &mut Criterion) {
+    let trigrams = trigrams();
+
+    let mut group = c.benchmark_group("iter_1000_trigrams");
+
+    group.bench_function("hashbrown+Identity iter()", |b| {
+        b.iter_batched(
+            || {
+                let mut map =
+                    hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
+                        trigrams.len(),
+                        Default::default(),
+                    );
+                for (i, &key) in trigrams.iter().enumerate() {
+                    map.insert(key, i);
+                }
+                map
+            },
+            |map| {
+                let mut sum = 0usize;
+                for (&k, &v) in &map {
+                    sum = sum.wrapping_add(v).wrapping_add(k as usize);
+                }
+                sum
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("HashSortedMap iter()", |b| {
+        b.iter_batched(
+            || {
+                let mut map = HashSortedMap::with_capacity_and_hasher(
+                    trigrams.len(),
+                    IdentityBuildHasher::default(),
+                );
+                for (i, &key) in trigrams.iter().enumerate() {
+                    map.insert(key, i);
+                }
+                map
+            },
+            |map| {
+                let mut sum = 0usize;
+                for (&k, &v) in &map {
+                    sum = sum.wrapping_add(v).wrapping_add(k as usize);
+                }
+                sum
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("hashbrown+Identity into_iter()", |b| {
+        b.iter_batched(
+            || {
+                let mut map =
+                    hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
+                        trigrams.len(),
+                        Default::default(),
+                    );
+                for (i, &key) in trigrams.iter().enumerate() {
+                    map.insert(key, i);
+                }
+                map
+            },
+            |map| {
+                let mut sum = 0usize;
+                for (k, v) in map {
+                    sum = sum.wrapping_add(v).wrapping_add(k as usize);
+                }
+                sum
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("HashSortedMap into_iter()", |b| {
+        b.iter_batched(
+            || {
+                let mut map = HashSortedMap::with_capacity_and_hasher(
+                    trigrams.len(),
+                    IdentityBuildHasher::default(),
+                );
+                for (i, &key) in trigrams.iter().enumerate() {
+                    map.insert(key, i);
+                }
+                map
+            },
+            |map| {
+                let mut sum = 0usize;
+                for (k, v) in map {
+                    sum = sum.wrapping_add(v).wrapping_add(k as usize);
+                }
+                sum
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_insert,
     bench_reinsert,
     bench_grow,
-    bench_count
+    bench_count,
+    bench_iter
 );
 criterion_main!(benches);

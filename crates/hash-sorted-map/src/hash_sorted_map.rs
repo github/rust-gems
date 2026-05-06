@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 
 use super::group_ops::{self, CTRL_EMPTY, GROUP_SIZE};
 
-const NO_OVERFLOW: u32 = u32::MAX;
+pub(crate) const NO_OVERFLOW: u32 = u32::MAX;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -20,11 +20,11 @@ fn slot_hint(hash: u64) -> usize {
     ((hash >> 7) & (GROUP_SIZE as u64 - 1)) as usize
 }
 
-struct Group<K, V> {
-    ctrl: [u8; GROUP_SIZE],
-    keys: [MaybeUninit<K>; GROUP_SIZE],
-    values: [MaybeUninit<V>; GROUP_SIZE],
-    overflow: u32,
+pub(crate) struct Group<K, V> {
+    pub(crate) ctrl: [u8; GROUP_SIZE],
+    pub(crate) keys: [MaybeUninit<K>; GROUP_SIZE],
+    pub(crate) values: [MaybeUninit<V>; GROUP_SIZE],
+    pub(crate) overflow: u32,
 }
 
 impl<K, V> Group<K, V> {
@@ -43,10 +43,10 @@ impl<K, V> Group<K, V> {
 /// Uses NEON on aarch64, SSE2 on x86_64, scalar fallback elsewhere.
 /// Generic over key type `K`, value type `V`, and hash builder `S`.
 pub struct HashSortedMap<K, V, S = RandomState> {
-    groups: Box<[Group<K, V>]>,
-    num_groups: u32,
-    n_bits: u32,
-    len: usize,
+    pub(crate) groups: Box<[Group<K, V>]>,
+    pub(crate) num_groups: u32,
+    pub(crate) n_bits: u32,
+    pub(crate) len: usize,
     hash_builder: S,
 }
 
@@ -591,6 +591,8 @@ impl<K, V, S> Drop for HashSortedMap<K, V, S> {
         }
     }
 }
+
+// Re-export `CTRL_EMPTY` for the `iter` module.
 
 #[cfg(test)]
 mod tests {
