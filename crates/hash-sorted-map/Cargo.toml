@@ -1,0 +1,10 @@
+[package]
+name = "hash-sorted-map"
+authors = ["The blackbird team <support@github.com>"]
+version = "0.1.0"
+edition = "2021"
+description = "A hash map with hash-ordered iteration and linear-time merge, designed for search-index term maps."
+repository = "https://github.com/github/rust-gems"
+license = "MIT"
+keywords = ["hashmap", "sorted", "merge", "simd"]
+categories = ["algorithms", "data-structures"]

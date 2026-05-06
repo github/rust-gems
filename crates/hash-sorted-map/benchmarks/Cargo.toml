@@ -1,0 +1,23 @@
+[package]
+name = "hash-sorted-map-benchmarks"
+edition = "2021"
+
+[lib]
+path = "lib.rs"
+test = false
+
+[[bench]]
+name = "performance"
+path = "performance.rs"
+harness = false
+test = false
+
+[dependencies]
+hash-sorted-map = { path = ".." }
+criterion = "0.8"
+rand = "0.10"
+rustc-hash = "2"
+ahash = "0.8"
+hashbrown = "0.15"
+foldhash = "0.1"
+fnv = "1"
