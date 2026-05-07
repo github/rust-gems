@@ -660,12 +660,9 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
 /// Cold path: the chain was full, the table is at capacity, and we need to
 /// grow before inserting. Re-walks via the slow path after grow.
 ///
-/// After `grow()` doubles `num_primary` (`n_bits += 1`), our key's new
-/// primary group can have at most ~half the old chain's keys, so hitting
-/// `NeedsOverflow` again would require `GROUP_SIZE` keys to all collide on
-/// one extra bit of hash — essentially impossible for any reasonable hash.
-/// (`insert_for_grow` relies on the same assumption to skip its own
-/// capacity check.)
+/// With clustered hash functions (e.g. identity hashing), the new primary
+/// group may still be full after grow, so we handle `NeedsOverflow` by
+/// allocating an overflow group.
 #[cold]
 #[inline(never)]
 fn insert_after_grow<K: Hash + Eq, V, S: BuildHasher>(
@@ -675,9 +672,9 @@ fn insert_after_grow<K: Hash + Eq, V, S: BuildHasher>(
     value: V,
 ) -> &mut V {
     map.grow();
+    let tag = tag(hash);
     match map.find_or_insertion_slot(hash, &key) {
         FindResult::Vacant(Insertion::Empty { group, slot }) => {
-            let tag = tag(hash);
             // SAFETY: `group` points into `map.container.groups` and is valid for `'a`.
             unsafe {
                 let g = &mut *group;
@@ -688,10 +685,28 @@ fn insert_after_grow<K: Hash + Eq, V, S: BuildHasher>(
                 g.values[slot].assume_init_mut()
             }
         }
-        // After grow, the new primary group for `key` cannot be full (see
-        // function docs), and the key wasn't in the table before grow.
-        FindResult::Vacant(Insertion::NeedsOverflow { .. }) | FindResult::Found(_) => {
-            unreachable!("post-grow walk must hit an empty slot")
+        FindResult::Vacant(Insertion::NeedsOverflow { tail }) => {
+            // Primary group chain is full even after grow (possible with
+            // clustered identity hashes). Allocate an overflow group.
+            debug_assert!(
+                (map.container.num_groups as usize) < map.container.groups.len(),
+                "overflow pool exhausted right after grow"
+            );
+            let new_gi = map.container.num_groups as usize;
+            map.container.num_groups += 1;
+            unsafe {
+                (*tail).overflow = new_gi as u32;
+            }
+            let slot = slot_hint(hash);
+            let group = &mut map.container.groups[new_gi];
+            group.ctrl[slot] = tag;
+            group.keys[slot] = MaybeUninit::new(key);
+            group.values[slot] = MaybeUninit::new(value);
+            map.container.len += 1;
+            unsafe { group.values[slot].assume_init_mut() }
+        }
+        FindResult::Found(_) => {
+            unreachable!("key was not in the table before grow")
         }
     }
 }

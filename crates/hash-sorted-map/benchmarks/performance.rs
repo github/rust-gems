@@ -2,7 +2,8 @@ use std::hash::BuildHasher;
 
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use hash_sorted_map::HashSortedMap;
-use hash_sorted_map_benchmarks::{random_trigram_hashes, IdentityBuildHasher};
+use hash_sorted_map_benchmarks::{folded_multiply, random_trigram_hashes, IdentityBuildHasher};
+use rand::RngExt;
 
 fn trigrams() -> Vec<u32> {
     random_trigram_hashes(1000)
@@ -428,6 +429,154 @@ fn bench_sort(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_merge_sort(c: &mut Criterion) {
+    const NUM_MAPS: usize = 100;
+    const KEYS_PER_MAP: usize = 100_000;
+
+    // Pre-generate 100 key vectors with random u32 values scrambled via folded_multiply.
+    let maps_data: Vec<Vec<u32>> = (0..NUM_MAPS)
+        .map(|_| {
+            let mut rng = rand::rng();
+            (0..KEYS_PER_MAP)
+                .map(|_| folded_multiply(rng.random_range(0..1_000_000u32) as u64, 0x243f6a8885a308d3) as u32)
+                .collect()
+        })
+        .collect();
+
+    let hasher = IdentityBuildHasher::default();
+    let mut group = c.benchmark_group("merge_100_maps_sorted");
+    group.sample_size(10);
+
+    // ── 1. HashSortedMap: merge all, then sort_by_hash ──────────────
+    group.bench_function("HashSortedMap merge + sort_by_hash", |b| {
+        b.iter(|| {
+            let mut map: HashSortedMap<u32, u32, _> =
+                HashSortedMap::with_hasher(IdentityBuildHasher::default());
+            for keys in &maps_data {
+                for &key in keys {
+                    *map.entry(key).or_default() += 1u32;
+                }
+            }
+            map.sort_by_hash()
+        });
+    });
+
+    // ── 2. K-way merge over pre-sorted vectors ──────────────────────
+    group.bench_function("k-way merge sorted vecs", |b| {
+        use itertools::Itertools;
+
+        b.iter(|| {
+            // Phase 1: build per-map sorted (hash, key, count) vectors.
+            let sorted_vecs: Vec<Vec<(u64, u32, u32)>> = maps_data
+                .iter()
+                .map(|keys| {
+                    let mut counts = std::collections::HashMap::<u32, u32, IdentityBuildHasher>::with_hasher(IdentityBuildHasher::default());
+                    for &key in keys {
+                        *counts.entry(key).or_default() += 1;
+                    }
+                    let mut vec: Vec<(u64, u32, u32)> = counts
+                        .into_iter()
+                        .map(|(k, v)| (hasher.hash_one(k), k, v))
+                        .collect();
+                    vec.sort_unstable_by_key(|&(h, _, _)| h);
+                    vec
+                })
+                .collect();
+
+            // Phase 2: k-merge + group_by to aggregate counts.
+            let result: Vec<(u32, u32)> = sorted_vecs
+                .into_iter()
+                .map(|v| v.into_iter())
+                .kmerge_by(|a, b| a.0 <= b.0)
+                .chunk_by(|&(_, key, _)| key)
+                .into_iter()
+                .map(|(key, group)| (key, group.map(|(_, _, c)| c).sum()))
+                .collect();
+            result
+        });
+    });
+
+    // ── 3. hashbrown HashMap merge, then sort into Vec ──────────────
+    group.bench_function("hashbrown merge + Vec sort", |b| {
+        b.iter(|| {
+            let mut map =
+                hashbrown::HashMap::<u32, u32, IdentityBuildHasher>::with_hasher(IdentityBuildHasher::default());
+            for keys in &maps_data {
+                for &key in keys {
+                    *map.entry(key).or_default() += 1;
+                }
+            }
+            let mut vec: Vec<(u32, u32)> = map.into_iter().collect();
+            vec.sort_unstable_by_key(|&(key, _)| hasher.hash_one(key));
+            vec
+        });
+    });
+
+    // ── 4. hashbrown HashMap merge only (no sort) ───────────────────
+    group.bench_function("hashbrown merge", |b| {
+        b.iter(|| {
+            let mut map =
+                hashbrown::HashMap::<u32, u32, IdentityBuildHasher>::with_hasher(IdentityBuildHasher::default());
+            for keys in &maps_data {
+                for &key in keys {
+                    *map.entry(key).or_default() += 1;
+                }
+            }
+            map
+        });
+    });
+
+    // ── 5. HashSortedMap merge only (no sort) ───────────────────────
+    group.bench_function("HashSortedMap merge", |b| {
+        b.iter(|| {
+            let mut map: HashSortedMap<u32, u32, _> =
+                HashSortedMap::with_hasher(IdentityBuildHasher::default());
+            for keys in &maps_data {
+                for &key in keys {
+                    *map.entry(key).or_default() += 1u32;
+                }
+            }
+            map
+        });
+    });
+
+    // ── 6. hashbrown presized merge only ────────────────────────────
+    group.bench_function("hashbrown merge presized", |b| {
+        b.iter(|| {
+            let mut map =
+                hashbrown::HashMap::<u32, u32, IdentityBuildHasher>::with_capacity_and_hasher(
+                    1_000_000,
+                    IdentityBuildHasher::default(),
+                );
+            for keys in &maps_data {
+                for &key in keys {
+                    *map.entry(key).or_default() += 1;
+                }
+            }
+            map
+        });
+    });
+
+    // ── 7. HashSortedMap presized merge only ─────────────────────────
+    group.bench_function("HashSortedMap merge presized", |b| {
+        b.iter(|| {
+            let mut map: HashSortedMap<u32, u32, _> =
+                HashSortedMap::with_capacity_and_hasher(
+                    1_000_000,
+                    IdentityBuildHasher::default(),
+                );
+            for keys in &maps_data {
+                for &key in keys {
+                    *map.entry(key).or_default() += 1u32;
+                }
+            }
+            map
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_insert,
@@ -435,6 +584,7 @@ criterion_group!(
     bench_grow,
     bench_count,
     bench_iter,
-    bench_sort
+    bench_sort,
+    bench_merge_sort
 );
 criterion_main!(benches);
