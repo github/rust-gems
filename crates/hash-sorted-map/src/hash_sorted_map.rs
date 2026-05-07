@@ -4,9 +4,11 @@ use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
 
+use super::container::HashSortedContainer;
+use super::group::Group;
 use super::group_ops::{self, CTRL_EMPTY, GROUP_SIZE};
 
-pub(crate) const NO_OVERFLOW: u32 = u32::MAX;
+pub(crate) use super::group::NO_OVERFLOW;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -20,33 +22,16 @@ fn slot_hint(hash: u64) -> usize {
     ((hash >> 7) & (GROUP_SIZE as u64 - 1)) as usize
 }
 
-pub(crate) struct Group<K, V> {
-    pub(crate) ctrl: [u8; GROUP_SIZE],
-    pub(crate) keys: [MaybeUninit<K>; GROUP_SIZE],
-    pub(crate) values: [MaybeUninit<V>; GROUP_SIZE],
-    pub(crate) overflow: u32,
-}
-
-impl<K, V> Group<K, V> {
-    fn new() -> Self {
-        Self {
-            ctrl: [CTRL_EMPTY; GROUP_SIZE],
-            keys: [const { MaybeUninit::uninit() }; GROUP_SIZE],
-            values: [const { MaybeUninit::uninit() }; GROUP_SIZE],
-            overflow: NO_OVERFLOW,
-        }
-    }
-}
+// ────────────────────────────────────────────────────────────────────────
+// HashSortedMap — wraps a container with a hash builder
+// ────────────────────────────────────────────────────────────────────────
 
 /// Insertion-only hash map with SIMD group scanning.
 ///
 /// Uses NEON on aarch64, SSE2 on x86_64, scalar fallback elsewhere.
 /// Generic over key type `K`, value type `V`, and hash builder `S`.
 pub struct HashSortedMap<K, V, S = RandomState> {
-    pub(crate) groups: Box<[Group<K, V>]>,
-    pub(crate) num_groups: u32,
-    pub(crate) n_bits: u32,
-    pub(crate) len: usize,
+    pub(crate) container: HashSortedContainer<K, V>,
     hash_builder: S,
 }
 
@@ -75,42 +60,93 @@ impl<K, V, S> HashSortedMap<K, V, S> {
         let adjusted = (capacity as f64 / group_ops::MAX_FILL).ceil() as usize;
         let min_groups = (adjusted.div_ceil(GROUP_SIZE)).max(1).next_power_of_two();
         let n_bits = min_groups.trailing_zeros().max(1);
-        let (groups, num_primary) = Self::alloc_groups(n_bits);
         Self {
-            groups,
-            num_groups: num_primary,
-            n_bits,
-            len: 0,
+            container: HashSortedContainer::new(n_bits),
             hash_builder,
         }
     }
 
-    /// Allocate a fully default-initialized boxed slice sized for `n_bits` primary groups
-    /// plus the standard 12.5% overflow reserve. Returns the slice and the number of
-    /// primary groups (which is also the initial in-use count).
-    fn alloc_groups(n_bits: u32) -> (Box<[Group<K, V>]>, u32) {
-        let num_primary = 1usize << n_bits;
-        let total = num_primary + num_primary / 8 + 1;
-        let mut groups: Vec<Group<K, V>> = Vec::with_capacity(total);
-        groups.resize_with(total, Group::new);
-        (groups.into_boxed_slice(), num_primary as u32)
-    }
-
-    #[inline]
-    fn group_index(&self, hash: u64) -> usize {
-        (hash >> (64 - self.n_bits)) as usize
-    }
-
     pub fn len(&self) -> usize {
-        self.len
+        self.container.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.container.len == 0
+    }
+
+    /// Consume the map, returning the underlying container and hash builder.
+    pub fn into_parts(self) -> (HashSortedContainer<K, V>, S) {
+        // Prevent Drop from running on self — we're moving fields out.
+        let this = std::mem::ManuallyDrop::new(self);
+        unsafe {
+            let container = std::ptr::read(&this.container);
+            let hash_builder = std::ptr::read(&this.hash_builder);
+            (container, hash_builder)
+        }
     }
 }
 
 impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
+    /// Sort all entries within each primary group chain by their hash value.
+    ///
+    /// After sorting, iteration visits entries in hash order within each
+    /// primary group (and since primary groups are visited in group-index
+    /// order, the overall iteration is in full hash order).
+    ///
+    /// This is a one-time operation intended to be called before iteration
+    /// or serialization. After sorting, lookups via `get()` won't work
+    /// correctly because the preferred `slot_hint` position might now be empty
+    /// breaking an invariant.
+    pub fn sort_by_hash(&mut self) {
+        let num_primary = 1usize << self.container.n_bits;
+        let mut buf: Vec<(u64, K, V)> = Vec::new();
+        for primary_gi in 0..num_primary {
+            buf.clear();
+            // Extract all entries from this primary group's chain.
+            let mut gi = primary_gi;
+            loop {
+                let group = &mut self.container.groups[gi];
+                let mut full_mask = group_ops::match_full(&group.ctrl);
+                while let Some(slot) = group_ops::next_match(&mut full_mask) {
+                    let key = unsafe { group.keys[slot].assume_init_read() };
+                    let value = unsafe { group.values[slot].assume_init_read() };
+                    let hash = self.hash_builder.hash_one(&key);
+                    buf.push((hash, key, value));
+                    group.ctrl[slot] = CTRL_EMPTY;
+                }
+                if group.overflow == NO_OVERFLOW {
+                    break;
+                }
+                gi = group.overflow as usize;
+            }
+            if buf.len() <= 1 {
+                // 0 or 1 entry — write back to slot 0 if present (already extracted).
+                if let Some((hash, key, value)) = buf.pop() {
+                    let group = &mut self.container.groups[primary_gi];
+                    group.ctrl[0] = tag(hash);
+                    group.keys[0] = MaybeUninit::new(key);
+                    group.values[0] = MaybeUninit::new(value);
+                }
+                continue;
+            }
+            buf.sort_unstable_by_key(|&(hash, _, _)| hash);
+            // Write back in sorted order, filling slots linearly.
+            let mut gi = primary_gi;
+            let mut slot = 0;
+            for (hash, key, value) in buf.drain(..) {
+                if slot == GROUP_SIZE {
+                    slot = 0;
+                    gi = self.container.groups[gi].overflow as usize;
+                }
+                let group = &mut self.container.groups[gi];
+                group.ctrl[slot] = tag(hash);
+                group.keys[slot] = MaybeUninit::new(key);
+                group.values[slot] = MaybeUninit::new(value);
+                slot += 1;
+            }
+        }
+    }
+
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         let hash = self.hash_builder.hash_one(&key);
         self.insert_hashed(hash, key, value)
@@ -163,16 +199,16 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
     fn insert_hashed(&mut self, hash: u64, key: K, value: V) -> Option<V> {
         let tag = tag(hash);
         let hint = slot_hint(hash);
-        let mut gi = self.group_index(hash);
+        let mut gi = self.container.group_index(hash);
         loop {
-            let group = &mut self.groups[gi];
+            let group = &mut self.container.groups[gi];
             // Fast path: check preferred slot.
             let c = group.ctrl[hint];
             if c == CTRL_EMPTY {
                 group.ctrl[hint] = tag;
                 group.keys[hint] = MaybeUninit::new(key);
                 group.values[hint] = MaybeUninit::new(value);
-                self.len += 1;
+                self.container.len += 1;
                 return None;
             }
             if c == tag && unsafe { group.keys[hint].assume_init_ref() } == &key {
@@ -196,7 +232,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 group.ctrl[i] = tag;
                 group.keys[i] = MaybeUninit::new(key);
                 group.values[i] = MaybeUninit::new(value);
-                self.len += 1;
+                self.container.len += 1;
                 return None;
             }
             // Group full — follow or create overflow chain.
@@ -204,20 +240,20 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
             if overflow != NO_OVERFLOW {
                 gi = overflow as usize;
             } else {
-                if self.num_groups as usize == self.groups.len() {
+                if self.container.num_groups as usize == self.container.groups.len() {
                     self.grow();
                     // n_bits changed; recompute the primary group and retry.
-                    gi = self.group_index(hash);
+                    gi = self.container.group_index(hash);
                     continue;
                 }
-                let new_gi = self.num_groups as usize;
-                self.num_groups += 1;
-                self.groups[gi].overflow = new_gi as u32;
-                let group = &mut self.groups[new_gi];
+                let new_gi = self.container.num_groups as usize;
+                self.container.num_groups += 1;
+                self.container.groups[gi].overflow = new_gi as u32;
+                let group = &mut self.container.groups[new_gi];
                 group.ctrl[hint] = tag;
                 group.keys[hint] = MaybeUninit::new(key);
                 group.values[hint] = MaybeUninit::new(value);
-                self.len += 1;
+                self.container.len += 1;
                 return None;
             }
         }
@@ -230,10 +266,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
     {
         let tag = tag(hash);
         let hint = slot_hint(hash);
-        let mut gi = self.group_index(hash);
+        let mut gi = self.container.group_index(hash);
 
         loop {
-            let group = &self.groups[gi];
+            let group = &self.container.groups[gi];
 
             // Fast path: preferred slot.
             let c = group.ctrl[hint];
@@ -270,10 +306,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
     fn find_or_insertion_slot(&mut self, hash: u64, key: &K) -> FindResult<K, V> {
         let tag = tag(hash);
         let hint = slot_hint(hash);
-        let mut gi = self.group_index(hash);
+        let mut gi = self.container.group_index(hash);
 
         loop {
-            let group = &mut self.groups[gi];
+            let group = &mut self.container.groups[gi];
 
             // Fast path: preferred slot.
             let c = group.ctrl[hint];
@@ -318,17 +354,17 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
 
     fn grow(&mut self) {
         let old_groups = std::mem::replace(
-            &mut self.groups,
+            &mut self.container.groups,
             Vec::<Group<K, V>>::new().into_boxed_slice(),
         );
-        let old_num_groups = self.num_groups as usize;
-        let old_len = self.len;
+        let old_num_groups = self.container.num_groups as usize;
+        let old_len = self.container.len;
 
-        self.n_bits += 1;
-        let (new_groups, num_primary) = Self::alloc_groups(self.n_bits);
-        self.groups = new_groups;
-        self.num_groups = num_primary;
-        self.len = 0;
+        self.container.n_bits += 1;
+        let (new_groups, num_primary) = HashSortedContainer::alloc_groups(self.container.n_bits);
+        self.container.groups = new_groups;
+        self.container.num_groups = num_primary;
+        self.container.len = 0;
 
         for group in &old_groups[..old_num_groups] {
             let mut full_mask = group_ops::match_full(&group.ctrl);
@@ -343,14 +379,14 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
         // old_groups runs no destructors but does free the backing buffer.
         drop(old_groups);
 
-        debug_assert_eq!(self.len, old_len);
+        debug_assert_eq!(self.container.len, old_len);
     }
 
     fn insert_for_grow(&mut self, hash: u64, key_src: *const K, value_src: *const V) {
         let tag = tag(hash);
         let mut hint = slot_hint(hash);
-        let gi = self.group_index(hash);
-        let mut group = &mut self.groups[gi];
+        let gi = self.container.group_index(hash);
+        let mut group = &mut self.container.groups[gi];
 
         loop {
             if group.ctrl[hint] == CTRL_EMPTY {
@@ -363,12 +399,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
             }
             let overflow = group.overflow;
             if overflow != NO_OVERFLOW {
-                group = &mut self.groups[overflow as usize];
+                group = &mut self.container.groups[overflow as usize];
             } else {
-                let new_gi = self.num_groups as usize;
+                let new_gi = self.container.num_groups as usize;
                 group.overflow = new_gi as u32;
-                self.num_groups += 1;
-                group = &mut self.groups[new_gi];
+                self.container.num_groups += 1;
+                group = &mut self.container.groups[new_gi];
                 break;
             }
         }
@@ -381,7 +417,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 .as_mut_ptr()
                 .copy_from_nonoverlapping(value_src, 1);
         }
-        self.len += 1;
+        self.container.len += 1;
     }
 }
 
@@ -509,16 +545,16 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
             Insertion::NeedsOverflow { tail } => {
                 let (new_gi, new_group) = unsafe {
                     let map = &mut *map;
-                    if map.num_groups as usize == map.groups.len() {
+                    if map.container.num_groups as usize == map.container.groups.len() {
                         return insert_after_grow(map, hash, key, value);
                     }
-                    let new_gi = map.num_groups as usize;
-                    map.num_groups += 1;
-                    let new_group: *mut Group<K, V> = &mut map.groups[new_gi];
+                    let new_gi = map.container.num_groups as usize;
+                    map.container.num_groups += 1;
+                    let new_group: *mut Group<K, V> = &mut map.container.groups[new_gi];
                     (new_gi, new_group)
                 };
                 unsafe {
-                    // SAFETY: `tail` was obtained from `&mut self.groups[..]` and
+                    // SAFETY: `tail` was obtained from `&mut self.container.groups[..]` and
                     // remains valid because no reallocation occurred between
                     // `entry()` and now (we hold the only `&mut self`).
                     (*tail).overflow = new_gi as u32;
@@ -529,8 +565,8 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
 
         let tag = tag(hash);
         unsafe {
-            (*map).len += 1;
-            // SAFETY: `group_ptr` points into `map.groups` and is valid for `'a`.
+            (*map).container.len += 1;
+            // SAFETY: `group_ptr` points into `map.container.groups` and is valid for `'a`.
             let group = &mut *group_ptr;
             group.ctrl[slot] = tag;
             group.keys[slot] = MaybeUninit::new(key);
@@ -561,13 +597,13 @@ fn insert_after_grow<K: Hash + Eq, V, S: BuildHasher>(
     match map.find_or_insertion_slot(hash, &key) {
         FindResult::Vacant(Insertion::Empty { group, slot }) => {
             let tag = tag(hash);
-            // SAFETY: `group` points into `map.groups` and is valid for `'a`.
+            // SAFETY: `group` points into `map.container.groups` and is valid for `'a`.
             unsafe {
                 let g = &mut *group;
                 g.ctrl[slot] = tag;
                 g.keys[slot] = MaybeUninit::new(key);
                 g.values[slot] = MaybeUninit::new(value);
-                map.len += 1;
+                map.container.len += 1;
                 g.values[slot].assume_init_mut()
             }
         }
@@ -579,20 +615,7 @@ fn insert_after_grow<K: Hash + Eq, V, S: BuildHasher>(
     }
 }
 
-impl<K, V, S> Drop for HashSortedMap<K, V, S> {
-    fn drop(&mut self) {
-        for group in &mut self.groups[..self.num_groups as usize] {
-            for i in 0..GROUP_SIZE {
-                if group.ctrl[i] != CTRL_EMPTY {
-                    unsafe { group.keys[i].assume_init_drop() };
-                    unsafe { group.values[i].assume_init_drop() };
-                }
-            }
-        }
-    }
-}
-
-// Re-export `CTRL_EMPTY` for the `iter` module.
+// No custom Drop needed for HashSortedMap — dropping `container` handles entries.
 
 #[cfg(test)]
 mod tests {
@@ -661,12 +684,12 @@ mod tests {
     #[test]
     fn grow_on_overflow_exhaustion() {
         let mut map = HashSortedMap::with_capacity(1);
-        let old_n_bits = map.n_bits;
+        let old_n_bits = map.container.n_bits;
         for i in 0..100u32 {
             let key = i | 0xFF000000;
             map.insert(key, i);
         }
-        assert!(map.n_bits > old_n_bits, "should have grown");
+        assert!(map.container.n_bits > old_n_bits, "should have grown");
         assert_eq!(map.len(), 100);
         for i in 0..100u32 {
             let key = i | 0xFF000000;
@@ -812,6 +835,91 @@ mod tests {
         assert_eq!(m.len(), 200);
         for i in 0..200u32 {
             assert_eq!(m.get(&i), Some(&i));
+        }
+    }
+
+    // ── sort_by_hash tests ──────────────────────────────────────────────
+
+    #[test]
+    fn sort_by_hash_empty() {
+        let mut map: HashSortedMap<u32, u32> = HashSortedMap::new();
+        map.sort_by_hash(); // should not panic
+        assert_eq!(map.len(), 0);
+    }
+
+    #[test]
+    fn sort_by_hash_single() {
+        let mut map = HashSortedMap::new();
+        map.insert(42u32, "hello");
+        map.sort_by_hash();
+        assert_eq!(map.get(&42), Some(&"hello"));
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn sort_by_hash_preserves_entries() {
+        let mut map = HashSortedMap::new();
+        for i in 0..200u32 {
+            map.insert(i, i * 10);
+        }
+        map.sort_by_hash();
+        assert_eq!(map.len(), 200);
+        for i in 0..200u32 {
+            assert_eq!(map.get(&i), Some(&(i * 10)), "missing key {i}");
+        }
+    }
+
+    #[test]
+    fn sort_by_hash_produces_hash_order() {
+        use std::collections::hash_map::RandomState;
+
+        let hasher = RandomState::new();
+        let mut map = HashSortedMap::with_hasher(hasher.clone());
+        for i in 0..500u32 {
+            map.insert(i, i);
+        }
+        map.sort_by_hash();
+        // Iteration should now yield entries in hash order.
+        let mut prev_hash = 0u64;
+        let mut first = true;
+        for (&k, _) in &map {
+            let h = hasher.hash_one(&k);
+            if !first {
+                assert!(h >= prev_hash, "hash order violated: {prev_hash:#x} > {h:#x}");
+            }
+            prev_hash = h;
+            first = false;
+        }
+    }
+
+    #[test]
+    fn sort_by_hash_with_overflow() {
+        // Force overflow chains via fixed hash, then sort.
+        let mut map = HashSortedMap::with_capacity_and_hasher(1, FixedState(0));
+        for i in 0..50u32 {
+            map.insert(i, i);
+        }
+        map.sort_by_hash();
+        assert_eq!(map.len(), 50);
+        for i in 0..50u32 {
+            assert_eq!(map.get(&i), Some(&i), "missing key {i}");
+        }
+    }
+
+    #[test]
+    fn sort_by_hash_with_strings() {
+        let mut map = HashSortedMap::new();
+        for i in 0..100u32 {
+            map.insert(format!("key-{i}"), format!("val-{i}"));
+        }
+        map.sort_by_hash();
+        assert_eq!(map.len(), 100);
+        for i in 0..100u32 {
+            assert_eq!(
+                map.get(&format!("key-{i}")),
+                Some(&format!("val-{i}")),
+                "missing key-{i}"
+            );
         }
     }
 }
