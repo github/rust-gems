@@ -430,8 +430,6 @@ fn bench_sort(c: &mut Criterion) {
 }
 
 fn bench_merge_sort(c: &mut Criterion) {
-    use hash_sorted_map::HashSortedContainer;
-
     const NUM_MAPS: usize = 100;
     const KEYS_PER_MAP: usize = 100_000;
 
@@ -446,7 +444,7 @@ fn bench_merge_sort(c: &mut Criterion) {
         .collect();
 
     // Pre-build sorted containers from the input data.
-    let sorted_containers: Vec<HashSortedContainer<u32, u32>> = maps_data
+    let sorted_containers: Vec<_> = maps_data
         .iter()
         .map(|keys| {
             let mut map: HashSortedMap<u32, u32, _> =
@@ -454,7 +452,7 @@ fn bench_merge_sort(c: &mut Criterion) {
             for &key in keys {
                 *map.entry(key).or_default() += 1u32;
             }
-            map.sort_by_hash()
+            map
         })
         .collect();
 
