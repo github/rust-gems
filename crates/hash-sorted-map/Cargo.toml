@@ -8,3 +8,6 @@ repository = "https://github.com/github/rust-gems"
 license = "MIT"
 keywords = ["hashmap", "sorted", "merge", "simd"]
 categories = ["algorithms", "data-structures"]
+
+[dependencies]
+smallvec = "1"

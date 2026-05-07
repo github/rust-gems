@@ -1,3 +1,5 @@
+use std::hash::BuildHasher;
+
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use hash_sorted_map::HashSortedMap;
 use hash_sorted_map_benchmarks::{random_trigram_hashes, IdentityBuildHasher};
@@ -393,12 +395,46 @@ fn bench_iter(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_sort(c: &mut Criterion) {
+    let keys = random_trigram_hashes(100_000);
+    let hasher = IdentityBuildHasher::default();
+    let mut group = c.benchmark_group("sort_100000_trigrams");
+
+    group.bench_function("Vec::sort_unstable", |b| {
+        b.iter(|| {
+            let mut vec: Vec<_> = keys
+                .iter()
+                .enumerate()
+                .map(|(i, &key)| (key, i))
+                .collect();
+            vec.sort_unstable_by_key(|&(key, _)| hasher.hash_one(key));
+            vec
+        });
+    });
+
+    group.bench_function("HashSortedMap sort_by_hash", |b| {
+        b.iter(|| {
+            let mut map = HashSortedMap::with_capacity_and_hasher(
+                keys.len(),
+                IdentityBuildHasher::default(),
+            );
+            for (i, &key) in keys.iter().enumerate() {
+                map.insert(key, i);
+            }
+            map.sort_by_hash()
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_insert,
     bench_reinsert,
     bench_grow,
     bench_count,
-    bench_iter
+    bench_iter,
+    bench_sort
 );
 criterion_main!(benches);
