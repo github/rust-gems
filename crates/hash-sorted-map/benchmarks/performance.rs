@@ -430,6 +430,8 @@ fn bench_sort(c: &mut Criterion) {
 }
 
 fn bench_merge_sort(c: &mut Criterion) {
+    use hash_sorted_map::HashSortedContainer;
+
     const NUM_MAPS: usize = 100;
     const KEYS_PER_MAP: usize = 100_000;
 
@@ -443,40 +445,49 @@ fn bench_merge_sort(c: &mut Criterion) {
         })
         .collect();
 
+    // Pre-build sorted containers from the input data.
+    let sorted_containers: Vec<HashSortedContainer<u32, u32>> = maps_data
+        .iter()
+        .map(|keys| {
+            let mut map: HashSortedMap<u32, u32, _> =
+                HashSortedMap::with_hasher(IdentityBuildHasher::default());
+            for &key in keys {
+                *map.entry(key).or_default() += 1u32;
+            }
+            map.sort_by_hash()
+        })
+        .collect();
+
     let hasher = IdentityBuildHasher::default();
     let mut group = c.benchmark_group("merge_100_maps_sorted");
     group.sample_size(10);
 
-    // ── 1. HashSortedMap: merge all, then sort_by_hash ──────────────
+    // ── 1. HashSortedMap: merge sorted containers, then sort_by_hash ─
     group.bench_function("HashSortedMap merge + sort_by_hash", |b| {
         b.iter(|| {
             let mut map: HashSortedMap<u32, u32, _> =
                 HashSortedMap::with_hasher(IdentityBuildHasher::default());
-            for keys in &maps_data {
-                for &key in keys {
-                    *map.entry(key).or_default() += 1u32;
+            for container in &sorted_containers {
+                for (&key, &value) in container {
+                    *map.entry(key).or_default() += value;
                 }
             }
             map.sort_by_hash()
         });
     });
 
-    // ── 2. K-way merge over pre-sorted vectors ──────────────────────
-    group.bench_function("k-way merge sorted vecs", |b| {
+    // ── 2. K-way merge over pre-sorted containers ────────────────────
+    group.bench_function("k-way merge sorted containers", |b| {
         use itertools::Itertools;
 
         b.iter(|| {
-            // Phase 1: build per-map sorted (hash, key, count) vectors.
-            let sorted_vecs: Vec<Vec<(u64, u32, u32)>> = maps_data
+            // Phase 1: build per-container sorted (hash, key, count) vectors.
+            let sorted_vecs: Vec<Vec<(u64, u32, u32)>> = sorted_containers
                 .iter()
-                .map(|keys| {
-                    let mut counts = std::collections::HashMap::<u32, u32, IdentityBuildHasher>::with_hasher(IdentityBuildHasher::default());
-                    for &key in keys {
-                        *counts.entry(key).or_default() += 1;
-                    }
-                    let mut vec: Vec<(u64, u32, u32)> = counts
-                        .into_iter()
-                        .map(|(k, v)| (hasher.hash_one(k), k, v))
+                .map(|container| {
+                    let mut vec: Vec<(u64, u32, u32)> = container
+                        .iter()
+                        .map(|(&k, &v)| (hasher.hash_one(k), k, v))
                         .collect();
                     vec.sort_unstable_by_key(|&(h, _, _)| h);
                     vec
@@ -501,9 +512,9 @@ fn bench_merge_sort(c: &mut Criterion) {
         b.iter(|| {
             let mut map =
                 hashbrown::HashMap::<u32, u32, IdentityBuildHasher>::with_hasher(IdentityBuildHasher::default());
-            for keys in &maps_data {
-                for &key in keys {
-                    *map.entry(key).or_default() += 1;
+            for container in &sorted_containers {
+                for (&key, &value) in container {
+                    *map.entry(key).or_default() += value;
                 }
             }
             let mut vec: Vec<(u32, u32)> = map.into_iter().collect();
@@ -517,9 +528,9 @@ fn bench_merge_sort(c: &mut Criterion) {
         b.iter(|| {
             let mut map =
                 hashbrown::HashMap::<u32, u32, IdentityBuildHasher>::with_hasher(IdentityBuildHasher::default());
-            for keys in &maps_data {
-                for &key in keys {
-                    *map.entry(key).or_default() += 1;
+            for container in &sorted_containers {
+                for (&key, &value) in container {
+                    *map.entry(key).or_default() += value;
                 }
             }
             map
@@ -531,9 +542,9 @@ fn bench_merge_sort(c: &mut Criterion) {
         b.iter(|| {
             let mut map: HashSortedMap<u32, u32, _> =
                 HashSortedMap::with_hasher(IdentityBuildHasher::default());
-            for keys in &maps_data {
-                for &key in keys {
-                    *map.entry(key).or_default() += 1u32;
+            for container in &sorted_containers {
+                for (&key, &value) in container {
+                    *map.entry(key).or_default() += value;
                 }
             }
             map
@@ -548,9 +559,9 @@ fn bench_merge_sort(c: &mut Criterion) {
                     1_000_000,
                     IdentityBuildHasher::default(),
                 );
-            for keys in &maps_data {
-                for &key in keys {
-                    *map.entry(key).or_default() += 1;
+            for container in &sorted_containers {
+                for (&key, &value) in container {
+                    *map.entry(key).or_default() += value;
                 }
             }
             map
@@ -565,9 +576,9 @@ fn bench_merge_sort(c: &mut Criterion) {
                     1_000_000,
                     IdentityBuildHasher::default(),
                 );
-            for keys in &maps_data {
-                for &key in keys {
-                    *map.entry(key).or_default() += 1u32;
+            for container in &sorted_containers {
+                for (&key, &value) in container {
+                    *map.entry(key).or_default() += value;
                 }
             }
             map
