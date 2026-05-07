@@ -322,27 +322,13 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
     /// of `&mut self` until any reallocation (`grow`).
     fn find_or_insertion_slot(&mut self, hash: u64, key: &K) -> FindResult<K, V> {
         let tag = tag(hash);
-        let hint = slot_hint(hash);
         let mut gi = self.container.group_index(hash);
 
         loop {
             let group = &mut self.container.groups[gi];
 
-            // Fast path: preferred slot.
-            let c = group.ctrl[hint];
-            if c == CTRL_EMPTY {
-                return FindResult::Vacant(Insertion::Empty {
-                    group: group as *mut _,
-                    slot: hint,
-                });
-            }
-            if c == tag && unsafe { group.keys[hint].assume_init_ref() } == key {
-                return FindResult::Found(group.values[hint].as_mut_ptr());
-            }
-
-            // Slow path: SIMD scan group for tag match.
+            // SIMD scan group for tag match.
             let mut tag_mask = group_ops::match_tag(&group.ctrl, tag);
-            tag_mask = group_ops::clear_slot(tag_mask, hint);
             while let Some(i) = group_ops::next_match(&mut tag_mask) {
                 if unsafe { group.keys[i].assume_init_ref() } == key {
                     return FindResult::Found(group.values[i].as_mut_ptr());
