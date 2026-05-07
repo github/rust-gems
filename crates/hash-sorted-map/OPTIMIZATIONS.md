@@ -4,8 +4,8 @@
 
 `HashSortedMap` is a Swiss-table-inspired hash map that uses **overflow
 chaining** (instead of open addressing), **SIMD group scanning** (NEON/SSE2),
-a **slot-hint fast path**, and an **optimized growth strategy**. It is generic
-over key type, value type, and hash builder.
+and an **optimized growth strategy**. It is generic over key type, value type,
+and hash builder.
 
 This document analyzes the design trade-offs versus
 [hashbrown](https://github.com/rust-lang/hashbrown) and records the
@@ -38,7 +38,6 @@ experimental results that guided the current design.
 │  • Overflow chaining (linked groups)                             │
 │  • 8-byte groups with NEON/SSE2/scalar SIMD scan                 │
 │  • EMPTY / FULL tag states only (insertion-only, no deletion)    │
-│  • Slot-hint fast path                                           │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -106,17 +105,32 @@ the overflow path.
 SIMD version** by pessimizing NEON code generation. Removed from the SIMD
 implementation, kept in the scalar version.
 
-### 7. Slot Hint Fast Path (Unique to HashSortedMap)
+### 7. Slot Hint Fast Path ⚠️ Removed from Lookup Paths
 
-HashSortedMap checks a preferred slot before scanning the group:
+Originally, HashSortedMap checked a preferred slot before scanning the group:
 ```rust
 let hint = slot_hint(hash);  // 3 bits from hash → slot index
 if ctrl[hint] == EMPTY { /* direct insert */ }
 if ctrl[hint] == tag && keys[hint] == key { /* direct hit */ }
 ```
 
-hashbrown does **not** have this optimization — it always does a full SIMD
-group scan. The reason why the performance is different is probably due to the different overflow strategies and the different load factors.
+**Experimental finding**: This scalar check **hurts performance** on random
+workloads. The branch predictor cannot help because random keys map to random
+slots, making the hint check a 50/50 branch that pollutes the branch
+predictor. SIMD-only scanning (match_tag + match_empty) is uniformly fast
+regardless of key distribution.
+
+**Results of removing slot_hint from different paths:**
+- `find_or_insertion_slot` (entry API): **−25% latency** on merge benchmark
+- `get_hashed`: **−4.4%** improvement (SIMD scan is faster than branch+scalar)
+- `insert_hashed`: **+7%** regression on presized insert (the hint genuinely
+  helps when inserting into a mostly-empty group), but accepted for code
+  simplicity since the merge workload matters more
+
+**Current state**: slot_hint is **only** used in `insert_for_grow()`, where
+the map is guaranteed sparse after a resize (groups are mostly empty, so the
+hint slot is very likely free). For all other paths, SIMD-only scanning is
+used.
 
 ### 8. Overflow Reserve Sizing ✅ Validated
 
@@ -159,13 +173,85 @@ entropy in both halves. Also changed trigram generation to use
 
 ## Summary of Impact
 
-| Change                     | Effect on insert time        |
-|----------------------------|------------------------------|
-| Capacity sizing fix        | **−50%** (biggest win)       |
-| Optimized growth path      | **−10%** on growth scenarios |
-| SIMD group scanning        | **−5%**                      |
-| Branch hints (scalar only) | **−2–6%**                    |
-| IdentityHasher fix         | Enabled fair comparison      |
+| Change                          | Effect                              |
+|---------------------------------|-------------------------------------|
+| Capacity sizing fix             | **−50%** insert time (biggest win)  |
+| Optimized growth path           | **2× faster** growth than hashbrown |
+| SIMD group scanning             | **−5%** insert time                 |
+| Slot hint removal (entry/get)   | **−25%** merge latency              |
+| Branch hints (scalar only)      | **−2–6%**                           |
+| IdentityHasher fix              | Enabled fair comparison             |
 
-The current HashSortedMap **matches hashbrown+FxHash** on pre-sized inserts,
-**beats all hashbrown variants** on overwrites, and has **2× faster growth**.
+---
+
+## Benchmark Results (Apple M-series, aarch64 NEON)
+
+### Insert (1000 trigrams, pre-sized)
+
+| Implementation       | Time (µs) | vs hashbrown |
+|----------------------|-----------|--------------|
+| FoldHashMap          | 2.44      | −11%         |
+| FxHashMap            | 2.61      | −5%          |
+| hashbrown+Identity   | 2.63      | baseline     |
+| hashbrown::HashMap   | 2.74      | +4%          |
+| std::HashMap+FNV     | 3.18      | +21%         |
+| AHashMap             | 3.38      | +29%         |
+| **HashSortedMap**    | **3.46**  | **+32%**     |
+| std::HashMap         | 8.65      | +229%        |
+
+### Reinsert (1000 trigrams, all keys exist)
+
+| Implementation       | Time (µs) |
+|----------------------|-----------|
+| hashbrown+Identity   | 2.50      |
+| **HashSortedMap**    | **2.70**  |
+
+### Growth (128 → 1000 trigrams, 3 resize rounds)
+
+| Implementation       | Time (µs) |
+|----------------------|-----------|
+| **HashSortedMap**    | **5.35**  |
+| hashbrown+Identity   | 10.12     |
+
+### Count (4000 trigrams, mixed insert/update)
+
+| Implementation                   | Time (µs) |
+|----------------------------------|-----------|
+| hashbrown+Identity entry()       | 4.89      |
+| **HashSortedMap entry().or_default()** | **5.44** |
+| **HashSortedMap get_or_default** | **5.48**  |
+
+### Iteration (1000 trigrams)
+
+| Implementation                | Time (ns) |
+|-------------------------------|-----------|
+| **HashSortedMap iter()**      | **794**   |
+| **HashSortedMap into_iter()** | **998**   |
+| hashbrown+Identity iter()     | 1,067     |
+| hashbrown+Identity into_iter()| 1,060     |
+
+### Sort (100K trigrams)
+
+| Implementation              | Time (µs) |
+|-----------------------------|-----------|
+| **HashSortedMap sort_by_hash** | **706** |
+| Vec::sort_unstable          | 984       |
+
+### Merge (100 maps × 100K keys each → sorted output)
+
+| Implementation                    | Time (ms) | vs HSM merge+sort |
+|-----------------------------------|-----------|--------------------|
+| hashbrown merge presized          | 30.4      | −46%               |
+| **HashSortedMap merge presized**  | **37.3**  | **−33%**           |
+| **HashSortedMap merge (no sort)** | **44.0**  | **−21%**           |
+| hashbrown merge                   | 45.4      | −19%               |
+| **HashSortedMap merge + sort**    | **55.9**  | **baseline**       |
+| hashbrown merge + Vec sort        | 58.7      | +5%                |
+| k-way merge sorted vecs           | 445       | +696%              |
+
+**Key takeaways:**
+- HashSortedMap has **2× faster growth** than hashbrown
+- **25% faster iteration** than hashbrown (dense group layout)
+- **sort_by_hash is 28% faster** than Vec::sort_unstable (data is partially sorted by group)
+- **merge + sort is 5% faster** than hashbrown merge + Vec sort (the primary use case)
+- Pre-sized insert is 32% slower than hashbrown (trade-off for sort/merge efficiency)

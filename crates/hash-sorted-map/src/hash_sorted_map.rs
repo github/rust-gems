@@ -215,26 +215,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
 
     fn insert_hashed(&mut self, hash: u64, key: K, value: V) -> Option<V> {
         let tag = tag(hash);
-        let hint = slot_hint(hash);
         let mut gi = self.container.group_index(hash);
         loop {
             let group = &mut self.container.groups[gi];
-            // Fast path: check preferred slot.
-            let c = group.ctrl[hint];
-            if c == CTRL_EMPTY {
-                group.ctrl[hint] = tag;
-                group.keys[hint] = MaybeUninit::new(key);
-                group.values[hint] = MaybeUninit::new(value);
-                self.container.len += 1;
-                return None;
-            }
-            if c == tag && unsafe { group.keys[hint].assume_init_ref() } == &key {
-                let old = std::mem::replace(unsafe { group.values[hint].assume_init_mut() }, value);
-                return Some(old);
-            }
-            // Slow path: SIMD scan group for tag match.
+            // SIMD scan group for tag match.
             let mut tag_mask = group_ops::match_tag(&group.ctrl, tag);
-            tag_mask = group_ops::clear_slot(tag_mask, hint);
             while let Some(i) = group_ops::next_match(&mut tag_mask) {
                 if unsafe { group.keys[i].assume_init_ref() } == &key {
                     let old =
@@ -267,9 +252,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 self.container.num_groups += 1;
                 self.container.groups[gi].overflow = new_gi as u32;
                 let group = &mut self.container.groups[new_gi];
-                group.ctrl[hint] = tag;
-                group.keys[hint] = MaybeUninit::new(key);
-                group.values[hint] = MaybeUninit::new(value);
+                group.ctrl[0] = tag;
+                group.keys[0] = MaybeUninit::new(key);
+                group.values[0] = MaybeUninit::new(value);
                 self.container.len += 1;
                 return None;
             }
@@ -282,31 +267,20 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
         Q: Eq + ?Sized,
     {
         let tag = tag(hash);
-        let hint = slot_hint(hash);
         let mut gi = self.container.group_index(hash);
 
         loop {
             let group = &self.container.groups[gi];
-
-            // Fast path: preferred slot.
-            let c = group.ctrl[hint];
-            if c == tag && unsafe { group.keys[hint].assume_init_ref() }.borrow() == key {
-                return Some(unsafe { group.values[hint].assume_init_ref() });
-            }
-
-            // Slow path: SIMD scan group.
+            // SIMD scan group for tag match.
             let mut tag_mask = group_ops::match_tag(&group.ctrl, tag);
-            tag_mask = group_ops::clear_slot(tag_mask, hint);
             while let Some(i) = group_ops::next_match(&mut tag_mask) {
                 if unsafe { group.keys[i].assume_init_ref() }.borrow() == key {
                     return Some(unsafe { group.values[i].assume_init_ref() });
                 }
             }
-
             if group_ops::match_empty(&group.ctrl) != 0 {
                 return None;
             }
-
             if group.overflow == NO_OVERFLOW {
                 return None;
             }
@@ -334,7 +308,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                     return FindResult::Found(group.values[i].as_mut_ptr());
                 }
             }
-
             // Check for empty slot in this group.
             let empty_mask = group_ops::match_empty(&group.ctrl);
             if empty_mask != 0 {
@@ -344,7 +317,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                     slot: i,
                 });
             }
-
             // Group full — follow or report end of chain.
             if group.overflow == NO_OVERFLOW {
                 return FindResult::Vacant(Insertion::NeedsOverflow {
@@ -626,7 +598,7 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
                     // `entry()` and now (we hold the only `&mut self`).
                     (*tail).overflow = new_gi as u32;
                 }
-                (new_group, slot_hint(hash))
+                (new_group, 0)
             }
         };
 
@@ -644,57 +616,18 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
 }
 
 /// Cold path: the chain was full, the table is at capacity, and we need to
-/// grow before inserting. Re-walks via the slow path after grow.
-///
-/// With clustered hash functions (e.g. identity hashing), the new primary
-/// group may still be full after grow, so we handle `NeedsOverflow` by
-/// allocating an overflow group.
+/// grow before inserting. Grows the map, then re-walks via `entry()` to find
+/// the new insertion slot.
 #[cold]
 #[inline(never)]
 fn insert_after_grow<K: Hash + Eq, V, S: BuildHasher>(
     map: &mut HashSortedMap<K, V, S>,
-    hash: u64,
+    _hash: u64,
     key: K,
     value: V,
 ) -> &mut V {
     map.grow();
-    let tag = tag(hash);
-    match map.find_or_insertion_slot(hash, &key) {
-        FindResult::Vacant(Insertion::Empty { group, slot }) => {
-            // SAFETY: `group` points into `map.container.groups` and is valid for `'a`.
-            unsafe {
-                let g = &mut *group;
-                g.ctrl[slot] = tag;
-                g.keys[slot] = MaybeUninit::new(key);
-                g.values[slot] = MaybeUninit::new(value);
-                map.container.len += 1;
-                g.values[slot].assume_init_mut()
-            }
-        }
-        FindResult::Vacant(Insertion::NeedsOverflow { tail }) => {
-            // Primary group chain is full even after grow (possible with
-            // clustered identity hashes). Allocate an overflow group.
-            debug_assert!(
-                (map.container.num_groups as usize) < map.container.groups.len(),
-                "overflow pool exhausted right after grow"
-            );
-            let new_gi = map.container.num_groups as usize;
-            map.container.num_groups += 1;
-            unsafe {
-                (*tail).overflow = new_gi as u32;
-            }
-            let slot = slot_hint(hash);
-            let group = &mut map.container.groups[new_gi];
-            group.ctrl[slot] = tag;
-            group.keys[slot] = MaybeUninit::new(key);
-            group.values[slot] = MaybeUninit::new(value);
-            map.container.len += 1;
-            unsafe { group.values[slot].assume_init_mut() }
-        }
-        FindResult::Found(_) => {
-            unreachable!("key was not in the table before grow")
-        }
-    }
+    map.entry(key).or_insert(value)
 }
 
 // No custom Drop needed for HashSortedMap — dropping `container` handles entries.
