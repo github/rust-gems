@@ -36,23 +36,16 @@ mod table;
 pub use ngram::NGram;
 
 /// Number of high-frequency bigrams used to build the priority table.
-pub const NUM_FREQUENT_BIGRAMS: usize = 65536;
+pub const NUM_FREQUENT_BIGRAMS: usize = 65534;
 
 /// Maximum length (in bytes) of a sparse n-gram.
 pub const MAX_SPARSE_GRAM_SIZE: u32 = 8;
 
-pub use extract::{collect_sparse_grams, collect_sparse_grams_deque, collect_sparse_grams_masked, collect_sparse_grams_scan, collect_sparse_grams_wide, max_sparse_grams};
-#[cfg(target_arch = "x86_64")]
-pub use extract::{collect_sparse_grams_masked_avx, collect_sparse_grams_wide_avx};
+pub use extract::{collect_sparse_grams, collect_sparse_grams_deque, collect_sparse_grams_scan, max_sparse_grams};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn sorted(mut v: Vec<NGram>) -> Vec<NGram> {
-        v.sort();
-        v
-    }
 
     fn collect_to_vec(content: &[u8], f: fn(&[u8], &mut [NGram]) -> usize) -> Vec<NGram> {
         let mut buf = vec![NGram::from_rolling_hash(0, 0); max_sparse_grams(content.len())];
@@ -165,153 +158,5 @@ mod tests {
         );
     }
 
-    // -- Equivalence: wide vs deque (sorted, order differs) --
-
-    #[test]
-    fn test_wide_equivalence_small() {
-        for input in [b"" as &[u8], b"x", b"ab", b"abc", b"abcdefgh", b"abcdefghi"] {
-            assert_eq!(
-                sorted(collect_to_vec(input, collect_sparse_grams_deque)),
-                sorted(collect_to_vec(input, collect_sparse_grams_wide)),
-                "mismatch on {:?}",
-                std::str::from_utf8(input).unwrap_or("?")
-            );
-        }
-    }
-
-    #[test]
-    fn test_wide_equivalence_hello_world() {
-        assert_eq!(
-            sorted(collect_to_vec(b"hello world", collect_sparse_grams_deque)),
-            sorted(collect_to_vec(b"hello world", collect_sparse_grams_wide)),
-        );
-    }
-
-    #[test]
-    fn test_wide_equivalence_long_input() {
-        let input = b"this is a very long substring where we don't want to construct too long substrings";
-        assert_eq!(
-            sorted(collect_to_vec(input, collect_sparse_grams_deque)),
-            sorted(collect_to_vec(input, collect_sparse_grams_wide)),
-        );
-    }
-
-    #[test]
-    fn test_wide_equivalence_large_diverse() {
-        let input: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
-        assert_eq!(
-            sorted(collect_to_vec(&input, collect_sparse_grams_deque)),
-            sorted(collect_to_vec(&input, collect_sparse_grams_wide)),
-        );
-    }
-
-    #[test]
-    fn test_wide_equivalence_source_code() {
-        let input = include_bytes!("lib.rs");
-        assert_eq!(
-            sorted(collect_to_vec(input, collect_sparse_grams_deque)),
-            sorted(collect_to_vec(input, collect_sparse_grams_wide)),
-        );
-    }
-
-    // -- Equivalence: masked_avx vs deque (sorted, order differs) --
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn test_masked_avx_equivalence_small() {
-        for input in [b"" as &[u8], b"x", b"ab", b"abc", b"abcdefgh", b"abcdefghi"] {
-            assert_eq!(
-                sorted(collect_to_vec(input, collect_sparse_grams_deque)),
-                sorted(collect_to_vec(input, collect_sparse_grams_masked_avx)),
-                "mismatch on {:?}",
-                std::str::from_utf8(input).unwrap_or("?")
-            );
-        }
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn test_masked_avx_equivalence_large() {
-        let input: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
-        assert_eq!(
-            sorted(collect_to_vec(&input, collect_sparse_grams_deque)),
-            sorted(collect_to_vec(&input, collect_sparse_grams_masked_avx)),
-        );
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn test_masked_avx_equivalence_source_code() {
-        let input = include_bytes!("lib.rs");
-        assert_eq!(
-            sorted(collect_to_vec(input, collect_sparse_grams_deque)),
-            sorted(collect_to_vec(input, collect_sparse_grams_masked_avx)),
-        );
-    }
-
-    // -- Equivalence: wide_avx vs deque (sorted, order differs) --
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn test_wide_avx_equivalence_small() {
-        for input in [b"" as &[u8], b"x", b"ab", b"abc", b"abcdefgh", b"abcdefghi"] {
-            assert_eq!(
-                sorted(collect_to_vec(input, collect_sparse_grams_deque)),
-                sorted(collect_to_vec(input, collect_sparse_grams_wide_avx)),
-                "mismatch on {:?}",
-                std::str::from_utf8(input).unwrap_or("?")
-            );
-        }
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn test_wide_avx_equivalence_large() {
-        let input: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
-        assert_eq!(
-            sorted(collect_to_vec(&input, collect_sparse_grams_deque)),
-            sorted(collect_to_vec(&input, collect_sparse_grams_wide_avx)),
-        );
-    }
-
-    // -- Equivalence: masked vs deque (sorted, order differs) --
-
-    #[test]
-    fn test_masked_equivalence_small() {
-        for input in [b"" as &[u8], b"x", b"ab", b"abc", b"abcdefgh", b"abcdefghi"] {
-            assert_eq!(
-                sorted(collect_to_vec(input, collect_sparse_grams_deque)),
-                sorted(collect_to_vec(input, collect_sparse_grams_masked)),
-                "mismatch on {:?}",
-                std::str::from_utf8(input).unwrap_or("?")
-            );
-        }
-    }
-
-    #[test]
-    fn test_masked_equivalence_hello_world() {
-        assert_eq!(
-            sorted(collect_to_vec(b"hello world", collect_sparse_grams_deque)),
-            sorted(collect_to_vec(b"hello world", collect_sparse_grams_masked)),
-        );
-    }
-
-    #[test]
-    fn test_masked_equivalence_large() {
-        let input: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
-        assert_eq!(
-            sorted(collect_to_vec(&input, collect_sparse_grams_deque)),
-            sorted(collect_to_vec(&input, collect_sparse_grams_masked)),
-        );
-    }
-
-    #[test]
-    fn test_masked_equivalence_source_code() {
-        let input = include_bytes!("lib.rs");
-        assert_eq!(
-            sorted(collect_to_vec(input, collect_sparse_grams_deque)),
-            sorted(collect_to_vec(input, collect_sparse_grams_masked)),
-        );
-    }
 }
 
