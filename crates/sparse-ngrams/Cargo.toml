@@ -13,7 +13,7 @@ bench = false
 
 [[bench]]
 name = "performance"
-path = "benches/performance.rs"
+path = "benchmarks/performance.rs"
 harness = false
 
 [dev-dependencies]
