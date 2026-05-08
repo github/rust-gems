@@ -154,13 +154,40 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
             let n = hashes.len();
             // Insertion sort by (hash, key).
             for i in 1..n {
+                // Extract element at position i.
+                let cur_hash = hashes[i];
+                let (gi, si) = chain_slot(&chain, i);
+                let cur_key = unsafe { self.groups[gi].keys[si].assume_init_read() };
+                let cur_val = unsafe { self.groups[gi].values[si].assume_init_read() };
+                // Find insertion point via linear scan backward.
                 let mut j = i;
-                while j > 0 && should_swap(hashes[j - 1], hashes[j], &self.groups, &chain, j - 1, j)
-                {
-                    hashes.swap(j - 1, j);
-                    swap_chain_slots(&mut self.groups, &chain, j - 1, j);
+                while j > 0 {
+                    let (gj, sj) = chain_slot(&chain, j - 1);
+                    let prev_key = unsafe { self.groups[gj].keys[sj].assume_init_ref() };
+                    if (hashes[j - 1], prev_key) <= (cur_hash, &cur_key) {
+                        break;
+                    }
                     j -= 1;
                 }
+                if j < i {
+                    // Shift positions j..i up by one.
+                    hashes.copy_within(j..i, j + 1);
+                    for pos in (j..i).rev() {
+                        let (src_g, src_s) = chain_slot(&chain, pos);
+                        let (dst_g, dst_s) = chain_slot(&chain, pos + 1);
+                        unsafe {
+                            let k = std::ptr::read(&self.groups[src_g].keys[src_s]);
+                            let v = std::ptr::read(&self.groups[src_g].values[src_s]);
+                            self.groups[dst_g].keys[dst_s] = k;
+                            self.groups[dst_g].values[dst_s] = v;
+                        }
+                    }
+                }
+                // Insert at position j (or write back to i if already in place).
+                hashes[j] = cur_hash;
+                let (gj, sj) = chain_slot(&chain, j);
+                self.groups[gj].keys[sj] = MaybeUninit::new(cur_key);
+                self.groups[gj].values[sj] = MaybeUninit::new(cur_val);
             }
         }
     }
@@ -407,27 +434,6 @@ fn chain_slot(chain: &[u32], pos: usize) -> (usize, usize) {
     (chain[pos / GROUP_SIZE] as usize, pos % GROUP_SIZE)
 }
 
-/// Compare two positions: returns true if position `a` should come after position `b`
-/// (i.e., the pair is out of order). Comparison is (hash, key).
-#[inline]
-fn should_swap<K: Ord, V>(
-    hash_a: u64,
-    hash_b: u64,
-    groups: &[Group<K, V>],
-    chain: &[u32],
-    a: usize,
-    b: usize,
-) -> bool {
-    if hash_a != hash_b {
-        return hash_a > hash_b;
-    }
-    let (gi_a, slot_a) = chain_slot(chain, a);
-    let (gi_b, slot_b) = chain_slot(chain, b);
-    let key_a = unsafe { groups[gi_a].keys[slot_a].assume_init_ref() };
-    let key_b = unsafe { groups[gi_b].keys[slot_b].assume_init_ref() };
-    key_a > key_b
-}
-
 /// Compact the last group in a chain: move all occupied entries to slots
 /// 0..n and clear the rest. Computes hashes for each occupied entry and
 /// appends them to `hashes`.
@@ -455,27 +461,6 @@ fn compact_last_group<K: Hash, V, S: BuildHasher>(
     }
     for slot in write..GROUP_SIZE {
         group.ctrl[slot] = CTRL_EMPTY;
-    }
-}
-
-/// Swap the ctrl byte, key, and value between two flat positions in a chain.
-fn swap_chain_slots<K, V>(groups: &mut [Group<K, V>], chain: &[u32], a: usize, b: usize) {
-    let (gi_a, slot_a) = chain_slot(chain, a);
-    let (gi_b, slot_b) = chain_slot(chain, b);
-    if gi_a == gi_b {
-        let g = &mut groups[gi_a];
-        g.keys.swap(slot_a, slot_b);
-        g.values.swap(slot_a, slot_b);
-    } else {
-        let (ga, gb) = if gi_a < gi_b {
-            let (left, right) = groups.split_at_mut(gi_b);
-            (&mut left[gi_a], &mut right[0])
-        } else {
-            let (left, right) = groups.split_at_mut(gi_a);
-            (&mut right[0], &mut left[gi_b])
-        };
-        std::mem::swap(&mut ga.keys[slot_a], &mut gb.keys[slot_b]);
-        std::mem::swap(&mut ga.values[slot_a], &mut gb.values[slot_b]);
     }
 }
 
