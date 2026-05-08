@@ -42,45 +42,24 @@ keys, which means:
 
 ## Benchmark results
 
-All benchmarks insert 1000 random trigram hashes (scrambled with
-`folded_multiply`) into maps with various configurations. Measured on Apple
-M-series (aarch64).
+Latest local Criterion snapshot from this repository's
+`target/criterion` outputs (lower is better):
 
-### Insert 1000 trigrams — pre-sized, no growth
+| Scenario                                     | HashSortedMap | Comparison                             | Result      |
+| :------------------------------------------- | ------------: | :------------------------------------- | :---------- |
+| Insert 1000 trigrams (pre-sized)             |       7.34 µs | hashbrown::HashMap: 12.88 µs           | ~43% faster |
+| Grow from capacity 128                       |      20.54 µs | hashbrown+Identity: 23.17 µs           | ~11% faster |
+| Count 4000 trigrams (`entry().or_default()`) |      12.70 µs | hashbrown+Identity `entry()`: 13.53 µs | ~6% faster  |
+| Iterate 1000 trigrams (`iter()`)             |       3.93 µs | hashbrown+Identity `iter()`: 2.87 µs   | ~37% slower |
+| Sort 100000 trigrams by hash                 |       1.83 ms | `Vec::sort_unstable`: 2.09 ms          | ~12% faster |
+| Merge 100 sorted maps + final sort           |     161.93 ms | hashbrown merge + vec sort: 234.70 ms  | ~31% faster |
 
-| Rank | Map | Time (µs) | vs best |
-|------|-----|-----------|---------|
-| 🥇 | FoldHashMap | 2.44 | — |
-| 🥈 | FxHashMap | 2.61 | +7% |
-| 🥉 | hashbrown::HashMap | 2.67 | +9% |
-| 4 | **HashSortedMap** | **2.71** | +11% |
-| 5 | hashbrown+Identity | 2.74 | +12% |
-| 6 | std::HashMap+FNV | 3.27 | +34% |
-| 7 | AHashMap | 3.22 | +32% |
-| 8 | std::HashMap | 8.49 | +248% |
+Key takeaways:
 
-### Re-insert same keys (all overwrites)
-
-| Map | Time (µs) |
-|-----|-----------|
-| **HashSortedMap** | **2.36** ✅ |
-| hashbrown+Identity | 2.58 |
-
-### Growth from small (`with_capacity(128)`, 3 resize rounds)
-
-| Map | Time (µs) | Growth penalty |
-|-----|-----------|----------------|
-| **HashSortedMap** | **4.85** | +2.14 |
-| hashbrown+Identity | 9.77 | +7.03 |
-
-### Key takeaways
-
-- **HashSortedMap matches the fastest hashbrown configurations** on pre-sized
-  first-time inserts and is **the fastest for overwrites**.
-- **Growth is ~2× faster** than hashbrown thanks to the optimized
-  `insert_for_grow` path that skips duplicate checking and uses raw copies.
-- The remaining gap to FoldHashMap (~11%) comes from foldhash's extremely
-  efficient hash function that pipelines well with hashbrown's SIMD scan.
+- `HashSortedMap` is strongest on insert-heavy and merge/sort-heavy paths.
+- Iteration throughput is currently behind `hashbrown+Identity`.
+- In workloads that need deterministic hash-order serialization, the merge and
+  sort advantages can outweigh the iteration gap.
 
 ## Running
 
