@@ -36,7 +36,7 @@ mod table;
 pub use ngram::NGram;
 
 /// Number of high-frequency bigrams used to build the priority table.
-pub const NUM_FREQUENT_BIGRAMS: usize = 200;
+pub const NUM_FREQUENT_BIGRAMS: usize = 65536;
 
 /// Maximum length (in bytes) of a sparse n-gram.
 pub const MAX_SPARSE_GRAM_SIZE: u32 = 8;

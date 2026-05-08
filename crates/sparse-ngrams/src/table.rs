@@ -14,12 +14,12 @@ static BIGRAMS_STR: &str = include_str!("bigrams.bin");
 
 /// Flat 256×256 lookup table indexed by `a as usize * 256 + b`.
 /// Entries default to 0 for bigrams not in the frequency table.
-static BIGRAM_TABLE: OnceLock<Box<[u8; 256 * 256]>> = OnceLock::new();
+static BIGRAM_TABLE: OnceLock<Box<[u16; 256 * 256]>> = OnceLock::new();
 
 /// Returns the bigram priority table. The first call initializes it (thread-safe).
-pub(crate) fn get_bigram_table() -> &'static [u8; 256 * 256] {
+pub(crate) fn get_bigram_table() -> &'static [u16; 256 * 256] {
     BIGRAM_TABLE.get_or_init(|| {
-        let mut table = Box::new([0u8; 256 * 256]);
+        let mut table = Box::new([0u16; 256 * 256]);
         for (idx, s) in BIGRAMS_STR
             .split('\0')
             .take(NUM_FREQUENT_BIGRAMS)
@@ -29,13 +29,12 @@ pub(crate) fn get_bigram_table() -> &'static [u8; 256 * 256] {
             let Some((a, b)) = chars.next().zip(chars.next()) else {
                 continue;
             };
-            // All top-200 bigrams are ASCII; apply lowercase folding.
             let a = (a as u8).to_ascii_lowercase();
             let b = (b as u8).to_ascii_lowercase();
             // Higher-frequency bigrams get HIGHER values so they are more often
             // encompassed by longer grams.
             table[a as usize * 256 + b as usize] =
-                (NUM_FREQUENT_BIGRAMS - idx) as u8;
+                (NUM_FREQUENT_BIGRAMS - idx) as u16;
         }
         table
     })

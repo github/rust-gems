@@ -105,7 +105,7 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
     let mut w = 0usize;
     let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
     prefix_hashes[1] = content[0] as u32;
-    let mut priorities = [u8::MAX; MAX_SPARSE_GRAM_SIZE as usize];
+    let mut priorities = [u16::MAX; MAX_SPARSE_GRAM_SIZE as usize];
     for idx in 1..n as u32 {
         let end_hash = prefix_hashes[idx as usize & MASK]
             .wrapping_mul(POLY_HASH_PRIME)
@@ -118,7 +118,7 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
         let v1 =
             table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
         priorities[idx as usize & MASK] = v1;
-        let mut running_min = u8::MAX;
+        let mut running_min = u16::MAX;
         for d in 1..=(MAX_SPARSE_GRAM_SIZE - 2) {
             if d >= idx {
                 break;
@@ -141,8 +141,6 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
     }
     w
 }
-
-/// Masked variant: maintains the deque as a bitmask across iterations.
 ///
 /// Since deque elements have strictly increasing priorities (front→back), comparing
 /// each lookback priority with the current priority `v1` is enough to determine
@@ -173,7 +171,7 @@ pub fn collect_sparse_grams_masked(content: &[u8], out: &mut [NGram]) -> usize {
     let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
     prefix_hashes[1] = content[0] as u32;
 
-    let mut prio_circ = [0u8; MAX_SPARSE_GRAM_SIZE as usize];
+    let mut prio_circ = [0u16; MAX_SPARSE_GRAM_SIZE as usize];
     let mut active: u32 = 0; // bitmask: bit k ↔ array slot k is in the deque
     let mut dist = [2usize, 9, 8, 7, 6, 5, 4, 3]; // dist[k] = ((idx - k) & CMASK) + 2
     // poly_circ[k] = POLY_HASH_PRIME^(dist[k] + 2) — tracks the poly power for each slot.
@@ -411,7 +409,7 @@ pub fn collect_sparse_grams_wide(content: &[u8], out: &mut [NGram]) -> usize {
 
     let mut circ_ph = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
     circ_ph[1] = content[0] as u32;
-    let mut circ_prio = [0u8; MAX_SPARSE_GRAM_SIZE as usize];
+    let mut circ_prio = [0u16; MAX_SPARSE_GRAM_SIZE as usize];
 
     for idx in 1..=scalar_prefix as u32 {
         let end_hash = circ_ph[idx as usize & MASK]
@@ -427,7 +425,7 @@ pub fn collect_sparse_grams_wide(content: &[u8], out: &mut [NGram]) -> usize {
             table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
         circ_prio[idx as usize & MASK] = v1;
 
-        let mut running_min = u8::MAX;
+        let mut running_min = u16::MAX;
         for d in 1..=(MAX_SPARSE_GRAM_SIZE - 2) {
             if d >= idx {
                 break;
