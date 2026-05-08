@@ -166,6 +166,7 @@ impl<K, V, S> HashSortedMap<K, V, S> {
     }
 
     /// Consumes the map and returns an iterator over `(K, V)` pairs.
+    #[allow(clippy::should_implement_trait)]
     pub fn into_iter(self) -> IntoIter<K, V> {
         let cursor = IterCursor::new(self.n_bits, self.groups.len());
         // Prevent Drop from running on self — we're moving groups out.

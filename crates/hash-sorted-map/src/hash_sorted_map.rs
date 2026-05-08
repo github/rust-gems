@@ -4,7 +4,6 @@ use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
 
-
 use super::group::Group;
 use super::group_ops::{self, CTRL_EMPTY, GROUP_SIZE};
 
@@ -156,8 +155,7 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
             // Insertion sort by (hash, key).
             for i in 1..n {
                 let mut j = i;
-                while j > 0
-                    && should_swap(hashes[j - 1], hashes[j], &self.groups, &chain, j - 1, j)
+                while j > 0 && should_swap(hashes[j - 1], hashes[j], &self.groups, &chain, j - 1, j)
                 {
                     hashes.swap(j - 1, j);
                     swap_chain_slots(&mut self.groups, &chain, j - 1, j);
@@ -461,12 +459,7 @@ fn compact_last_group<K: Hash, V, S: BuildHasher>(
 }
 
 /// Swap the ctrl byte, key, and value between two flat positions in a chain.
-fn swap_chain_slots<K, V>(
-    groups: &mut [Group<K, V>],
-    chain: &[u32],
-    a: usize,
-    b: usize,
-) {
+fn swap_chain_slots<K, V>(groups: &mut [Group<K, V>], chain: &[u32], a: usize, b: usize) {
     let (gi_a, slot_a) = chain_slot(chain, a);
     let (gi_b, slot_b) = chain_slot(chain, b);
     if gi_a == gi_b {
