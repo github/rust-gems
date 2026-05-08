@@ -422,7 +422,8 @@ fn bench_sort(c: &mut Criterion) {
             for (i, &key) in keys.iter().enumerate() {
                 map.insert(key, i);
             }
-            map.sort_by_hash()
+            map.sort_by_hash();
+            map
         });
     });
 
@@ -470,7 +471,8 @@ fn bench_merge_sort(c: &mut Criterion) {
                     *map.entry(key).or_default() += value;
                 }
             }
-            map.sort_by_hash()
+            map.sort_by_hash();
+            map
         });
     });
 

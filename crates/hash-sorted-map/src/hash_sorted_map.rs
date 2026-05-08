@@ -6,7 +6,6 @@ use std::marker::PhantomData;
 
 use smallvec::SmallVec;
 
-use super::container::HashSortedContainer;
 use super::group::Group;
 use super::group_ops::{self, CTRL_EMPTY, GROUP_SIZE};
 
@@ -25,7 +24,7 @@ fn slot_hint(hash: u64) -> usize {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// HashSortedMap — wraps a container with a hash builder
+// HashSortedMap
 // ────────────────────────────────────────────────────────────────────────
 
 /// Insertion-only hash map with SIMD group scanning.
@@ -33,7 +32,10 @@ fn slot_hint(hash: u64) -> usize {
 /// Uses NEON on aarch64, SSE2 on x86_64, scalar fallback elsewhere.
 /// Generic over key type `K`, value type `V`, and hash builder `S`.
 pub struct HashSortedMap<K, V, S = RandomState> {
-    pub(crate) container: HashSortedContainer<K, V>,
+    pub(crate) groups: Box<[Group<K, V>]>,
+    pub(crate) num_groups: u32,
+    pub(crate) n_bits: u32,
+    pub(crate) len: usize,
     hash_builder: S,
 }
 
@@ -62,43 +64,44 @@ impl<K, V, S> HashSortedMap<K, V, S> {
         let adjusted = (capacity as f64 / group_ops::MAX_FILL).ceil() as usize;
         let min_groups = (adjusted.div_ceil(GROUP_SIZE)).max(1).next_power_of_two();
         let n_bits = min_groups.trailing_zeros().max(1);
+        let (groups, num_groups) = Self::alloc_groups(n_bits);
         Self {
-            container: HashSortedContainer::new(n_bits),
+            groups,
+            num_groups,
+            n_bits,
+            len: 0,
             hash_builder,
         }
     }
 
     pub fn len(&self) -> usize {
-        self.container.len
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.container.len == 0
+        self.len == 0
     }
 
-    /// Consume the map, returning the underlying container and hash builder.
-    pub fn into_parts(self) -> (HashSortedContainer<K, V>, S) {
-        // Prevent Drop from running on self — we're moving fields out.
-        let this = std::mem::ManuallyDrop::new(self);
-        unsafe {
-            let container = std::ptr::read(&this.container);
-            let hash_builder = std::ptr::read(&this.hash_builder);
-            (container, hash_builder)
-        }
+    fn alloc_groups(n_bits: u32) -> (Box<[Group<K, V>]>, u32) {
+        let num_primary = 1usize << n_bits;
+        let total = num_primary + num_primary / 8 + 1;
+        let mut groups: Vec<Group<K, V>> = Vec::with_capacity(total);
+        groups.resize_with(total, Group::new);
+        (groups.into_boxed_slice(), num_primary as u32)
+    }
+
+    #[inline]
+    pub(crate) fn group_index(&self, hash: u64) -> usize {
+        (hash >> (64 - self.n_bits)) as usize
     }
 }
 
 impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
-    /// Sort all entries within each primary group chain by their hash value
-    /// and return the underlying container.
+    /// Sort all entries within each primary group chain by their hash value.
     ///
     /// After sorting, iteration visits entries in hash order within each
     /// primary group (and since primary groups are visited in group-index
     /// order, the overall iteration is in full hash order).
-    ///
-    /// Consumes the map because lookups via `get()` won't work correctly
-    /// after sorting (the preferred `slot_hint` position might now be empty,
-    /// breaking an invariant).
     ///
     /// # Complexity
     ///
@@ -115,8 +118,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
     /// Dividing by `n` gives the expected cost per element: `1 + n/m` (for
     /// `m ≫ 1`). Since `n/m` is the average chain length, bounded by
     /// `GROUP_SIZE / MAX_FILL ≈ 16`, the per-element cost stays constant.
-    pub fn sort_by_hash(mut self) -> HashSortedContainer<K, V> {
-        let num_primary = 1usize << self.container.n_bits;
+    pub fn sort_by_hash(&mut self) {
+        let num_primary = 1usize << self.n_bits;
         let mut chain: SmallVec<[u32; 4]> = SmallVec::new();
         let mut hashes: SmallVec<[u64; 16]> = SmallVec::new();
 
@@ -128,7 +131,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
             let mut gi = primary_gi;
             loop {
                 chain.push(gi as u32);
-                let overflow = self.container.groups[gi].overflow;
+                let overflow = self.groups[gi].overflow;
                 if overflow == NO_OVERFLOW {
                     break;
                 }
@@ -138,7 +141,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
             // allocated when the previous group is full). Compute hashes for
             // those directly.
             for &cgi in &chain[..chain.len() - 1] {
-                let g = &self.container.groups[cgi as usize];
+                let g = &self.groups[cgi as usize];
                 for slot in 0..GROUP_SIZE {
                     let hash = self
                         .hash_builder
@@ -148,20 +151,19 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
             }
             // The last group may have gaps — compact it to the front.
             let last_gi = *chain.last().unwrap() as usize;
-            compact_last_group(&mut self.container.groups[last_gi], &self.hash_builder, &mut hashes);
+            compact_last_group(&mut self.groups[last_gi], &self.hash_builder, &mut hashes);
             let n = hashes.len();
             // Insertion sort by hash.
             for i in 1..n {
                 let mut j = i;
                 while j > 0 && hashes[j - 1] > hashes[j] {
                     hashes.swap(j - 1, j);
-                    swap_chain_slots(&mut self.container.groups, &chain, j - 1, j);
+                    swap_chain_slots(&mut self.groups, &chain, j - 1, j);
                     j -= 1;
                 }
             }
 
         }
-        self.container
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
@@ -215,9 +217,9 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
 
     fn insert_hashed(&mut self, hash: u64, key: K, value: V) -> Option<V> {
         let tag = tag(hash);
-        let mut gi = self.container.group_index(hash);
+        let mut gi = self.group_index(hash);
         loop {
-            let group = &mut self.container.groups[gi];
+            let group = &mut self.groups[gi];
             // SIMD scan group for tag match.
             let mut tag_mask = group_ops::match_tag(&group.ctrl, tag);
             while let Some(i) = group_ops::next_match(&mut tag_mask) {
@@ -234,7 +236,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 group.ctrl[i] = tag;
                 group.keys[i] = MaybeUninit::new(key);
                 group.values[i] = MaybeUninit::new(value);
-                self.container.len += 1;
+                self.len += 1;
                 return None;
             }
             // Group full — follow or create overflow chain.
@@ -242,20 +244,20 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
             if overflow != NO_OVERFLOW {
                 gi = overflow as usize;
             } else {
-                if self.container.num_groups as usize == self.container.groups.len() {
+                if self.num_groups as usize == self.groups.len() {
                     self.grow();
                     // n_bits changed; recompute the primary group and retry.
-                    gi = self.container.group_index(hash);
+                    gi = self.group_index(hash);
                     continue;
                 }
-                let new_gi = self.container.num_groups as usize;
-                self.container.num_groups += 1;
-                self.container.groups[gi].overflow = new_gi as u32;
-                let group = &mut self.container.groups[new_gi];
+                let new_gi = self.num_groups as usize;
+                self.num_groups += 1;
+                self.groups[gi].overflow = new_gi as u32;
+                let group = &mut self.groups[new_gi];
                 group.ctrl[0] = tag;
                 group.keys[0] = MaybeUninit::new(key);
                 group.values[0] = MaybeUninit::new(value);
-                self.container.len += 1;
+                self.len += 1;
                 return None;
             }
         }
@@ -267,10 +269,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
         Q: Eq + ?Sized,
     {
         let tag = tag(hash);
-        let mut gi = self.container.group_index(hash);
+        let mut gi = self.group_index(hash);
 
         loop {
-            let group = &self.container.groups[gi];
+            let group = &self.groups[gi];
             // SIMD scan group for tag match.
             let mut tag_mask = group_ops::match_tag(&group.ctrl, tag);
             while let Some(i) = group_ops::next_match(&mut tag_mask) {
@@ -296,10 +298,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
     /// of `&mut self` until any reallocation (`grow`).
     fn find_or_insertion_slot(&mut self, hash: u64, key: &K) -> FindResult<K, V> {
         let tag = tag(hash);
-        let mut gi = self.container.group_index(hash);
+        let mut gi = self.group_index(hash);
 
         loop {
-            let group = &mut self.container.groups[gi];
+            let group = &mut self.groups[gi];
 
             // SIMD scan group for tag match.
             let mut tag_mask = group_ops::match_tag(&group.ctrl, tag);
@@ -329,17 +331,17 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
 
     fn grow(&mut self) {
         let old_groups = std::mem::replace(
-            &mut self.container.groups,
+            &mut self.groups,
             Vec::<Group<K, V>>::new().into_boxed_slice(),
         );
-        let old_num_groups = self.container.num_groups as usize;
-        let old_len = self.container.len;
+        let old_num_groups = self.num_groups as usize;
+        let old_len = self.len;
 
-        self.container.n_bits += 1;
-        let (new_groups, num_primary) = HashSortedContainer::alloc_groups(self.container.n_bits);
-        self.container.groups = new_groups;
-        self.container.num_groups = num_primary;
-        self.container.len = 0;
+        self.n_bits += 1;
+        let (new_groups, num_primary) = Self::alloc_groups(self.n_bits);
+        self.groups = new_groups;
+        self.num_groups = num_primary;
+        self.len = 0;
 
         for group in &old_groups[..old_num_groups] {
             let mut full_mask = group_ops::match_full(&group.ctrl);
@@ -354,14 +356,14 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
         // old_groups runs no destructors but does free the backing buffer.
         drop(old_groups);
 
-        debug_assert_eq!(self.container.len, old_len);
+        debug_assert_eq!(self.len, old_len);
     }
 
     fn insert_for_grow(&mut self, hash: u64, key_src: *const K, value_src: *const V) {
         let tag = tag(hash);
         let mut hint = slot_hint(hash);
-        let gi = self.container.group_index(hash);
-        let mut group = &mut self.container.groups[gi];
+        let gi = self.group_index(hash);
+        let mut group = &mut self.groups[gi];
 
         loop {
             if group.ctrl[hint] == CTRL_EMPTY {
@@ -374,12 +376,12 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
             }
             let overflow = group.overflow;
             if overflow != NO_OVERFLOW {
-                group = &mut self.container.groups[overflow as usize];
+                group = &mut self.groups[overflow as usize];
             } else {
-                let new_gi = self.container.num_groups as usize;
+                let new_gi = self.num_groups as usize;
                 group.overflow = new_gi as u32;
-                self.container.num_groups += 1;
-                group = &mut self.container.groups[new_gi];
+                self.num_groups += 1;
+                group = &mut self.groups[new_gi];
                 break;
             }
         }
@@ -392,7 +394,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 .as_mut_ptr()
                 .copy_from_nonoverlapping(value_src, 1);
         }
-        self.container.len += 1;
+        self.len += 1;
     }
 }
 
@@ -584,16 +586,16 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
             Insertion::NeedsOverflow { tail } => {
                 let (new_gi, new_group) = unsafe {
                     let map = &mut *map;
-                    if map.container.num_groups as usize == map.container.groups.len() {
+                    if map.num_groups as usize == map.groups.len() {
                         return insert_after_grow(map, hash, key, value);
                     }
-                    let new_gi = map.container.num_groups as usize;
-                    map.container.num_groups += 1;
-                    let new_group: *mut Group<K, V> = &mut map.container.groups[new_gi];
+                    let new_gi = map.num_groups as usize;
+                    map.num_groups += 1;
+                    let new_group: *mut Group<K, V> = &mut map.groups[new_gi];
                     (new_gi, new_group)
                 };
                 unsafe {
-                    // SAFETY: `tail` was obtained from `&mut self.container.groups[..]` and
+                    // SAFETY: `tail` was obtained from `&mut groups[..]` and
                     // remains valid because no reallocation occurred between
                     // `entry()` and now (we hold the only `&mut self`).
                     (*tail).overflow = new_gi as u32;
@@ -604,8 +606,8 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
 
         let tag = tag(hash);
         unsafe {
-            (*map).container.len += 1;
-            // SAFETY: `group_ptr` points into `map.container.groups` and is valid for `'a`.
+            (*map).len += 1;
+            // SAFETY: `group_ptr` points into `map.groups` and is valid for `'a`.
             let group = &mut *group_ptr;
             group.ctrl[slot] = tag;
             group.keys[slot] = MaybeUninit::new(key);
@@ -630,7 +632,18 @@ fn insert_after_grow<K: Hash + Eq, V, S: BuildHasher>(
     map.entry(key).or_insert(value)
 }
 
-// No custom Drop needed for HashSortedMap — dropping `container` handles entries.
+impl<K, V, S> Drop for HashSortedMap<K, V, S> {
+    fn drop(&mut self) {
+        for group in &mut self.groups[..self.num_groups as usize] {
+            for i in 0..GROUP_SIZE {
+                if group.ctrl[i] != CTRL_EMPTY {
+                    unsafe { group.keys[i].assume_init_drop() };
+                    unsafe { group.values[i].assume_init_drop() };
+                }
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -699,12 +712,12 @@ mod tests {
     #[test]
     fn grow_on_overflow_exhaustion() {
         let mut map = HashSortedMap::with_capacity(1);
-        let old_n_bits = map.container.n_bits;
+        let old_n_bits = map.n_bits;
         for i in 0..100u32 {
             let key = i | 0xFF000000;
             map.insert(key, i);
         }
-        assert!(map.container.n_bits > old_n_bits, "should have grown");
+        assert!(map.n_bits > old_n_bits, "should have grown");
         assert_eq!(map.len(), 100);
         for i in 0..100u32 {
             let key = i | 0xFF000000;
@@ -857,18 +870,18 @@ mod tests {
 
     #[test]
     fn sort_by_hash_empty() {
-        let map: HashSortedMap<u32, u32> = HashSortedMap::new();
-        let container = map.sort_by_hash();
-        assert_eq!(container.len, 0);
+        let mut map: HashSortedMap<u32, u32> = HashSortedMap::new();
+        map.sort_by_hash();
+        assert_eq!(map.len(), 0);
     }
 
     #[test]
     fn sort_by_hash_single() {
         let mut map = HashSortedMap::new();
         map.insert(42u32, "hello");
-        let container = map.sort_by_hash();
-        assert_eq!(container.len, 1);
-        let entries: Vec<_> = container.into_iter().collect();
+        map.sort_by_hash();
+        assert_eq!(map.len(), 1);
+        let entries: Vec<_> = map.into_iter().collect();
         assert_eq!(entries, vec![(42, "hello")]);
     }
 
@@ -878,9 +891,9 @@ mod tests {
         for i in 0..200u32 {
             map.insert(i, i * 10);
         }
-        let container = map.sort_by_hash();
-        assert_eq!(container.len, 200);
-        let mut entries: Vec<_> = container.into_iter().collect();
+        map.sort_by_hash();
+        assert_eq!(map.len(), 200);
+        let mut entries: Vec<_> = map.into_iter().collect();
         entries.sort_by_key(|&(k, _)| k);
         for i in 0..200u32 {
             assert_eq!(entries[i as usize], (i, i * 10), "missing key {i}");
@@ -896,11 +909,11 @@ mod tests {
         for i in 0..500u32 {
             map.insert(i, i);
         }
-        let container = map.sort_by_hash();
+        map.sort_by_hash();
         // Iteration should now yield entries in hash order.
         let mut prev_hash = 0u64;
         let mut first = true;
-        for (&k, _) in &container {
+        for (&k, _) in &map {
             let h = hasher.hash_one(&k);
             if !first {
                 assert!(h > prev_hash, "hash order violated: {prev_hash:#x} > {h:#x}");
@@ -917,9 +930,9 @@ mod tests {
         for i in 0..50u32 {
             map.insert(i, i);
         }
-        let container = map.sort_by_hash();
-        assert_eq!(container.len, 50);
-        let mut entries: Vec<_> = container.into_iter().collect();
+        map.sort_by_hash();
+        assert_eq!(map.len(), 50);
+        let mut entries: Vec<_> = map.into_iter().collect();
         entries.sort_by_key(|&(k, _)| k);
         for i in 0..50u32 {
             assert_eq!(entries[i as usize], (i, i), "missing key {i}");
@@ -935,11 +948,11 @@ mod tests {
         for i in 0..100u32 {
             map.insert(format!("key-{i}"), format!("val-{i}"));
         }
-        let container = map.sort_by_hash();
-        assert_eq!(container.len, 100);
+        map.sort_by_hash();
+        assert_eq!(map.len(), 100);
         let mut prev_hash = 0u64;
         let mut first = true;
-        for (k, _) in &container {
+        for (k, _) in &map {
             let h = hasher.hash_one(k);
             if !first {
                 assert!(h > prev_hash, "hash order violated: {prev_hash:#x} > {h:#x}");

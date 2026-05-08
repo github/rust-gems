@@ -1,9 +1,8 @@
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 
-use super::container::HashSortedContainer;
 use super::group::Group;
-use super::group_ops::{self};
+use super::group_ops::{self, CTRL_EMPTY};
 use super::hash_sorted_map::{HashSortedMap, NO_OVERFLOW};
 
 /// State shared by `Iter`, `IterMut`, and `IntoIter`: tracks which primary
@@ -20,12 +19,12 @@ struct IterCursor {
 }
 
 impl IterCursor {
-    fn new<K, V>(container: &HashSortedContainer<K, V>) -> Self {
-        let num_primary = 1u32 << container.n_bits;
+    fn new(n_bits: u32, groups_len: usize) -> Self {
+        let num_primary = 1u32 << n_bits;
         Self {
             primary: 0,
             num_primary,
-            current_group: container.groups.len() as u32,
+            current_group: groups_len as u32,
             current_mask: 0,
         }
     }
@@ -83,7 +82,7 @@ impl<'a, K, V> Iterator for Iter<'a, K, V> {
 pub struct IterMut<'a, K, V> {
     groups: *mut [Group<K, V>],
     cursor: IterCursor,
-    _marker: PhantomData<&'a mut HashSortedContainer<K, V>>,
+    _marker: PhantomData<&'a mut [Group<K, V>]>,
 }
 
 impl<'a, K, V> Iterator for IterMut<'a, K, V> {
@@ -105,15 +104,17 @@ impl<'a, K, V> Iterator for IterMut<'a, K, V> {
 
 /// Owning iterator that yields `(K, V)` pairs and consumes the map.
 pub struct IntoIter<K, V> {
-    inner: ManuallyDrop<HashSortedContainer<K, V>>,
+    groups: Box<[Group<K, V>]>,
+    num_groups: u32,
+    len: usize,
     cursor: IterCursor,
 }
 
 impl<K, V> Iterator for IntoIter<K, V> {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
-        let (gi, slot) = self.cursor.next_slot(&self.inner.groups)?;
-        let group = &self.inner.groups[gi];
+        let (gi, slot) = self.cursor.next_slot(&self.groups)?;
+        let group = &self.groups[gi];
         // SAFETY: slot is occupied (bitmask guarantees ctrl byte has high bit set).
         unsafe {
             Some((
@@ -124,28 +125,25 @@ impl<K, V> Iterator for IntoIter<K, V> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, Some(self.inner.len))
+        (0, Some(self.len))
     }
 }
 
 impl<K, V> Drop for IntoIter<K, V> {
     fn drop(&mut self) {
         // Continue iterating to drop remaining entries one by one.
-        while let Some((gi, slot)) = self.cursor.next_slot(&self.inner.groups) {
+        while let Some((gi, slot)) = self.cursor.next_slot(&self.groups) {
             unsafe {
-                self.inner.groups[gi].keys[slot].assume_init_drop();
-                self.inner.groups[gi].values[slot].assume_init_drop();
+                self.groups[gi].keys[slot].assume_init_drop();
+                self.groups[gi].values[slot].assume_init_drop();
             }
         }
-        // All entries consumed or dropped above. Set num_groups to 0 so the
-        // container's Drop won't try to drop them again, then let it run to
-        // free the groups allocation.
-        self.inner.num_groups = 0;
-        unsafe { ManuallyDrop::drop(&mut self.inner) };
     }
 }
 
-impl<K, V> HashSortedContainer<K, V> {
+// ── HashSortedMap iteration ─────────────────────────────────────────────
+
+impl<K, V, S> HashSortedMap<K, V, S> {
     /// Returns an iterator over `(&K, &V)` pairs.
     ///
     /// Entries are visited in group-index order (primary groups in order of
@@ -154,13 +152,13 @@ impl<K, V> HashSortedContainer<K, V> {
     pub fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             groups: &self.groups,
-            cursor: IterCursor::new(self),
+            cursor: IterCursor::new(self.n_bits, self.groups.len()),
         }
     }
 
     /// Returns a mutable iterator over `(&K, &mut V)` pairs.
     pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
-        let cursor = IterCursor::new(self);
+        let cursor = IterCursor::new(self.n_bits, self.groups.len());
         IterMut {
             groups: &mut *self.groups as *mut [Group<K, V>],
             cursor,
@@ -168,55 +166,22 @@ impl<K, V> HashSortedContainer<K, V> {
         }
     }
 
-    /// Consumes the container and returns an iterator over `(K, V)` pairs.
-    pub fn into_iter(self) -> IntoIter<K, V> {
-        let cursor = IterCursor::new(&self);
-        IntoIter {
-            inner: ManuallyDrop::new(self),
-            cursor,
-        }
-    }
-}
-
-impl<K, V> IntoIterator for HashSortedContainer<K, V> {
-    type Item = (K, V);
-    type IntoIter = IntoIter<K, V>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.into_iter()
-    }
-}
-
-impl<'a, K, V> IntoIterator for &'a HashSortedContainer<K, V> {
-    type Item = (&'a K, &'a V);
-    type IntoIter = Iter<'a, K, V>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-impl<'a, K, V> IntoIterator for &'a mut HashSortedContainer<K, V> {
-    type Item = (&'a K, &'a mut V);
-    type IntoIter = IterMut<'a, K, V>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter_mut()
-    }
-}
-
-// Delegate HashSortedMap iteration to its container.
-
-impl<K, V, S> HashSortedMap<K, V, S> {
-    pub fn iter(&self) -> Iter<'_, K, V> {
-        self.container.iter()
-    }
-
-    pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
-        self.container.iter_mut()
-    }
-
     /// Consumes the map and returns an iterator over `(K, V)` pairs.
     pub fn into_iter(self) -> IntoIter<K, V> {
-        let (container, _hash_builder) = self.into_parts();
-        container.into_iter()
+        let cursor = IterCursor::new(self.n_bits, self.groups.len());
+        // Prevent Drop from running on self — we're moving groups out.
+        let mut this = ManuallyDrop::new(self);
+        let groups = unsafe { std::ptr::read(&this.groups) };
+        let num_groups = this.num_groups;
+        let len = this.len;
+        // Zero out num_groups so if Drop somehow runs it won't double-free.
+        this.num_groups = 0;
+        IntoIter {
+            groups,
+            num_groups,
+            len,
+            cursor,
+        }
     }
 }
 
