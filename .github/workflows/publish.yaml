@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   publish-npm:
@@ -24,6 +25,4 @@ jobs:
       - run: npm run compile
       - run: npm test
       - run: echo "Publishing string-offsets"
-      - run: npm whoami; npm --ignore-scripts publish
-        env:
-          NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}
+      - run: npm --ignore-scripts publish --provenance
