@@ -59,11 +59,6 @@ mod arch {
     }
 
     #[inline(always)]
-    pub fn clear_slot(mask: Mask, slot: usize) -> Mask {
-        mask & !(1u32 << slot)
-    }
-
-    #[inline(always)]
     pub fn next_match(mask: &mut Mask) -> Option<usize> {
         if *mask == 0 {
             return None;
@@ -113,11 +108,6 @@ mod arch {
     }
 
     #[inline(always)]
-    pub fn clear_slot(mask: Mask, slot: usize) -> Mask {
-        mask & !(0x80u64 << (slot * 8))
-    }
-
-    #[inline(always)]
     pub fn next_match(mask: &mut Mask) -> Option<usize> {
         if *mask == 0 {
             return None;
@@ -156,11 +146,6 @@ mod arch {
     #[inline(always)]
     pub fn lowest(mask: Mask) -> usize {
         (mask.trailing_zeros() >> 3) as usize
-    }
-
-    #[inline(always)]
-    pub fn clear_slot(mask: Mask, slot: usize) -> Mask {
-        mask & !(0x80u64 << (slot * 8))
     }
 
     #[inline(always)]

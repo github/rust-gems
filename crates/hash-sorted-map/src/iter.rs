@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 
 use super::group::Group;
-use super::group_ops::{self, CTRL_EMPTY};
+use super::group_ops;
 use super::hash_sorted_map::{HashSortedMap, NO_OVERFLOW};
 
 /// State shared by `Iter`, `IterMut`, and `IntoIter`: tracks which primary
@@ -105,7 +105,6 @@ impl<'a, K, V> Iterator for IterMut<'a, K, V> {
 /// Owning iterator that yields `(K, V)` pairs and consumes the map.
 pub struct IntoIter<K, V> {
     groups: Box<[Group<K, V>]>,
-    num_groups: u32,
     len: usize,
     cursor: IterCursor,
 }
@@ -172,13 +171,11 @@ impl<K, V, S> HashSortedMap<K, V, S> {
         // Prevent Drop from running on self — we're moving groups out.
         let mut this = ManuallyDrop::new(self);
         let groups = unsafe { std::ptr::read(&this.groups) };
-        let num_groups = this.num_groups;
         let len = this.len;
-        // Zero out num_groups so if Drop somehow runs it won't double-free.
-        this.num_groups = 0;
+        // Zero out len so if Drop somehow runs it sees an empty map.
+        this.len = 0;
         IntoIter {
             groups,
-            num_groups,
             len,
             cursor,
         }
