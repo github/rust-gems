@@ -4,7 +4,6 @@ use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
 
-use smallvec::SmallVec;
 
 use super::group::Group;
 use super::group_ops::{self, CTRL_EMPTY, GROUP_SIZE};
@@ -121,8 +120,8 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
     /// `GROUP_SIZE / MAX_FILL ≈ 16`, the per-element cost stays constant.
     pub fn sort_by_hash(&mut self) {
         let num_primary = 1usize << self.n_bits;
-        let mut chain: SmallVec<[u32; 4]> = SmallVec::new();
-        let mut hashes: SmallVec<[u64; 16]> = SmallVec::new();
+        let mut chain: Vec<u32> = Vec::new();
+        let mut hashes: Vec<u64> = Vec::new();
 
         for primary_gi in 0..num_primary {
             chain.clear();
@@ -437,7 +436,7 @@ fn should_swap<K: Ord, V>(
 fn compact_last_group<K: Hash, V, S: BuildHasher>(
     group: &mut Group<K, V>,
     hash_builder: &S,
-    hashes: &mut SmallVec<[u64; 16]>,
+    hashes: &mut Vec<u64>,
 ) {
     let mut write = 0usize;
     let mut full_mask = group_ops::match_full(&group.ctrl);

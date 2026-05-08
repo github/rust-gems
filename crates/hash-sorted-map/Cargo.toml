@@ -10,4 +10,3 @@ keywords = ["hashmap", "sorted", "merge", "simd"]
 categories = ["algorithms", "data-structures"]
 
 [dependencies]
-smallvec = "1"
