@@ -11,7 +11,7 @@
 //! boundary occurs wherever a bigram has lower priority than all bigrams between it and the
 //! previous boundary.
 //!
-//! For a document of N bytes, this produces roughly 2N n-grams: all bigrams plus algorithmically
+//! For a document of N bytes, this produces at most 3(N-1) n-grams: all bigrams plus algorithmically
 //! selected longer n-grams (up to [`MAX_SPARSE_GRAM_SIZE`] bytes).
 //!
 //! # Example
