@@ -141,3 +141,210 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
     }
     w
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::table::get_bigram_table;
+    use std::collections::HashSet;
+
+    fn collect_to_vec(content: &[u8], f: fn(&[u8], &mut [NGram]) -> usize) -> Vec<NGram> {
+        let mut buf = vec![NGram::from_rolling_hash(0, 0); max_sparse_grams(content.len())];
+        let count = f(content, &mut buf);
+        buf.truncate(count);
+        buf
+    }
+
+    /// Brute-force reference implementation.
+    ///
+    /// Enumerates all substrings of length 2..=MAX_SPARSE_GRAM_SIZE and emits those
+    /// where every interior bigram priority is strictly greater than `max(left, right)`
+    /// boundary bigram priority. All bigrams (len=2) are always emitted.
+    fn brute_force_sparse_grams(content: &[u8]) -> HashSet<NGram> {
+        let table = get_bigram_table();
+        let n = content.len();
+        let mut result = HashSet::new();
+        if n < 2 {
+            return result;
+        }
+        // All bigrams.
+        for i in 0..n - 1 {
+            result.insert(NGram::from_bytes(&content[i..i + 2]));
+        }
+        // Longer grams: length 3..=MAX_SPARSE_GRAM_SIZE.
+        for len in 3..=MAX_SPARSE_GRAM_SIZE as usize {
+            'outer: for start in 0..=n.saturating_sub(len) {
+                if start + len > n {
+                    break;
+                }
+                let left = table[content[start] as usize * 256 + content[start + 1] as usize];
+                let right =
+                    table[content[start + len - 2] as usize * 256 + content[start + len - 1] as usize];
+                let boundary = left.max(right);
+                // Inner bigrams: bytes [start+1,start+2], ..., [start+len-3,start+len-2]
+                for k in 1..len - 2 {
+                    let p = table[content[start + k] as usize * 256 + content[start + k + 1] as usize];
+                    if p <= boundary {
+                        continue 'outer;
+                    }
+                }
+                result.insert(NGram::from_bytes(&content[start..start + len]));
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn test_empty_input() {
+        assert!(collect_sparse_grams(b"").is_empty());
+    }
+
+    #[test]
+    fn test_single_byte() {
+        assert!(collect_sparse_grams(b"a").is_empty());
+    }
+
+    #[test]
+    fn test_two_bytes() {
+        let grams = collect_sparse_grams(b"ab");
+        assert_eq!(grams.len(), 1);
+        assert_eq!(grams[0], NGram::from_bytes(b"ab"));
+    }
+
+    #[test]
+    fn test_three_bytes() {
+        let grams = collect_sparse_grams(b"abc");
+        assert!(grams.len() >= 2);
+        assert_eq!(grams[0], NGram::from_bytes(b"ab"));
+        assert_eq!(grams[1], NGram::from_bytes(b"bc"));
+    }
+
+    #[test]
+    fn test_gram_lengths_bounded() {
+        let input = b"self.reset_states(the_quick_brown_fox_jumps";
+        let grams = collect_sparse_grams(input);
+        for gram in &grams {
+            assert!(gram.len() >= 2, "gram too short: {gram:?}");
+            assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE as usize, "gram too long: {gram:?}");
+        }
+    }
+
+    #[test]
+    fn test_produces_longer_grams() {
+        let grams = collect_sparse_grams(b"self.reset_states(");
+        assert!(grams.iter().any(|g| g.len() > 2));
+    }
+
+    #[test]
+    fn test_max_gram_size_boundary() {
+        let grams = collect_sparse_grams(b"abcdefgh");
+        for gram in &grams {
+            assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE as usize);
+        }
+    }
+
+    #[test]
+    fn test_repeated_bytes() {
+        let grams = collect_sparse_grams(b"aaaaaaaaaa");
+        assert!(grams.iter().filter(|g| g.len() == 2).count() >= 9);
+    }
+
+    #[test]
+    fn test_gram_count_scales_linearly() {
+        let input: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+        let grams = collect_sparse_grams(&input);
+        assert!(grams.len() >= input.len() - 1);
+        assert!(grams.len() <= input.len() * 3);
+    }
+
+    // -- Equivalence: scan vs deque --
+
+    #[test]
+    fn test_scan_equivalence_small() {
+        for input in [b"" as &[u8], b"x", b"ab", b"abc", b"abcdefgh", b"abcdefghi"] {
+            assert_eq!(
+                collect_to_vec(input, collect_sparse_grams_deque),
+                collect_to_vec(input, collect_sparse_grams_scan),
+                "mismatch on {:?}",
+                std::str::from_utf8(input).unwrap_or("?")
+            );
+        }
+    }
+
+    #[test]
+    fn test_scan_equivalence_hello_world() {
+        let input = b"hello world";
+        assert_eq!(
+            collect_to_vec(input, collect_sparse_grams_deque),
+            collect_to_vec(input, collect_sparse_grams_scan),
+        );
+    }
+
+    #[test]
+    fn test_scan_equivalence_large() {
+        let input: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+        assert_eq!(
+            collect_to_vec(&input, collect_sparse_grams_deque),
+            collect_to_vec(&input, collect_sparse_grams_scan),
+        );
+    }
+
+    #[test]
+    fn test_scan_equivalence_source_code() {
+        let input = include_bytes!("lib.rs");
+        assert_eq!(
+            collect_to_vec(input, collect_sparse_grams_deque),
+            collect_to_vec(input, collect_sparse_grams_scan),
+        );
+    }
+
+    // -- Brute-force equivalence --
+
+    fn assert_matches_brute_force(input: &[u8]) {
+        let grams = collect_sparse_grams(input);
+        let actual: HashSet<NGram> = grams.into_iter().collect();
+        let expected = brute_force_sparse_grams(input);
+        let only_actual: Vec<_> = actual.difference(&expected).collect();
+        let only_expected: Vec<_> = expected.difference(&actual).collect();
+        if !only_actual.is_empty() || !only_expected.is_empty() {
+            panic!(
+                "mismatch on input len={}\n  only in algorithm: {:?}\n  only in brute force: {:?}",
+                input.len(), only_actual, only_expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_brute_force_small() {
+        for input in [b"" as &[u8], b"x", b"ab", b"abc", b"abcd", b"abcdefgh", b"abcdefghi"] {
+            assert_matches_brute_force(input);
+        }
+    }
+
+    #[test]
+    fn test_brute_force_hello_world() {
+        assert_matches_brute_force(b"hello world");
+    }
+
+    #[test]
+    fn test_brute_force_repeated() {
+        assert_matches_brute_force(b"aaaaaaaaaa");
+    }
+
+    #[test]
+    fn test_brute_force_code_snippet() {
+        assert_matches_brute_force(b"self.reset_states(the_quick_brown_fox_jumps");
+    }
+
+    #[test]
+    fn test_brute_force_diverse() {
+        let input: Vec<u8> = (0..200).map(|i| (i % 256) as u8).collect();
+        assert_matches_brute_force(&input);
+    }
+
+    #[test]
+    fn test_brute_force_source_code() {
+        let input = include_bytes!("lib.rs");
+        assert_matches_brute_force(input);
+    }
+}
