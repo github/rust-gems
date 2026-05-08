@@ -4,7 +4,6 @@ members = [
     "crates/*",
     "crates/bpe/benchmarks",
     "crates/bpe/tests",
-    "crates/pef",
     "crates/sparse-ngrams",
 ]
 resolver = "2"
