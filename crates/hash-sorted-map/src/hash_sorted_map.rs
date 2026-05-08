@@ -116,7 +116,7 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
     ///
     /// Dividing by `n` gives the expected cost per element: `1 + n/m` (for
     /// `m ≫ 1`). Since `n/m` is the average chain length, bounded by
-    /// `GROUP_SIZE / MAX_FILL ≈ 16`, the per-element cost stays constant.
+    /// `GROUP_SIZE / MAX_FILL`, the per-element cost stays constant.
     pub fn sort_by_hash(&mut self) {
         let num_primary = 1usize << self.n_bits;
         let mut chain: Vec<u32> = Vec::new();
@@ -188,6 +188,13 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 let (gj, sj) = chain_slot(&chain, j);
                 self.groups[gj].keys[sj] = MaybeUninit::new(cur_key);
                 self.groups[gj].values[sj] = MaybeUninit::new(cur_val);
+            }
+            // Rebuild ctrl/tag bytes from the sorted hashes so that
+            // get/insert/entry still work after sorting.
+            // This adds a small performance penalty of maybe 6%.
+            for (pos, &h) in hashes.iter().enumerate() {
+                let (gi, si) = chain_slot(&chain, pos);
+                self.groups[gi].ctrl[si] = tag(h);
             }
         }
     }
@@ -455,10 +462,7 @@ fn compact_last_group<K: Hash, V, S: BuildHasher>(
         }
         write += 1;
     }
-    // Fix ctrl bytes: only the top bit matters (full vs empty).
-    for slot in 0..write {
-        group.ctrl[slot] = 0x80;
-    }
+    // Mark tail slots as empty; real tags are filled in after sorting.
     for slot in write..GROUP_SIZE {
         group.ctrl[slot] = CTRL_EMPTY;
     }
@@ -895,6 +899,10 @@ mod tests {
         }
         map.sort_by_hash();
         assert_eq!(map.len(), 200);
+        // Lookups must still work after sorting.
+        for i in 0..200u32 {
+            assert_eq!(map.get(&i), Some(&(i * 10)), "get failed for key {i}");
+        }
         let mut entries: Vec<_> = map.into_iter().collect();
         entries.sort_by_key(|&(k, _)| k);
         for i in 0..200u32 {
