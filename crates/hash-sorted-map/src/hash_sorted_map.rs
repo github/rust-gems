@@ -149,7 +149,7 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 }
             }
             // The last group may have gaps — compact it to the front.
-            let last_gi = *chain.last().unwrap() as usize;
+            let last_gi = *chain.last().expect("chain not be empty") as usize;
             compact_last_group(&mut self.groups[last_gi], &self.hash_builder, &mut hashes);
             let n = hashes.len();
             // Insertion sort by (hash, key).
