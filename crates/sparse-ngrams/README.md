@@ -55,3 +55,25 @@ The priority table maps byte pairs to frequency-based priorities. Increasing the
 | 6,400+    | 7.8M          | 100%     |
 
 Beyond ~6,400 entries the table saturates — additional bigram rankings produce no new n-grams since all occurring byte pairs already have distinct priorities.
+
+## Maximum n-gram length
+
+Increasing the maximum n-gram length produces more unique longer grams, with diminishing returns:
+
+![Unique n-grams vs. max length](images/unique_ngrams_vs_max_length.png)
+
+| Max length | Unique n-grams | vs. len=8 |
+|-----------|---------------|-----------|
+| 2         | 1.4M          | 18%       |
+| 3         | 4.6M          | 59%       |
+| 4         | 5.8M          | 74%       |
+| 6         | 7.1M          | 90%       |
+| 8         | 7.8M          | 100%      |
+| 12        | 8.7M          | 111%      |
+| 16        | 9.2M          | 118%      |
+| 24        | 9.8M          | 124%      |
+| 32        | 10.0M         | 128%      |
+| 48        | 10.3M         | 131%      |
+| 64        | 10.4M         | 132%      |
+
+The default of 8 captures most of the discriminative power. Going to 16 adds ~18% more unique grams but doubles the scan window; going to 64 adds only ~32% total.
