@@ -925,7 +925,7 @@ mod tests {
         let mut prev_key = 0u32;
         let mut first = true;
         for (&k, _) in &map {
-            let h = hasher.hash_one(&k);
+            let h = hasher.hash_one(k);
             if !first {
                 assert!(
                     (h, k) >= (prev_hash, prev_key),
