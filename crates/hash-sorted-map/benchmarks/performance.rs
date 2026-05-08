@@ -408,7 +408,11 @@ fn bench_sort(c: &mut Criterion) {
                 .enumerate()
                 .map(|(i, &key)| (key, i))
                 .collect();
-            vec.sort_unstable_by_key(|&(key, _)| hasher.hash_one(key));
+            vec.sort_unstable_by(|a, b| {
+                let ha = hasher.hash_one(a.0);
+                let hb = hasher.hash_one(b.0);
+                (ha, a.0).cmp(&(hb, b.0))
+            });
             vec
         });
     });
@@ -498,7 +502,7 @@ fn bench_merge_sort(c: &mut Criterion) {
             let result: Vec<(u32, u32)> = sorted_vecs
                 .into_iter()
                 .map(|v| v.into_iter())
-                .kmerge_by(|a, b| a.0 <= b.0)
+                .kmerge_by(|a, b| (a.0, a.1) <= (b.0, b.1))
                 .chunk_by(|&(_, key, _)| key)
                 .into_iter()
                 .map(|(key, group)| (key, group.map(|(_, _, c)| c).sum()))
@@ -518,7 +522,11 @@ fn bench_merge_sort(c: &mut Criterion) {
                 }
             }
             let mut vec: Vec<(u32, u32)> = map.into_iter().collect();
-            vec.sort_unstable_by_key(|&(key, _)| hasher.hash_one(key));
+            vec.sort_unstable_by(|a, b| {
+                let ha = hasher.hash_one(a.0);
+                let hb = hasher.hash_one(b.0);
+                (ha, a.0).cmp(&(hb, b.0))
+            });
             vec
         });
     });

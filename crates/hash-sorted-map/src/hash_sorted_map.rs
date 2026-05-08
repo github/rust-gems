@@ -96,8 +96,9 @@ impl<K, V, S> HashSortedMap<K, V, S> {
     }
 }
 
-impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
-    /// Sort all entries within each primary group chain by their hash value.
+impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
+    /// Sort all entries within each primary group chain by their hash value,
+    /// breaking ties by key.
     ///
     /// After sorting, iteration visits entries in hash order within each
     /// primary group (and since primary groups are visited in group-index
@@ -153,19 +154,22 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
             let last_gi = *chain.last().unwrap() as usize;
             compact_last_group(&mut self.groups[last_gi], &self.hash_builder, &mut hashes);
             let n = hashes.len();
-            // Insertion sort by hash.
+            // Insertion sort by (hash, key).
             for i in 1..n {
                 let mut j = i;
-                while j > 0 && hashes[j - 1] > hashes[j] {
+                while j > 0
+                    && should_swap(hashes[j - 1], hashes[j], &self.groups, &chain, j - 1, j)
+                {
                     hashes.swap(j - 1, j);
                     swap_chain_slots(&mut self.groups, &chain, j - 1, j);
                     j -= 1;
                 }
             }
-
         }
     }
+}
 
+impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         let hash = self.hash_builder.hash_one(&key);
         self.insert_hashed(hash, key, value)
@@ -404,6 +408,27 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
 #[inline]
 fn chain_slot(chain: &[u32], pos: usize) -> (usize, usize) {
     (chain[pos / GROUP_SIZE] as usize, pos % GROUP_SIZE)
+}
+
+/// Compare two positions: returns true if position `a` should come after position `b`
+/// (i.e., the pair is out of order). Comparison is (hash, key).
+#[inline]
+fn should_swap<K: Ord, V>(
+    hash_a: u64,
+    hash_b: u64,
+    groups: &[Group<K, V>],
+    chain: &[u32],
+    a: usize,
+    b: usize,
+) -> bool {
+    if hash_a != hash_b {
+        return hash_a > hash_b;
+    }
+    let (gi_a, slot_a) = chain_slot(chain, a);
+    let (gi_b, slot_b) = chain_slot(chain, b);
+    let key_a = unsafe { groups[gi_a].keys[slot_a].assume_init_ref() };
+    let key_b = unsafe { groups[gi_b].keys[slot_b].assume_init_ref() };
+    key_a > key_b
 }
 
 /// Compact the last group in a chain: move all occupied entries to slots
@@ -910,32 +935,38 @@ mod tests {
             map.insert(i, i);
         }
         map.sort_by_hash();
-        // Iteration should now yield entries in hash order.
+        // Iteration should now yield entries in (hash, key) order.
         let mut prev_hash = 0u64;
+        let mut prev_key = 0u32;
         let mut first = true;
         for (&k, _) in &map {
             let h = hasher.hash_one(&k);
             if !first {
-                assert!(h > prev_hash, "hash order violated: {prev_hash:#x} > {h:#x}");
+                assert!(
+                    (h, k) >= (prev_hash, prev_key),
+                    "(hash, key) order violated: ({prev_hash:#x}, {prev_key}) > ({h:#x}, {k})"
+                );
             }
             prev_hash = h;
+            prev_key = k;
             first = false;
         }
     }
 
     #[test]
     fn sort_by_hash_with_overflow() {
-        // Force overflow chains via fixed hash, then sort.
+        // Force overflow chains via fixed hash — all keys collide, so sort
+        // should produce key order as tie-breaker.
         let mut map = HashSortedMap::with_capacity_and_hasher(1, FixedState(0));
         for i in 0..50u32 {
             map.insert(i, i);
         }
         map.sort_by_hash();
         assert_eq!(map.len(), 50);
-        let mut entries: Vec<_> = map.into_iter().collect();
-        entries.sort_by_key(|&(k, _)| k);
+        // All hashes are equal, so entries should be in key order.
+        let entries: Vec<_> = map.into_iter().collect();
         for i in 0..50u32 {
-            assert_eq!(entries[i as usize], (i, i), "missing key {i}");
+            assert_eq!(entries[i as usize], (i, i), "key order violated at {i}");
         }
     }
 
@@ -951,13 +982,18 @@ mod tests {
         map.sort_by_hash();
         assert_eq!(map.len(), 100);
         let mut prev_hash = 0u64;
+        let mut prev_key = String::new();
         let mut first = true;
         for (k, _) in &map {
             let h = hasher.hash_one(k);
             if !first {
-                assert!(h > prev_hash, "hash order violated: {prev_hash:#x} > {h:#x}");
+                assert!(
+                    (h, k) >= (prev_hash, &prev_key),
+                    "(hash, key) order violated"
+                );
             }
             prev_hash = h;
+            prev_key = k.clone();
             first = false;
         }
     }
