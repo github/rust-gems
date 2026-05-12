@@ -13,8 +13,8 @@ pub(crate) const POLY_HASH_PRIME: u32 = 2_654_435_761;
 
 /// Precomputed powers of [`POLY_HASH_PRIME`] for rolling-hash range queries.
 /// `POLY_POWERS[i] = POLY_HASH_PRIME.pow(i)` (wrapping `u32`).
-pub(crate) const POLY_POWERS: [u32; MAX_SPARSE_GRAM_SIZE as usize + 1] = {
-    let mut p = [0u32; MAX_SPARSE_GRAM_SIZE as usize + 1];
+pub(crate) const POLY_POWERS: [u32; MAX_SPARSE_GRAM_SIZE + 1] = {
+    let mut p = [0u32; MAX_SPARSE_GRAM_SIZE + 1];
     p[0] = 1;
     let mut i = 1;
     while i < p.len() {
@@ -27,8 +27,16 @@ pub(crate) const POLY_POWERS: [u32; MAX_SPARSE_GRAM_SIZE as usize + 1] = {
 /// A compact n-gram identifier: upper 24 bits are a polynomial rolling hash,
 /// lower 8 bits are the byte length of the n-gram.
 ///
-/// Two `NGram` values are equal iff both their hash and length match, which
-/// greatly reduces collision probability compared to a bare hash.
+/// Note: With could also store ngrams up to length 8 in an u64. However, this
+/// would explode the number of ngram keys in a search dictionary. For that reason,
+/// we compress ngrams into an u32 which puts a more reasonable upper bound on
+/// the number of dictionary keys (~100 million).
+/// 
+/// Note: By storing the length explicitly in the lower 8 bits, we ensure that
+/// only ngrams of the same length collide. This is important because there
+/// are exponentially more long ngrams than short ngrams. At the same time,
+/// longer ngrams occur less frequently. So, colliding long ngrams won't increase
+/// the false positive rate too much.
 ///
 /// # Construction
 ///
@@ -111,22 +119,22 @@ mod tests {
     fn test_rolling_hash_matches_from_bytes() {
         let content = b"hello world";
         // Build prefix hashes the same way the extraction loop does.
-        let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
+        let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE];
         if !content.is_empty() {
             prefix_hashes[1] = content[0] as u32;
         }
         for idx in 1..content.len() {
-            let end_hash = prefix_hashes[idx & (MAX_SPARSE_GRAM_SIZE as usize - 1)]
+            let end_hash = prefix_hashes[idx & (MAX_SPARSE_GRAM_SIZE - 1)]
                 .wrapping_mul(POLY_HASH_PRIME)
                 .wrapping_add(content[idx] as u32);
             // Check the bigram content[idx-1..idx+1]
             let rolling_hash = end_hash
-                .wrapping_sub(prefix_hashes[(idx - 1) & (MAX_SPARSE_GRAM_SIZE as usize - 1)]
+                .wrapping_sub(prefix_hashes[(idx - 1) & (MAX_SPARSE_GRAM_SIZE - 1)]
                     .wrapping_mul(POLY_POWERS[2]));
             let rolling = NGram::from_rolling_hash(rolling_hash, 2);
             let direct = NGram::from_bytes(&content[idx - 1..idx + 1]);
             assert_eq!(rolling, direct, "mismatch at idx={idx}");
-            prefix_hashes[(idx + 1) & (MAX_SPARSE_GRAM_SIZE as usize - 1)] = end_hash;
+            prefix_hashes[(idx + 1) & (MAX_SPARSE_GRAM_SIZE - 1)] = end_hash;
         }
     }
 }

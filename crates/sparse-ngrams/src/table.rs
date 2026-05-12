@@ -8,8 +8,8 @@ use std::sync::OnceLock;
 use crate::NUM_FREQUENT_BIGRAMS;
 
 /// The bigrams in this string are sorted by how frequently they occur in code (descending).
-/// Bigrams are separated by null bytes. Only the first [`NUM_FREQUENT_BIGRAMS`] entries
-/// receive nonzero priority; all other byte pairs default to 0.
+/// Bigrams are separated by null bytes.
+/// Currently contains only the top 5845 bigrams (ascii, case-insensitive).
 static BIGRAMS_STR: &str = include_str!("bigrams.bin");
 
 /// Flat 256×256 lookup table indexed by `a as usize * 256 + b`.
@@ -29,8 +29,9 @@ pub(crate) fn get_bigram_table() -> &'static [u16; 256 * 256] {
             let Some((a, b)) = chars.next().zip(chars.next()) else {
                 continue;
             };
-            let a = (a as u8).to_ascii_lowercase();
-            let b = (b as u8).to_ascii_lowercase();
+            let a = a as u8;
+            let b = b as u8;
+            assert_eq!(table[a as usize * 256 + b as usize], 0);
             // Higher-frequency bigrams get HIGHER values so they are more often
             // encompassed by longer grams.
             table[a as usize * 256 + b as usize] =

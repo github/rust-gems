@@ -37,13 +37,13 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
     }
     assert!(out.len() >= max_sparse_grams(n));
     let table = get_bigram_table();
-    let mut queue = FixedDeque::<{ MAX_SPARSE_GRAM_SIZE as usize }>::new();
-    let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
+    let mut queue = FixedDeque::<MAX_SPARSE_GRAM_SIZE>::new();
+    let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE];
     prefix_hashes[1] = content[0] as u32;
     let mut w = 0usize;
 
     for idx in 1..n as u32 {
-        let mask = MAX_SPARSE_GRAM_SIZE as usize - 1;
+        let mask = MAX_SPARSE_GRAM_SIZE - 1;
         let end_hash = prefix_hashes[idx as usize & mask]
             .wrapping_mul(POLY_HASH_PRIME)
             .wrapping_add(content[idx as usize] as u32);
@@ -58,7 +58,7 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
             table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
 
         if let Some(begin) = queue.front() {
-            if idx - begin.index + 1 >= MAX_SPARSE_GRAM_SIZE {
+            if idx - begin.index + 1 >= MAX_SPARSE_GRAM_SIZE as u32 {
                 queue.pop_front();
             }
         }
@@ -101,11 +101,11 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
     assert!(out.len() >= max_sparse_grams(n));
 
     let table = get_bigram_table();
-    const MASK: usize = MAX_SPARSE_GRAM_SIZE as usize - 1;
+    const MASK: usize = MAX_SPARSE_GRAM_SIZE - 1;
     let mut w = 0usize;
-    let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE as usize];
+    let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE];
     prefix_hashes[1] = content[0] as u32;
-    let mut priorities = [u16::MAX; MAX_SPARSE_GRAM_SIZE as usize];
+    let mut priorities = [u16::MAX; MAX_SPARSE_GRAM_SIZE];
     for idx in 1..n as u32 {
         let end_hash = prefix_hashes[idx as usize & MASK]
             .wrapping_mul(POLY_HASH_PRIME)
@@ -119,7 +119,7 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
             table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
         priorities[idx as usize & MASK] = v1;
         let mut running_min = u16::MAX;
-        for d in 1..=(MAX_SPARSE_GRAM_SIZE - 2) {
+        for d in 1..=(MAX_SPARSE_GRAM_SIZE as u32 - 2) {
             if d >= idx {
                 break;
             }
@@ -172,7 +172,7 @@ mod tests {
             result.insert(NGram::from_bytes(&content[i..i + 2]));
         }
         // Longer grams: length 3..=MAX_SPARSE_GRAM_SIZE.
-        for len in 3..=MAX_SPARSE_GRAM_SIZE as usize {
+        for len in 3..=MAX_SPARSE_GRAM_SIZE {
             'outer: for start in 0..=n.saturating_sub(len) {
                 if start + len > n {
                     break;
@@ -225,7 +225,7 @@ mod tests {
         let grams = collect_sparse_grams(input);
         for gram in &grams {
             assert!(gram.len() >= 2, "gram too short: {gram:?}");
-            assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE as usize, "gram too long: {gram:?}");
+            assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE, "gram too long: {gram:?}");
         }
     }
 
@@ -239,7 +239,7 @@ mod tests {
     fn test_max_gram_size_boundary() {
         let grams = collect_sparse_grams(b"abcdefgh");
         for gram in &grams {
-            assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE as usize);
+            assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE);
         }
     }
 

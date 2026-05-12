@@ -24,7 +24,7 @@
 //! assert!(grams.len() > input.len() - 1);
 //! for gram in &grams {
 //!     assert!(gram.len() >= 2);
-//!     assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE as usize);
+//!     assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE);
 //! }
 //! ```
 
@@ -36,10 +36,12 @@ mod table;
 pub use ngram::NGram;
 
 /// Number of high-frequency bigrams used to build the priority table.
+/// We reserve u16::MAX (65535), since some algorithms need a max value.
+/// We also reserve 0 for all non-frequent bigrams.
 pub const NUM_FREQUENT_BIGRAMS: usize = 65534;
 
 /// Maximum length (in bytes) of a sparse n-gram.
-pub const MAX_SPARSE_GRAM_SIZE: u32 = 8;
+pub const MAX_SPARSE_GRAM_SIZE: usize = 8;
 
 pub use extract::{collect_sparse_grams, collect_sparse_grams_deque, collect_sparse_grams_scan, max_sparse_grams};
 

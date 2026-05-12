@@ -4,6 +4,16 @@ Fast sparse n-gram extraction from byte slices.
 
 Sparse grams select variable-length n-grams (2–8 bytes) without extracting all possible substrings. The algorithm is deterministic: the same extraction logic applies to every substring, making it suitable for substring search indexes.
 
+For background, see:
+- [The technology behind GitHub's new code search](https://github.blog/engineering/architecture-optimization/the-technology-behind-githubs-new-code-search/#fn-69904-bignote)
+- [Sparse n-grams: smarter trigram selection](https://cursor.com/blog/fast-regex-search#sparse-n-grams-smarter-trigram-selection)
+
+## Caveats
+
+The integrated bigram table contains only lowercase, ascii characters.
+Therefore, the implementation is meant to be used for a case insensitive search index.
+One can expect a case sensitive index to be significantly larger.
+
 ## How it works
 
 Each consecutive byte pair (bigram) is assigned a frequency-based priority from a precomputed table. An n-gram boundary occurs wherever a bigram has lower priority than all bigrams between it and the previous boundary. This is computed efficiently using a monotone deque or a scan-based approach.
@@ -45,16 +55,17 @@ The priority table maps byte pairs to frequency-based priorities. Increasing the
 ![Unique n-grams vs. table size](images/unique_ngrams_vs_table_size.png)
 
 | Table size | Unique n-grams | % of max |
-|-----------|---------------|----------|
-| 100       | 6.2M          | 79.4%    |
-| 200       | 6.7M          | 85.9%    |
-| 400       | 7.1M          | 91.1%    |
-| 800       | 7.5M          | 96.2%    |
-| 1,600     | 7.8M          | 99.0%    |
-| 3,200     | 7.8M          | 99.9%    |
-| 6,400+    | 7.8M          | 100%     |
+|-----------|-----------------|----------|
+| 100       | 6.2M            | 79.4%    |
+| 200       | 6.7M            | 85.9%    |
+| 400       | 7.1M            | 91.1%    |
+| 800       | 7.5M            | 96.2%    |
+| 1,600     | 7.8M            | 99.0%    |
+| 3,200     | 7.8M            | 99.9%    |
+| 5,845     | 7.8M            | 100%     |
 
-Beyond ~6,400 entries the table saturates — additional bigram rankings produce no new n-grams since all occurring byte pairs already have distinct priorities.
+The current bigram table contains only the first 5,845 most frequent lowercase ascii bigrams.
+But the table shows that bigrams start to saturate past after the first thousand bigrams.
 
 ## Maximum n-gram length
 
