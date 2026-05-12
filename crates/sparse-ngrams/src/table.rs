@@ -34,8 +34,7 @@ pub(crate) fn get_bigram_table() -> &'static [u16; 256 * 256] {
             assert_eq!(table[a as usize * 256 + b as usize], 0);
             // Higher-frequency bigrams get HIGHER values so they are more often
             // encompassed by longer grams.
-            table[a as usize * 256 + b as usize] =
-                (NUM_FREQUENT_BIGRAMS - idx) as u16;
+            table[a as usize * 256 + b as usize] = (NUM_FREQUENT_BIGRAMS - idx) as u16;
         }
         table
     })

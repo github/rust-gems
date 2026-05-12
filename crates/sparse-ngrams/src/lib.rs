@@ -43,5 +43,6 @@ pub const NUM_FREQUENT_BIGRAMS: usize = 65534;
 /// Maximum length (in bytes) of a sparse n-gram.
 pub const MAX_SPARSE_GRAM_SIZE: usize = 8;
 
-pub use extract::{collect_sparse_grams, collect_sparse_grams_deque, collect_sparse_grams_scan, max_sparse_grams};
-
+pub use extract::{
+    collect_sparse_grams, collect_sparse_grams_deque, collect_sparse_grams_scan, max_sparse_grams,
+};

@@ -31,7 +31,7 @@ pub(crate) const POLY_POWERS: [u32; MAX_SPARSE_GRAM_SIZE + 1] = {
 /// would explode the number of ngram keys in a search dictionary. For that reason,
 /// we compress ngrams into an u32 which puts a more reasonable upper bound on
 /// the number of dictionary keys (~100 million).
-/// 
+///
 /// Note: By storing the length explicitly in the lower 8 bits, we ensure that
 /// only ngrams of the same length collide. This is important because there
 /// are exponentially more long ngrams than short ngrams. At the same time,
@@ -128,9 +128,9 @@ mod tests {
                 .wrapping_mul(POLY_HASH_PRIME)
                 .wrapping_add(content[idx] as u32);
             // Check the bigram content[idx-1..idx+1]
-            let rolling_hash = end_hash
-                .wrapping_sub(prefix_hashes[(idx - 1) & (MAX_SPARSE_GRAM_SIZE - 1)]
-                    .wrapping_mul(POLY_POWERS[2]));
+            let rolling_hash = end_hash.wrapping_sub(
+                prefix_hashes[(idx - 1) & (MAX_SPARSE_GRAM_SIZE - 1)].wrapping_mul(POLY_POWERS[2]),
+            );
             let rolling = NGram::from_rolling_hash(rolling_hash, 2);
             let direct = NGram::from_bytes(&content[idx - 1..idx + 1]);
             assert_eq!(rolling, direct, "mismatch at idx={idx}");

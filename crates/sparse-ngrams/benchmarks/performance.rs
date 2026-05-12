@@ -1,5 +1,7 @@
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use sparse_ngrams::{NGram, collect_sparse_grams_deque, collect_sparse_grams_scan, max_sparse_grams};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use sparse_ngrams::{
+    collect_sparse_grams_deque, collect_sparse_grams_scan, max_sparse_grams, NGram,
+};
 
 fn bench_collect(c: &mut Criterion) {
     let inputs: Vec<(&str, Vec<u8>)> = vec![
@@ -10,7 +12,10 @@ fn bench_collect(c: &mut Criterion) {
                 .repeat(20)
                 .into_bytes(),
         ),
-        ("large_15KB", include_str!("../src/lib.rs").as_bytes().to_vec()),
+        (
+            "large_15KB",
+            include_str!("../src/lib.rs").as_bytes().to_vec(),
+        ),
     ];
 
     let mut group = c.benchmark_group("collect");

@@ -54,8 +54,7 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
         out[w] = NGram::from_rolling_hash(bigram_hash, 2);
         w += 1;
 
-        let v1 =
-            table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
+        let v1 = table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
 
         if let Some(begin) = queue.front() {
             if idx - begin.index + 1 >= MAX_SPARSE_GRAM_SIZE as u32 {
@@ -65,7 +64,8 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
         while let Some(begin) = queue.back() {
             let start = begin.index as usize - 1;
             let len = (idx - begin.index + 2) as usize;
-            let hash = end_hash.wrapping_sub(prefix_hashes[start & mask].wrapping_mul(POLY_POWERS[len]));
+            let hash =
+                end_hash.wrapping_sub(prefix_hashes[start & mask].wrapping_mul(POLY_POWERS[len]));
             out[w] = NGram::from_rolling_hash(hash, len);
             w += 1;
             if begin.value == v1 {
@@ -115,8 +115,7 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
             .wrapping_sub(prefix_hashes[(idx as usize - 1) & MASK].wrapping_mul(POLY_POWERS[2]));
         out[w] = NGram::from_rolling_hash(bigram_hash, 2);
         w += 1;
-        let v1 =
-            table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
+        let v1 = table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
         priorities[idx as usize & MASK] = v1;
         let mut running_min = u16::MAX;
         for d in 1..=(MAX_SPARSE_GRAM_SIZE as u32 - 2) {
@@ -129,7 +128,8 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
                 running_min = v_p;
                 let start = p.wrapping_sub(1) & MASK;
                 let len = d as usize + 2;
-                let hash = end_hash.wrapping_sub(prefix_hashes[start].wrapping_mul(POLY_POWERS[len]));
+                let hash =
+                    end_hash.wrapping_sub(prefix_hashes[start].wrapping_mul(POLY_POWERS[len]));
                 out[w] = NGram::from_rolling_hash(hash, len);
                 w += 1;
                 if v_p <= v1 {
@@ -178,12 +178,13 @@ mod tests {
                     break;
                 }
                 let left = table[content[start] as usize * 256 + content[start + 1] as usize];
-                let right =
-                    table[content[start + len - 2] as usize * 256 + content[start + len - 1] as usize];
+                let right = table
+                    [content[start + len - 2] as usize * 256 + content[start + len - 1] as usize];
                 let boundary = left.max(right);
                 // Inner bigrams: bytes [start+1,start+2], ..., [start+len-3,start+len-2]
                 for k in 1..len - 2 {
-                    let p = table[content[start + k] as usize * 256 + content[start + k + 1] as usize];
+                    let p =
+                        table[content[start + k] as usize * 256 + content[start + k + 1] as usize];
                     if p <= boundary {
                         continue 'outer;
                     }
@@ -225,7 +226,10 @@ mod tests {
         let grams = collect_sparse_grams(input);
         for gram in &grams {
             assert!(gram.len() >= 2, "gram too short: {gram:?}");
-            assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE, "gram too long: {gram:?}");
+            assert!(
+                gram.len() <= MAX_SPARSE_GRAM_SIZE,
+                "gram too long: {gram:?}"
+            );
         }
     }
 
@@ -309,14 +313,24 @@ mod tests {
         if !only_actual.is_empty() || !only_expected.is_empty() {
             panic!(
                 "mismatch on input len={}\n  only in algorithm: {:?}\n  only in brute force: {:?}",
-                input.len(), only_actual, only_expected
+                input.len(),
+                only_actual,
+                only_expected
             );
         }
     }
 
     #[test]
     fn test_brute_force_small() {
-        for input in [b"" as &[u8], b"x", b"ab", b"abc", b"abcd", b"abcdefgh", b"abcdefghi"] {
+        for input in [
+            b"" as &[u8],
+            b"x",
+            b"ab",
+            b"abc",
+            b"abcd",
+            b"abcdefgh",
+            b"abcdefghi",
+        ] {
             assert_matches_brute_force(input);
         }
     }
