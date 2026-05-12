@@ -17,11 +17,14 @@ mod config;
 mod sim_hash;
 
 use bitvec::*;
-pub use config::{GeoDiffConfig13, GeoDiffConfig7};
+pub use config::{GeoDiffConfig10, GeoDiffConfig13, GeoDiffConfig7};
 pub use sim_hash::SimHash;
 
 /// Diff count filter with a relative error standard deviation of ~0.125.
 pub type GeoDiffCount7<'a> = GeoDiffCount<'a, GeoDiffConfig7>;
+
+/// Diff count filter with a relative error standard deviation of ~0.04.
+pub type GeoDiffCount10<'a> = GeoDiffCount<'a, GeoDiffConfig10>;
 
 /// Diff count filter with a relative error standard deviation of ~0.015.
 pub type GeoDiffCount13<'a> = GeoDiffCount<'a, GeoDiffConfig13>;
@@ -359,8 +362,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     /// the resulting geofilter should always be the same.
     #[cfg(any(test, feature = "test-support"))]
     pub fn pseudorandom_filter_with_config(config: C, items: usize) -> Self {
-        use rand::RngCore;
-        use rand_chacha::rand_core::SeedableRng;
+        use rand_chacha::rand_core::{Rng, SeedableRng};
 
         let mut rng = rand_chacha::ChaCha12Rng::seed_from_u64(items as u64);
         let mut filter = Self::new(config);
@@ -465,7 +467,7 @@ mod tests {
     use std::io::Write;
 
     use itertools::Itertools;
-    use rand::{seq::IteratorRandom, RngCore};
+    use rand::{seq::IteratorRandom, Rng as RngCore};
     use rand_chacha::ChaCha12Rng;
 
     use crate::{

@@ -2,7 +2,7 @@ use std::io::Write;
 use std::time::Instant;
 
 use itertools::Itertools;
-use rand::{RngCore, SeedableRng};
+use rand::Rng as RngCore;
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
 use crate::config::GeoConfig;
@@ -181,7 +181,7 @@ pub fn simulate<F: Fn() -> Box<dyn SimulationCount> + Send + Sync>(
         .map(|_| {
             let mut t = f();
             let mut last_set_size = 0;
-            let mut rnd = rand::rngs::StdRng::from_os_rng();
+            let mut rnd: rand::rngs::StdRng = rand::make_rng();
             set_sizes
                 .iter()
                 .map(move |set_size| {

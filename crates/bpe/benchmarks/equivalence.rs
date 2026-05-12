@@ -30,7 +30,7 @@ fn test_compare_dictionary() {
             hugging_tokens.remove(added_token);
         }
         let mut hugging_tokens: Vec<_> = hugging_tokens.into_iter().collect();
-        hugging_tokens.sort_by(|(_, a), (_, b)| a.cmp(b));
+        hugging_tokens.sort_by_key(|(_, a)| *a);
         let hugging_tokens: Vec<_> = hugging_tokens
             .into_iter()
             .map(|(token, _)| token.chars().map(char_to_byte).collect())

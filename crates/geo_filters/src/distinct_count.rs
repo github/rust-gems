@@ -232,7 +232,7 @@ fn or<C: GeoConfig<Distinct>>(
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use rand::RngCore;
+    use rand::Rng as RngCore;
 
     use crate::build_hasher::UnstableDefaultBuildHasher;
     use crate::config::{iter_ones, tests::test_estimate, FixedConfig, VariableConfig};
