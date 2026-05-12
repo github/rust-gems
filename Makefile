@@ -24,6 +24,7 @@ build:
 
 .PHONY: build-js
 build-js:
+	which wasm-pack || cargo install wasm-pack
 	npm --prefix crates/string-offsets/js install
 	npm --prefix crates/string-offsets/js run compile
 
