@@ -10,9 +10,7 @@ For background, see:
 
 ## Caveats
 
-The integrated bigram table contains only lowercase, ascii characters.
-Therefore, the implementation is meant to be used for a case insensitive search index.
-One can expect a case sensitive index to be significantly larger.
+The integrated bigram table contains only lowercase ASCII bigrams. Callers should lowercase and normalize input before extraction (e.g. fold uppercase to lowercase, map non-ASCII bytes to a single sentinel value). This makes the implementation suitable for case-insensitive search indexes.
 
 ## How it works
 
@@ -56,16 +54,16 @@ The priority table maps byte pairs to frequency-based priorities. Increasing the
 
 | Table size | Unique n-grams | % of max |
 |-----------|-----------------|----------|
-| 100       | 6.2M            | 79.4%    |
-| 200       | 6.7M            | 85.9%    |
-| 400       | 7.1M            | 91.1%    |
-| 800       | 7.5M            | 96.2%    |
-| 1,600     | 7.8M            | 99.0%    |
-| 3,200     | 7.8M            | 99.9%    |
-| 5,845     | 7.8M            | 100%     |
+| 100       | 5.8M            | 77.0%    |
+| 200       | 6.4M            | 84.4%    |
+| 400       | 6.8M            | 90.2%    |
+| 800       | 7.3M            | 96.0%    |
+| 1,600     | 7.5M            | 99.2%    |
+| 3,200     | 7.6M            | 99.9%    |
+| 5,845     | 7.6M            | 100%     |
 
-The current bigram table contains only the first 5,845 most frequent lowercase ascii bigrams.
-But the table shows that bigrams start to saturate past after the first thousand bigrams.
+The current bigram table contains the 5,845 most frequent bigrams from a large code corpus.
+The table saturates quickly — the first ~1,600 bigrams already capture 99% of the unique n-grams.
 
 ## Maximum n-gram length
 
@@ -75,16 +73,16 @@ Increasing the maximum n-gram length produces more unique longer grams, with dim
 
 | Max length | Unique n-grams | vs. len=8 |
 |-----------|---------------|-----------|
-| 2         | 1.4M          | 18%       |
-| 3         | 4.6M          | 59%       |
-| 4         | 5.8M          | 74%       |
-| 6         | 7.1M          | 90%       |
-| 8         | 7.8M          | 100%      |
-| 12        | 8.7M          | 111%      |
-| 16        | 9.2M          | 118%      |
-| 24        | 9.8M          | 124%      |
-| 32        | 10.0M         | 128%      |
-| 48        | 10.3M         | 131%      |
-| 64        | 10.4M         | 132%      |
+| 2         | 1.2M          | 16%       |
+| 3         | 4.1M          | 54%       |
+| 4         | 5.3M          | 70%       |
+| 6         | 6.8M          | 89%       |
+| 8         | 7.6M          | 100%      |
+| 12        | 8.5M          | 113%      |
+| 16        | 9.1M          | 120%      |
+| 24        | 9.7M          | 128%      |
+| 32        | 10.1M         | 133%      |
+| 48        | 10.4M         | 137%      |
+| 64        | 10.5M         | 139%      |
 
-The default of 8 captures most of the discriminative power. Going to 16 adds ~18% more unique grams but doubles the scan window; going to 64 adds only ~32% total.
+The default of 8 captures most of the discriminative power. Going to 16 adds ~20% more unique grams but doubles the scan window; going to 64 adds only ~39% total.
