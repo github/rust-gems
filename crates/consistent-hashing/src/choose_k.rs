@@ -113,14 +113,18 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
     ///
     /// Time: O(k)
     pub fn shrink_n(&mut self) -> usize {
-        let mut n = self.samples.last().expect("samples must not be empty").pos;
+        let n = self.samples.last().expect("samples must not be empty").pos;
         self.n = n;
+        self.shrink_n_inner(n)
+    }
+
+    fn shrink_n_inner(&mut self, mut n: usize) -> usize {
         for i in (0..self.samples.len()).rev() {
             if self.samples[i].pos < n {
                 // We are done!
                 return i + 1;
             }
-            // Here the maximum could be k, k-1, or i!
+            // Here the maximum could be k, k-1, or i!            
             let k = self.samples[i].seq;
             let si = Sample::new(self.get_sample(i, n), i);
             let sk = Sample::new(self.get_sample(k, n), k);
@@ -140,16 +144,16 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
     ///
     /// Time: O(k)
     pub fn grow_k(&mut self) -> usize {
-        let k = self.samples.len();
+        let k = self.samples.len();        
         let sk = Sample::new(self.get_sample(k, self.n), k);
         if let Some(last) = self.samples.last().copied() {
             if last.pos < sk.pos {
                 self.samples.push(sk);
             } else if last.pos == sk.pos {
-                self.shrink_n();
+                self.shrink_n_inner(last.pos);
                 self.samples.push(sk);
             } else {
-                let i = self.shrink_n();
+                let i = self.shrink_n_inner(last.pos);
                 self.samples.push(last);
                 return i;
             }
@@ -332,11 +336,6 @@ mod tests {
                 while iter.samples.last().unwrap().pos > k {
                     let expected =
                         ConsistentChooseKHasher::new_with_k(DefaultHasher::new(), iter.samples.last().unwrap().pos, k);
-
-                    println!("n: {n}, k: {k}");
-                    println!("before: {:?}", iter.samples);
-                    println!("expected {:?}", expected.samples);
-
                     iter.shrink_n();
                     assert_eq!(iter.samples, expected.samples);
                 }
