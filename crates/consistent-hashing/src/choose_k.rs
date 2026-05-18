@@ -150,8 +150,9 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
             if last.pos < sk.pos {
                 self.samples.push(sk);
             } else if last.pos == sk.pos {
-                self.shrink_n_inner(last.pos);
+                let i = self.shrink_n_inner(last.pos);
                 self.samples.push(sk);
+                return i;
             } else {
                 let i = self.shrink_n_inner(last.pos);
                 self.samples.push(last);
