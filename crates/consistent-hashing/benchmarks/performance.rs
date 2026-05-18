@@ -39,9 +39,7 @@ fn throughput_benchmark(c: &mut Criterion) {
                         for key in keys {
                             let mut h = DefaultHasher::default();
                             key.hash(&mut h);
-                            black_box(
-                                ConsistentChooseKHasher::new_with_k(h, *n + k, k),
-                            );
+                            black_box(ConsistentChooseKHasher::new_with_k(h, *n + k, k));
                         }
                     },
                     criterion::BatchSize::SmallInput,
@@ -57,15 +55,12 @@ fn append_vs_new_with_k(c: &mut Criterion) {
     group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
     for n in [10usize, 100, 1000, 10000] {
         for k in [2, 3, 10, 100] {
-            group.bench_function(
-                BenchmarkId::new(format!("new_with_k/k_{k}"), n),
-                |b| {
-                    b.iter(|| {
-                        let h = DefaultHasher::default();
-                        black_box(ConsistentChooseKHasher::new_with_k(h, n + k, k));
-                    })
-                },
-            );
+            group.bench_function(BenchmarkId::new(format!("new_with_k/k_{k}"), n), |b| {
+                b.iter(|| {
+                    let h = DefaultHasher::default();
+                    black_box(ConsistentChooseKHasher::new_with_k(h, n + k, k));
+                })
+            });
             group.bench_function(BenchmarkId::new(format!("append/k_{k}"), n), |b| {
                 b.iter(|| {
                     let h = DefaultHasher::default();

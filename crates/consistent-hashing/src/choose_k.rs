@@ -124,7 +124,7 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
                 // We are done!
                 return i + 1;
             }
-            // Here the maximum could be k, k-1, or i!            
+            // Here the maximum could be k, k-1, or i!
             let k = self.samples[i].seq;
             let si = Sample::new(self.get_sample(i, n), i);
             let sk = Sample::new(self.get_sample(k, n), k);
@@ -144,7 +144,7 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
     ///
     /// Time: O(k)
     pub fn grow_k(&mut self) -> usize {
-        let k = self.samples.len();        
+        let k = self.samples.len();
         let sk = Sample::new(self.get_sample(k, self.n), k);
         if let Some(last) = self.samples.last().copied() {
             if last.pos < sk.pos {
@@ -221,10 +221,9 @@ mod tests {
                 let first = ConsistentChooseKHasher::new(hasher.clone(), n)
                     .next()
                     .unwrap();
-                let prev: Vec<usize> =
-                    ConsistentChooseKHasher::new_with_k(hasher.clone(), n, 1)
-                        .positions()
-                        .collect();
+                let prev: Vec<usize> = ConsistentChooseKHasher::new_with_k(hasher.clone(), n, 1)
+                    .positions()
+                    .collect();
                 assert_eq!(first, prev[0]);
             }
         }
@@ -236,8 +235,7 @@ mod tests {
         for key in 0..200 {
             for n in 1..20 {
                 let hasher = hasher_for_key(key);
-                let mut ranking: Vec<usize> =
-                    ConsistentChooseKHasher::new(hasher, n).collect();
+                let mut ranking: Vec<usize> = ConsistentChooseKHasher::new(hasher, n).collect();
                 ranking.sort();
                 let expected: Vec<usize> = (0..n).collect();
                 assert_eq!(ranking, expected, "key={key} n={n}");
@@ -253,8 +251,9 @@ mod tests {
             let n = 20;
             let full: Vec<usize> = ConsistentChooseKHasher::new(hasher.clone(), n).collect();
             for take in 1..=n {
-                let partial: Vec<usize> =
-                    ConsistentChooseKHasher::new(hasher.clone(), n).take(take).collect();
+                let partial: Vec<usize> = ConsistentChooseKHasher::new(hasher.clone(), n)
+                    .take(take)
+                    .collect();
                 assert_eq!(&partial[..], &full[..take]);
             }
         }
@@ -294,10 +293,9 @@ mod tests {
         let mut stats = vec![0; 8];
         for i in 0..32 {
             let hasher = hasher_for_key(i + 32783);
-            let samples: Vec<usize> =
-                ConsistentChooseKHasher::new_with_k(hasher, stats.len(), 2)
-                    .positions()
-                    .collect();
+            let samples: Vec<usize> = ConsistentChooseKHasher::new_with_k(hasher, stats.len(), 2)
+                .positions()
+                .collect();
             for s in samples {
                 stats[s] += 1;
             }
@@ -313,10 +311,9 @@ mod tests {
                         ConsistentChooseKHasher::new_with_k(hasher.clone(), n, k)
                             .positions()
                             .collect();
-                    let set2: Vec<usize> =
-                        ConsistentChooseKHasher::new_with_k(hasher, n, k + 1)
-                            .positions()
-                            .collect();
+                    let set2: Vec<usize> = ConsistentChooseKHasher::new_with_k(hasher, n, k + 1)
+                        .positions()
+                        .collect();
                     assert_eq!(set1.len(), k);
                     assert_eq!(set2.len(), k + 1);
                     let mut merged = set1.clone();
@@ -335,8 +332,11 @@ mod tests {
             for n in k + 1..30 {
                 let mut iter = ConsistentChooseKHasher::new_with_k(DefaultHasher::new(), n, k);
                 while iter.samples.last().unwrap().pos > k {
-                    let expected =
-                        ConsistentChooseKHasher::new_with_k(DefaultHasher::new(), iter.samples.last().unwrap().pos, k);
+                    let expected = ConsistentChooseKHasher::new_with_k(
+                        DefaultHasher::new(),
+                        iter.samples.last().unwrap().pos,
+                        k,
+                    );
                     iter.shrink_n();
                     assert_eq!(iter.samples, expected.samples);
                 }
