@@ -1,5 +1,5 @@
 use std::{
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::{DefaultHasher, Hash},
     hint::black_box,
     time::Duration,
 };
@@ -36,17 +36,44 @@ fn throughput_benchmark(c: &mut Criterion) {
                 b.iter_batched(
                     || &keys,
                     |keys| {
-                        let mut res = Vec::with_capacity(k);
                         for key in keys {
                             let mut h = DefaultHasher::default();
                             key.hash(&mut h);
                             black_box(
-                                ConsistentChooseKHasher::new(h, k).prev_with_vec(*n + k, &mut res),
+                                ConsistentChooseKHasher::new_with_k(h, *n + k, k),
                             );
                         }
                     },
                     criterion::BatchSize::SmallInput,
                 )
+            });
+        }
+    }
+    group.finish();
+}
+
+fn append_vs_new_with_k(c: &mut Criterion) {
+    let mut group = c.benchmark_group("append_vs_new_with_k");
+    group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
+    for n in [10usize, 100, 1000, 10000] {
+        for k in [2, 3, 10, 100] {
+            group.bench_function(
+                BenchmarkId::new(format!("new_with_k/k_{k}"), n),
+                |b| {
+                    b.iter(|| {
+                        let h = DefaultHasher::default();
+                        black_box(ConsistentChooseKHasher::new_with_k(h, n + k, k));
+                    })
+                },
+            );
+            group.bench_function(BenchmarkId::new(format!("append/k_{k}"), n), |b| {
+                b.iter(|| {
+                    let h = DefaultHasher::default();
+                    let mut iter = ConsistentChooseKHasher::new(h, n + k);
+                    black_box(for _ in 0..k {
+                        iter.grow_k();
+                    })
+                })
             });
         }
     }
@@ -60,6 +87,6 @@ criterion_group!(
                 .measurement_time(Duration::from_millis(4000))
                 .nresamples(1000);
 
-    targets = throughput_benchmark,
+    targets = throughput_benchmark, append_vs_new_with_k,
 );
 criterion_main!(benches);

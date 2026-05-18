@@ -17,7 +17,7 @@ where `N` is the number of nodes and `R` is the number of replicas.
 
 | Algorithm               | Lookup per key<br>(no replication)                                       | Node add/remove | Memory         | Lookup with replication                       |
 |-------------------------|--------------------------------------------------------------------------|-----------------|----------------|-----------------------------------------------|
-| Hash ring (with vnodes) | O(log N): binary search over N points; O(1): with specialized structures | O(log N)        | O(N)           | O(log N + R): Take next R distinct successors |
+| Hash ring (with vnodes) | O(log(V·N)): binary search; V = 100–200 virtual nodes per physical node  | O(V·log(V·N))   | O(V·N)         | O(log(V·N) + R): walk to next R distinct nodes |
 | Rendezvous              | O(N): max score                                                          | O(1)            | O(N) node list | O(N log R): pick top R scores                 |
 | Jump consistent hash    | O(log(N)) expected                                                       | 0               | O(1)           | O(R log N)                                    |
 | AnchorHash              | O(1) expected                                                            | O(1)            | O(N)           | Not native                                    |
@@ -36,6 +36,28 @@ Why replication matters
 - Tolerates node failures and maintenance without data unavailability.
 - Distributes read/write load across multiple owners, reducing hotspots.
 - Enables fast recovery and higher tail-latency resilience.
+
+## Applications beyond replication
+
+The `ConsistentChooseK` iterator produces a per-key ranking of all `n` nodes in priority order — consistently and with zero memory overhead. This ranking is a strict superset of simple replication and enables drop-in replacements for several well-known algorithms that traditionally require maintaining expensive data structures such as hash rings.
+
+### Bounded-load consistent hashing
+
+[Consistent Hashing with Bounded Loads](https://research.google/pubs/pub46580/) (Mirrokni et al., 2018) caps the maximum load any single node may receive. When a key's preferred node is full, it overflows to the next candidate. Classic implementations walk a hash ring to find successors, requiring O(V·N) memory for the ring where V is the number of virtual nodes per physical node (typically V > 100–200 for acceptable load variance). Lookups cost O(log(V·N)) via binary search.
+
+With `ConsistentChooseK`, the ranking iterator directly yields each key's preference list on the fly — no ring required. Assignment becomes: iterate tokens round by round, and for each token advance its ranking iterator until a node with remaining capacity is found. This achieves the same bounded-load guarantees with O(k) for k keys and O(k) time to extract the k-th key.
+
+See [`examples/bounded_load.rs`](examples/bounded_load.rs) for a working implementation.
+
+### Power of two choices
+
+The [power of two choices](https://www.eecs.harvard.edu/~michaelm/postscripts/mythesis.pdf) paradigm (Mitzenmacher, 2001; Azar et al., 1999) assigns each key to the least-loaded of two (or d) randomly chosen nodes. This reduces maximum load from O(log n / log log n) to O(log log n / log d) with high probability.
+
+Traditionally this requires drawing d independent random nodes per key. However, the original algorithm ignores the corner case where multiple independent hash functions collide on the same node, effectively reducing the number of distinct choices below d. With `ConsistentChooseK`, the first d elements from the ranking iterator are guaranteed to be distinct nodes. The choices are also consistent across time — the same key always considers the same d candidates — so reassignment only happens when a node actually joins or leaves.
+
+### Priority-based failover
+
+In active-passive or tiered architectures, each key needs a deterministic failover order. The ranking iterator provides exactly this: the first node is the primary, the second is the hot standby, and so on. When a node fails, the next node in the ranking takes over — consistently for all keys that had the failed node at the same rank position, and without any coordination or ring rebalancing.
 
 ## ConsistentChooseK algorithm
 

@@ -1,5 +1,8 @@
 use std::hash::{Hash, Hasher};
 
+mod choose_k;
+pub use choose_k::ConsistentChooseKHasher;
+
 /// A trait which behaves like a pseudo-random number generator.
 /// It is used to generate consistent hashes within one bucket.
 /// Note: the hasher must have been seeded with the key during construction.
@@ -226,54 +229,6 @@ impl<H: HashSeqBuilder> ConsistentHasher<H> {
     }
 }
 
-/// Implementation of a consistent choose k hashing algorithm.
-/// It returns k distinct consistent hashes in the range `0..n`.
-/// The hashes are consistent when `n` changes and when `k` changes!
-/// I.e. on average exactly `1/(n+1)` (resp. `1/(k+1)`) many hashes will change
-/// when `n` (resp. `k`) increases by one. Additionally, the returned `k` tuple
-/// is guaranteed to be uniformely chosen from all possible `n-choose-k` tuples.
-pub struct ConsistentChooseKHasher<H: ManySeqBuilder> {
-    builder: H,
-    k: usize,
-}
-
-impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
-    pub fn new(builder: H, k: usize) -> Self {
-        Self { builder, k }
-    }
-
-    pub fn prev(&self, n: usize) -> Vec<usize> {
-        let mut res = Vec::with_capacity(self.k);
-        self.prev_with_vec(n, &mut res);
-        res
-    }
-
-    pub fn prev_with_vec(&self, mut n: usize, samples: &mut Vec<usize>) {
-        assert!(n >= self.k, "n must be at least k");
-        samples.clear();
-        for i in 0..self.k {
-            samples.push(
-                ConsistentHasher::new(self.builder.seq_builder(i))
-                    .into_prev(n - i)
-                    .expect("must not fail")
-                    + i,
-            );
-        }
-        for i in (0..self.k).rev() {
-            n = samples[0..=i].iter().copied().max().expect("");
-            samples[i] = n;
-            for (j, sample) in samples[0..i].iter_mut().enumerate() {
-                if *sample == n {
-                    *sample = ConsistentHasher::new(self.builder.seq_builder(j))
-                        .into_prev(n - j)
-                        .expect("must not fail")
-                        + j;
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::hash::DefaultHasher;
@@ -311,63 +266,5 @@ mod tests {
             stats[x] += 1;
         }
         println!("{stats:?}");
-    }
-
-    #[test]
-    fn test_uniform_k() {
-        const K: usize = 3;
-        for k in 0..100 {
-            let hasher = hasher_for_key(k);
-            let sampler = ConsistentChooseKHasher::new(hasher, K);
-            for n in K..1000 {
-                let samples = sampler.prev(n + 1);
-                assert!(samples.len() == K);
-                for i in 0..K - 1 {
-                    assert!(samples[i] < samples[i + 1]);
-                }
-                let next = sampler.prev(n + 2);
-                for i in 0..K {
-                    assert!(samples[i] <= next[i]);
-                }
-                let mut merged = samples.clone();
-                merged.extend(next.clone());
-                merged.sort();
-                merged.dedup();
-                assert!(
-                    merged.len() == K || merged.len() == K + 1,
-                    "Unexpected {samples:?} vs. {next:?}"
-                );
-            }
-        }
-        let mut stats = vec![0; 8];
-        for i in 0..32 {
-            let hasher = hasher_for_key(i + 32783);
-            let sampler = ConsistentChooseKHasher::new(hasher, 2);
-            let samples = sampler.prev(stats.len());
-            for s in samples {
-                stats[s] += 1;
-            }
-        }
-        println!("{stats:?}");
-        assert_eq!(stats, vec![10, 12, 6, 6, 6, 5, 9, 10]);
-        // Test consistency when increasing k!
-        for k in 1..10 {
-            for n in k + 1..20 {
-                for key in 0..1000 {
-                    let hasher = hasher_for_key(key);
-                    let sampler1 = ConsistentChooseKHasher::new(hasher.clone(), k);
-                    let sampler2 = ConsistentChooseKHasher::new(hasher, k + 1);
-                    let set1 = sampler1.prev(n);
-                    let set2 = sampler2.prev(n);
-                    assert_eq!(set1.len(), k);
-                    assert_eq!(set2.len(), k + 1);
-                    let mut merged = set1.clone();
-                    merged.extend(set2);
-                    merged.sort();
-                    merged.dedup();
-                    assert_eq!(merged.len(), k + 1);
-                }
-            }
-        }
     }
 }
