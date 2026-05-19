@@ -11,8 +11,9 @@
 //!
 //! Run with:  cargo run --example bounded_load
 
+use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::rc::Rc;
+use std::time::Instant;
 
 use consistent_hashing::ConsistentChooseKHasher;
 
@@ -54,14 +55,16 @@ fn count_churn(before: &[Vec<usize>], after: &[Vec<usize>]) -> usize {
         .sum()
 }
 
-/// Load spread: difference between max and min loaded nodes.
-fn load_spread(load: &[usize]) -> usize {
-    load.iter().max().unwrap() - load.iter().min().unwrap()
+/// Standard deviation of load across machines.
+fn load_stddev(load: &[usize]) -> f64 {
+    let mean = load.iter().sum::<usize>() as f64 / load.len() as f64;
+    let var = load.iter().map(|&x| (x as f64 - mean).powi(2)).sum::<f64>() / load.len() as f64;
+    var.sqrt()
 }
 
 /// A hash ring with `v` virtual nodes per physical node.
 struct HashRing {
-    ring: Rc<Vec<(u64, usize)>>,
+    ring: Vec<(u64, usize)>,
 }
 
 impl HashRing {
@@ -78,39 +81,38 @@ impl HashRing {
             })
             .collect();
         ring.sort_unstable_by_key(|&(pos, _)| pos);
-        Self { ring: Rc::new(ring) }
+        Self { ring }
     }
 
     /// Return an iterator over distinct physical nodes for the given token hash,
     /// walking clockwise from the token's position on the ring.
-    fn iter(&self, token_hash: u64) -> HashRingIter {
+    fn iter(&self, token_hash: u64) -> HashRingIter<'_> {
         let start = self.ring.partition_point(|&(pos, _)| pos < token_hash);
         HashRingIter {
-            ring: Rc::clone(&self.ring),
+            ring: &self.ring,
             start,
             offset: 0,
-            seen: Vec::new(),
+            seen: HashSet::new(),
         }
     }
 }
 
 /// Iterator that walks a hash ring clockwise, yielding distinct physical nodes.
-struct HashRingIter {
-    ring: Rc<Vec<(u64, usize)>>,
+struct HashRingIter<'a> {
+    ring: &'a [(u64, usize)],
     start: usize,
     offset: usize,
-    seen: Vec<usize>,
+    seen: HashSet<usize>,
 }
 
-impl Iterator for HashRingIter {
+impl Iterator for HashRingIter<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<usize> {
         while self.offset < self.ring.len() {
             let (_, node) = self.ring[(self.start + self.offset) % self.ring.len()];
             self.offset += 1;
-            if !self.seen.contains(&node) {
-                self.seen.push(node);
+            if self.seen.insert(node) {
                 return Some(node);
             }
         }
@@ -164,7 +166,7 @@ const VIRTUAL_NODES: usize = 200;
 
 fn run(num_tokens: usize, k: usize, n: usize, num_seeds: u64) {
     let total = num_tokens * k;
-    let cap = total.div_ceil(n);
+    let cap = total.div_ceil(n) + 1;
 
     println!("Parameters: {num_tokens} tokens, k={k} replicas, {n} machines, {num_seeds} seeds");
     println!("Total assignments: {total},  capacity cap per machine: {cap}");
@@ -183,6 +185,9 @@ fn run(num_tokens: usize, k: usize, n: usize, num_seeds: u64) {
     let mut ub_changes = Stats::new();
     let mut b_changes = Stats::new();
     let mut ring_changes = Stats::new();
+    let mut ub_time_us = 0u128;
+    let mut b_time_us = 0u128;
+    let mut ring_time_us = 0u128;
 
     for seed in 0..num_seeds {
         // ── Choose-k (unbounded) ─────────────────────────────────────────
@@ -190,15 +195,20 @@ fn run(num_tokens: usize, k: usize, n: usize, num_seeds: u64) {
             (0..num_tokens as u64)
                 .map(move |key| ConsistentChooseKHasher::new(hasher_for_seed_and_key(seed, key), n))
         };
+        let t = Instant::now();
         let (unbounded, ub_load) = bounded_load_assign(make_iters(n), k, n, usize::MAX);
-        ub_spread.push(load_spread(&ub_load) as f64);
+        ub_time_us += t.elapsed().as_micros();
+        ub_spread.push(load_stddev(&ub_load));
 
         // ── Choose-k (bounded) ───────────────────────────────────────────
+        let t = Instant::now();
         let (bounded, b_load) = bounded_load_assign(make_iters(n), k, n, cap);
-        b_spread.push(load_spread(&b_load) as f64);
+        b_time_us += t.elapsed().as_micros();
+        b_spread.push(load_stddev(&b_load));
 
         // ── Hash ring (bounded) ──────────────────────────────────────────
         let ring = HashRing::new(seed, n, VIRTUAL_NODES);
+        let t = Instant::now();
         let (ring_assign, r_load) = bounded_load_assign(
             (0..num_tokens as u64)
                 .map(|key| ring.iter(hasher_for_seed_and_key(seed, key).finish())),
@@ -206,11 +216,12 @@ fn run(num_tokens: usize, k: usize, n: usize, num_seeds: u64) {
             n,
             cap,
         );
-        ring_spread.push(load_spread(&r_load) as f64);
+        ring_time_us += t.elapsed().as_micros();
+        ring_spread.push(load_stddev(&r_load));
 
         // ── Consistency: add one machine ─────────────────────────────────
         let n2 = n + 1;
-        let cap2 = total.div_ceil(n2);
+        let cap2 = total.div_ceil(n2) + 1;
 
         let (unbounded2, _) = bounded_load_assign(make_iters(n2), k, n2, usize::MAX);
         ub_changes.push(count_churn(&unbounded, &unbounded2) as f64 / total as f64 * 100.0);
@@ -236,7 +247,7 @@ fn run(num_tokens: usize, k: usize, n: usize, num_seeds: u64) {
     println!("{:-<24} {:->16} {:->16} {:->16}", "", "", "", "");
     println!(
         "{:<24} {:>11.2} ± {:<5.2} {:>10.2} ± {:<5.2} {:>10.2} ± {:<5.2}",
-        "Load spread (max-min)",
+        "Load stddev",
         ub_spread.mean(),
         ub_spread.stddev(),
         b_spread.mean(),
@@ -255,24 +266,28 @@ fn run(num_tokens: usize, k: usize, n: usize, num_seeds: u64) {
         ring_changes.stddev(),
     );
     println!(
-        "\n  ideal churn: {:.2}%",
-        1.0 / (n + 1) as f64 * 100.0
+        "{:<24} {:>13.1} ms {:>13.1} ms {:>13.1} ms",
+        "Total time",
+        ub_time_us as f64 / 1000.0,
+        b_time_us as f64 / 1000.0,
+        ring_time_us as f64 / 1000.0,
     );
+    println!("\n  ideal churn: {:.2}%", 1.0 / (n + 1) as f64 * 100.0);
 }
 
 fn main() {
-    let configs: &[(usize, usize, usize)] = &[
-        // (num_tokens, k, n)
-        (64, 3, 24),  // original
-        (256, 3, 24), // more tokens, same k and n
-        (64, 1, 24),  // k=1 (no replication)
-        (64, 5, 24),  // higher replication
-        (64, 3, 8),   // fewer machines
-        (64, 3, 60),  // many machines (sparse)
+    // (num_tokens, k, n, num_seeds)
+    let configs: &[(usize, usize, usize, u64)] = &[
+        (64, 3, 24, 1000),          // original
+        (256, 3, 24, 1000),         // more tokens, same k and n
+        (64, 1, 24, 1000),          // k=1 (no replication)
+        (64, 5, 24, 1000),          // higher replication
+        (64, 3, 8, 1000),           // fewer machines
+        (64, 3, 60, 1000),          // many machines (sparse)
+        (1_000_000, 3, 100_000, 1), // 1M tokens, 100k machines
     ];
-    let num_seeds = 1000;
 
-    for (i, &(num_tokens, k, n)) in configs.iter().enumerate() {
+    for (i, &(num_tokens, k, n, num_seeds)) in configs.iter().enumerate() {
         if i > 0 {
             println!("\n{}\n", "=".repeat(76));
         }
