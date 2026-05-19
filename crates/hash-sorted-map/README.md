@@ -45,21 +45,29 @@ keys, which means:
 Latest local Criterion snapshot from this repository's
 `target/criterion` outputs (lower is better):
 
+Hardware used for this snapshot:
+
+- CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz
+- Architecture: x86_64
+- Topology: 1 socket, 1 core, 2 threads
+- CPU frequency range: 800 MHz to 2800 MHz
+- Memory: 7.8 GiB RAM
+
 | Scenario                                     | HashSortedMap | Comparison                             | Result      |
 | :------------------------------------------- | ------------: | :------------------------------------- | :---------- |
-| Insert 1000 trigrams (pre-sized)             |       7.34 µs | hashbrown::HashMap: 12.88 µs           | ~43% faster |
-| Grow from capacity 128                       |      20.54 µs | hashbrown+Identity: 23.17 µs           | ~11% faster |
-| Count 4000 trigrams (`entry().or_default()`) |      12.70 µs | hashbrown+Identity `entry()`: 13.53 µs | ~6% faster  |
-| Iterate 1000 trigrams (`iter()`)             |       3.93 µs | hashbrown+Identity `iter()`: 2.87 µs   | ~37% slower |
-| Sort 100000 trigrams by hash                 |       1.83 ms | `Vec::sort_unstable`: 2.09 ms          | ~12% faster |
-| Merge 100 sorted maps + final sort           |     161.93 ms | hashbrown merge + vec sort: 234.70 ms  | ~31% faster |
+| Insert 1000 trigrams (pre-sized)             |       9.40 µs | hashbrown::HashMap: 14.55 µs           | ~35% faster |
+| Grow from capacity 128                       |      27.50 µs | hashbrown+Identity: 26.66 µs           | ~3% slower  |
+| Count 4000 trigrams (`entry().or_default()`) |      16.15 µs | hashbrown+Identity `entry()`: 15.49 µs | ~4% slower  |
+| Iterate 1000 trigrams (`iter()`)             |       3.02 µs | hashbrown+Identity `iter()`: 3.04 µs   | ~1% faster  |
+| Sort 100000 trigrams by hash                 |       1.66 ms | `Vec::sort_unstable`: 2.20 ms          | ~24% faster |
+| Merge 100 sorted maps + final sort           |     152.34 ms | hashbrown merge + vec sort: 193.37 ms  | ~21% faster |
 
 Key takeaways:
 
-- `HashSortedMap` is strongest on insert-heavy and merge/sort-heavy paths.
-- Iteration throughput is currently behind `hashbrown+Identity`.
-- In workloads that need deterministic hash-order serialization, the merge and
-  sort advantages can outweigh the iteration gap.
+- Pre-sized inserts, sorting, and merge+sort remain the strongest paths.
+- Iteration is now roughly on par with `hashbrown+Identity`.
+- Growth and count/update workloads are currently slightly slower than
+  `hashbrown+Identity` in this run.
 
 ## Running
 

@@ -185,74 +185,82 @@ entropy in both halves. Also changed trigram generation to use
 
 ---
 
-## Benchmark Results (Apple M-series, aarch64 NEON)
+## Benchmark Results (local x86_64 snapshot)
+
+Hardware used for the current local snapshot:
+
+- CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz
+- Architecture: x86_64
+- Topology: 1 socket, 1 core, 2 threads
+- CPU frequency range: 800 MHz to 2800 MHz
+- Memory: 7.8 GiB RAM
 
 ### Insert (1000 trigrams, pre-sized)
 
 | Implementation       | Time (µs) | vs hashbrown |
 |----------------------|-----------|--------------|
-| FoldHashMap          | 2.44      | −11%         |
-| FxHashMap            | 2.61      | −5%          |
-| hashbrown+Identity   | 2.63      | baseline     |
-| hashbrown::HashMap   | 2.74      | +4%          |
-| std::HashMap+FNV     | 3.18      | +21%         |
-| AHashMap             | 3.38      | +29%         |
-| **HashSortedMap**    | **3.46**  | **+32%**     |
-| std::HashMap         | 8.65      | +229%        |
+| FoldHashMap          | 13.88     | −5%          |
+| FxHashMap            | 14.60     | ~0%          |
+| hashbrown+Identity   | 14.44     | baseline     |
+| hashbrown::HashMap   | 14.55     | +1%          |
+| std::HashMap+FNV     | 15.55     | +8%          |
+| AHashMap             | 15.59     | +8%          |
+| **HashSortedMap**    | **9.40**  | **−35%**     |
+| std::HashMap         | 25.26     | +75%         |
 
 ### Reinsert (1000 trigrams, all keys exist)
 
 | Implementation       | Time (µs) |
 |----------------------|-----------|
-| hashbrown+Identity   | 2.50      |
-| **HashSortedMap**    | **2.70**  |
+| **HashSortedMap**    | **6.59**  |
+| hashbrown+Identity   | 6.95      |
 
 ### Growth (128 → 1000 trigrams, 3 resize rounds)
 
 | Implementation       | Time (µs) |
 |----------------------|-----------|
-| **HashSortedMap**    | **5.35**  |
-| hashbrown+Identity   | 10.12     |
+| hashbrown+Identity   | 26.66     |
+| **HashSortedMap**    | **27.50** |
 
 ### Count (4000 trigrams, mixed insert/update)
 
 | Implementation                   | Time (µs) |
 |----------------------------------|-----------|
-| hashbrown+Identity entry()       | 4.89      |
-| **HashSortedMap entry().or_default()** | **5.44** |
-| **HashSortedMap get_or_default** | **5.48**  |
+| hashbrown+Identity entry()       | 15.49     |
+| **HashSortedMap get_or_default** | **15.88** |
+| **HashSortedMap entry().or_default()** | **16.15** |
 
 ### Iteration (1000 trigrams)
 
-| Implementation                | Time (ns) |
+| Implementation                | Time (µs) |
 |-------------------------------|-----------|
-| **HashSortedMap iter()**      | **794**   |
-| **HashSortedMap into_iter()** | **998**   |
-| hashbrown+Identity iter()     | 1,067     |
-| hashbrown+Identity into_iter()| 1,060     |
+| **HashSortedMap iter()**      | **3.02**  |
+| hashbrown+Identity iter()     | 3.04      |
+| **HashSortedMap into_iter()** | **3.03**  |
+| hashbrown+Identity into_iter()| 3.56      |
 
 ### Sort (100K trigrams)
 
-| Implementation              | Time (µs) |
+| Implementation              | Time (ms) |
 |-----------------------------|-----------|
-| **HashSortedMap sort_by_hash** | **706** |
-| Vec::sort_unstable          | 984       |
+| **HashSortedMap sort_by_hash** | **1.66** |
+| Vec::sort_unstable          | 2.20      |
 
 ### Merge (100 maps × 100K keys each → sorted output)
 
 | Implementation                    | Time (ms) | vs HSM merge+sort |
 |-----------------------------------|-----------|--------------------|
-| hashbrown merge presized          | 30.4      | −46%               |
-| **HashSortedMap merge presized**  | **37.3**  | **−33%**           |
-| **HashSortedMap merge (no sort)** | **44.0**  | **−21%**           |
-| hashbrown merge                   | 45.4      | −19%               |
-| **HashSortedMap merge + sort**    | **55.9**  | **baseline**       |
-| hashbrown merge + Vec sort        | 58.7      | +5%                |
-| k-way merge sorted vecs           | 445       | +696%              |
+| hashbrown merge presized          | 160.79    | +6%               |
+| **HashSortedMap merge presized**  | **117.01**| **−23%**          |
+| **HashSortedMap merge (no sort)** | **141.57**| **−7%**           |
+| hashbrown merge                   | 163.59    | +7%               |
+| **HashSortedMap merge + sort**    | **152.34**| **baseline**      |
+| hashbrown merge + Vec sort        | 193.37    | +27%              |
+| k-way merge sorted vecs           | 445       | +192%             |
 
 **Key takeaways:**
-- HashSortedMap has **2× faster growth** than hashbrown
-- **25% faster iteration** than hashbrown (dense group layout)
-- **sort_by_hash is 28% faster** than Vec::sort_unstable (data is partially sorted by group)
-- **merge + sort is 5% faster** than hashbrown merge + Vec sort (the primary use case)
-- Pre-sized insert is 32% slower than hashbrown (trade-off for sort/merge efficiency)
+- Pre-sized insert is **~35% faster** than hashbrown+Identity
+- Reinsert and iter paths are now close to parity with hashbrown+Identity
+- Growth path is currently **~3% slower** than hashbrown+Identity
+- sort_by_hash is **~24% faster** than Vec::sort_unstable
+- merge + sort is **~21% faster** than hashbrown merge + Vec sort
