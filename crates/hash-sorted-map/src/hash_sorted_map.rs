@@ -143,7 +143,8 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
                     hashes.push(hash);
                 }
             }
-            let g = &self.groups[*chain.last().expect("chain should have at least one group") as usize];
+            let g =
+                &self.groups[*chain.last().expect("chain should have at least one group") as usize];
             for slot in 0..GROUP_SIZE {
                 if g.ctrl[slot] == CTRL_EMPTY {
                     break;
@@ -153,7 +154,7 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
                     .hash_one(unsafe { g.keys[slot].assume_init_ref() });
                 hashes.push(hash);
             }
-            
+
             let n = hashes.len();
             // Insertion sort by (hash, key).
             for i in 1..n {

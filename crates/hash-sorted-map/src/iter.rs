@@ -4,7 +4,6 @@ use std::mem::ManuallyDrop;
 use crate::group_ops::{CTRL_EMPTY, GROUP_SIZE};
 
 use super::group::Group;
-use super::group_ops;
 use super::hash_sorted_map::{HashSortedMap, NO_OVERFLOW};
 
 /// State shared by `Iter`, `IterMut`, and `IntoIter`: tracks which primary
@@ -21,7 +20,7 @@ struct IterCursor {
 }
 
 impl IterCursor {
-    fn new(n_bits: u32, groups_len: usize) -> Self {
+    fn new(n_bits: u32) -> Self {
         let num_primary = 1u32 << n_bits;
         Self {
             primary: 0,
@@ -41,7 +40,7 @@ impl IterCursor {
                 let slot = self.current_slot;
                 if groups[gi].ctrl[slot as usize] != CTRL_EMPTY {
                     self.current_slot += 1;
-                    return Some((gi as usize, slot as usize));
+                    return Some((gi, slot as usize));
                 }
             }
             // Current group exhausted — try overflow chain.
@@ -155,13 +154,13 @@ impl<K, V, S> HashSortedMap<K, V, S> {
     pub fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             groups: &self.groups,
-            cursor: IterCursor::new(self.n_bits, self.groups.len()),
+            cursor: IterCursor::new(self.n_bits),
         }
     }
 
     /// Returns a mutable iterator over `(&K, &mut V)` pairs.
     pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
-        let cursor = IterCursor::new(self.n_bits, self.groups.len());
+        let cursor = IterCursor::new(self.n_bits);
         IterMut {
             groups: &mut *self.groups as *mut [Group<K, V>],
             cursor,
@@ -172,7 +171,7 @@ impl<K, V, S> HashSortedMap<K, V, S> {
     /// Consumes the map and returns an iterator over `(K, V)` pairs.
     #[allow(clippy::should_implement_trait)]
     pub fn into_iter(self) -> IntoIter<K, V> {
-        let cursor = IterCursor::new(self.n_bits, self.groups.len());
+        let cursor = IterCursor::new(self.n_bits);
         // Prevent Drop from running on self — we're moving groups out.
         let mut this = ManuallyDrop::new(self);
         let groups = unsafe { std::ptr::read(&this.groups) };
