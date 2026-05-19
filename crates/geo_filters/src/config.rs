@@ -353,7 +353,7 @@ pub(crate) fn take_ref<I: Iterator>(iter: &mut I, n: usize) -> impl Iterator<Ite
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use rand::RngCore;
+    use rand::Rng as RngCore;
     use rand_chacha::ChaCha12Rng;
 
     use crate::{Count, Method};

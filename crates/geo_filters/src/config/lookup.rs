@@ -45,7 +45,7 @@ impl HashToBucketLookup {
 
 #[cfg(test)]
 mod tests {
-    use rand::RngCore;
+    use rand::Rng as RngCore;
     use rand_chacha::ChaCha12Rng;
 
     use crate::{
