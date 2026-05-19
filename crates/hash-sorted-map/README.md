@@ -29,8 +29,8 @@ keys, which means:
 
 - **Overflow chaining** instead of open addressing — groups that fill up link
   to overflow groups rather than probing into neighbours.
-- **Slot hint** — a preferred slot index derived from the hash, checked before
-  scanning the group. Gives a direct hit on most inserts at low load.
+- **Contiguous packing** — occupied slots are always packed from position 0
+  with no gaps, enabling a single `leading_zeros()` to find the next free slot.
 - **SIMD group scanning** — uses NEON on aarch64, SSE2 on x86\_64, and a
   scalar fallback elsewhere to scan 8–16 control bytes in parallel.
 - **AoS group layout** — each group stores its control bytes, keys, and values

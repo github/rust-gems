@@ -1,6 +1,8 @@
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 
+use crate::group_ops::{CTRL_EMPTY, GROUP_SIZE};
+
 use super::group::Group;
 use super::group_ops;
 use super::hash_sorted_map::{HashSortedMap, NO_OVERFLOW};
@@ -15,7 +17,7 @@ struct IterCursor {
     /// Current position within the group we're scanning: group index in the
     /// groups array, and a SIMD bitmask of remaining occupied slots.
     current_group: u32,
-    current_mask: group_ops::Mask,
+    current_slot: u32,
 }
 
 impl IterCursor {
@@ -24,8 +26,8 @@ impl IterCursor {
         Self {
             primary: 0,
             num_primary,
-            current_group: groups_len as u32,
-            current_mask: 0,
+            current_group: 0,
+            current_slot: 0,
         }
     }
 
@@ -34,25 +36,27 @@ impl IterCursor {
     /// overflow chain. Within each group, yields occupied slots via bitmask.
     fn next_slot<K, V>(&mut self, groups: &[Group<K, V>]) -> Option<(usize, usize)> {
         loop {
-            if let Some(slot) = group_ops::next_match(&mut self.current_mask) {
-                return Some((self.current_group as usize, slot));
+            let gi = self.current_group as usize;
+            if self.current_slot < GROUP_SIZE as u32 {
+                let slot = self.current_slot;
+                if groups[gi].ctrl[slot as usize] != CTRL_EMPTY {
+                    self.current_slot += 1;
+                    return Some((gi as usize, slot as usize));
+                }
             }
             // Current group exhausted — try overflow chain.
-            let gi = self.current_group as usize;
             if gi < groups.len() && groups[gi].overflow != NO_OVERFLOW {
-                let next = groups[gi].overflow;
-                self.current_group = next;
-                self.current_mask = group_ops::match_full(&groups[next as usize].ctrl);
+                self.current_group = groups[gi].overflow;
+                self.current_slot = 0;
                 continue;
             }
+            self.primary += 1;
             // No more overflow — move to next primary group.
             if self.primary >= self.num_primary {
                 return None;
             }
-            let gi = self.primary as usize;
-            self.primary += 1;
-            self.current_group = gi as u32;
-            self.current_mask = group_ops::match_full(&groups[gi].ctrl);
+            self.current_group = self.primary;
+            self.current_slot = 0;
         }
     }
 }

@@ -105,7 +105,7 @@ the overflow path.
 SIMD version** by pessimizing NEON code generation. Removed from the SIMD
 implementation, kept in the scalar version.
 
-### 7. Slot Hint Fast Path ⚠️ Removed from Lookup Paths
+### 7. Slot Hint Fast Path ❌ Removed
 
 Originally, HashSortedMap checked a preferred slot before scanning the group:
 ```rust
@@ -120,17 +120,18 @@ slots, making the hint check a 50/50 branch that pollutes the branch
 predictor. SIMD-only scanning (match_tag + match_empty) is uniformly fast
 regardless of key distribution.
 
-**Results of removing slot_hint from different paths:**
-- `find_or_insertion_slot` (entry API): **−25% latency** on merge benchmark
-- `get_hashed`: **−4.4%** improvement (SIMD scan is faster than branch+scalar)
-- `insert_hashed`: **+7%** regression on presized insert (the hint genuinely
-  helps when inserting into a mostly-empty group), but accepted for code
-  simplicity since the merge workload matters more
+**Structural benefit of removal**: Without the slot hint, inserts always
+append to the first empty slot. This guarantees that occupied slots are
+**packed contiguously from the beginning** of each group (no gaps). This
+invariant enables:
+- `count_occupied()`: a single `leading_zeros()` on the ctrl word replaces
+  bitmask scanning to find the next free slot or count entries
+- Simpler `insert_for_grow()`: just write at position `count_occupied()`
+- Simpler iteration: occupied slots are always `0..count_occupied()`
+- Simpler `sort_by_hash()`: no need to compact gaps before sorting
 
-**Current state**: slot_hint is **only** used in `insert_for_grow()`, where
-the map is guaranteed sparse after a resize (groups are mostly empty, so the
-hint slot is very likely free). For all other paths, SIMD-only scanning is
-used.
+**Current state**: Slot hint is fully removed. All paths use SIMD group
+scanning for lookups and `count_occupied()` for finding the insertion point.
 
 ### 8. Overflow Reserve Sizing ✅ Validated
 
@@ -178,7 +179,7 @@ entropy in both halves. Also changed trigram generation to use
 | Capacity sizing fix             | **−50%** insert time (biggest win)  |
 | Optimized growth path           | **2× faster** growth than hashbrown |
 | SIMD group scanning             | **−5%** insert time                 |
-| Slot hint removal (entry/get)   | **−25%** merge latency              |
+| Slot hint removal               | **−25%** merge latency, contiguous packing |
 | Branch hints (scalar only)      | **−2–6%**                           |
 | IdentityHasher fix              | Enabled fair comparison             |
 

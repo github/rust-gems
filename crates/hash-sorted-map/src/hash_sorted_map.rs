@@ -16,11 +16,6 @@ fn tag(hash: u64) -> u8 {
     (hash as u8) | 0x80
 }
 
-#[inline]
-fn slot_hint(hash: u64) -> usize {
-    ((hash >> 7) & (GROUP_SIZE as u64 - 1)) as usize
-}
-
 // ────────────────────────────────────────────────────────────────────────
 // HashSortedMap
 // ────────────────────────────────────────────────────────────────────────
@@ -148,9 +143,17 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
                     hashes.push(hash);
                 }
             }
-            // The last group may have gaps — compact it to the front.
-            let last_gi = *chain.last().expect("chain not be empty") as usize;
-            compact_last_group(&mut self.groups[last_gi], &self.hash_builder, &mut hashes);
+            let g = &self.groups[*chain.last().expect("chain should have at least one group") as usize];
+            for slot in 0..GROUP_SIZE {
+                if g.ctrl[slot] == CTRL_EMPTY {
+                    break;
+                }
+                let hash = self
+                    .hash_builder
+                    .hash_one(unsafe { g.keys[slot].assume_init_ref() });
+                hashes.push(hash);
+            }
+            
             let n = hashes.len();
             // Insertion sort by (hash, key).
             for i in 1..n {
@@ -265,12 +268,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 }
             }
             // Check for empty slot in this group.
-            let empty_mask = group_ops::match_empty(&group.ctrl);
-            if empty_mask != 0 {
-                let i = group_ops::lowest(empty_mask);
-                group.ctrl[i] = tag;
-                group.keys[i] = MaybeUninit::new(key);
-                group.values[i] = MaybeUninit::new(value);
+            let occupied_slots = group_ops::count_occupied(&group.ctrl);
+            if occupied_slots != GROUP_SIZE {
+                group.ctrl[occupied_slots] = tag;
+                group.keys[occupied_slots] = MaybeUninit::new(key);
+                group.values[occupied_slots] = MaybeUninit::new(value);
                 self.len += 1;
                 return None;
             }
@@ -315,7 +317,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                     return Some(unsafe { group.values[i].assume_init_ref() });
                 }
             }
-            if group_ops::match_empty(&group.ctrl) != 0 {
+            if group.ctrl[GROUP_SIZE - 1] == CTRL_EMPTY {
                 return None;
             }
             if group.overflow == NO_OVERFLOW {
@@ -346,12 +348,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 }
             }
             // Check for empty slot in this group.
-            let empty_mask = group_ops::match_empty(&group.ctrl);
-            if empty_mask != 0 {
-                let i = group_ops::lowest(empty_mask);
+            let occupied_slots = group_ops::count_occupied(&group.ctrl);
+            if occupied_slots != GROUP_SIZE {
                 return FindResult::Vacant(Insertion::Empty {
                     group: group as *mut _,
-                    slot: i,
+                    slot: occupied_slots,
                 });
             }
             // Group full — follow or report end of chain.
@@ -379,8 +380,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
         self.len = 0;
 
         for group in &old_groups[..old_num_groups] {
-            let mut full_mask = group_ops::match_full(&group.ctrl);
-            while let Some(i) = group_ops::next_match(&mut full_mask) {
+            for i in 0..group_ops::count_occupied(&group.ctrl) {
                 let hash = self
                     .hash_builder
                     .hash_one(unsafe { group.keys[i].assume_init_ref() });
@@ -396,18 +396,13 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
 
     fn insert_for_grow(&mut self, hash: u64, key_src: *const K, value_src: *const V) {
         let tag = tag(hash);
-        let mut hint = slot_hint(hash);
         let gi = self.group_index(hash);
         let mut group = &mut self.groups[gi];
 
-        loop {
-            if group.ctrl[hint] == CTRL_EMPTY {
-                break;
-            }
-            let empty_mask = group_ops::match_empty(&group.ctrl);
-            if empty_mask != 0 {
-                hint = group_ops::lowest(empty_mask);
-                break;
+        let slot = loop {
+            let occupied = group_ops::count_occupied(&group.ctrl);
+            if occupied != GROUP_SIZE {
+                break occupied;
             }
             let overflow = group.overflow;
             if overflow != NO_OVERFLOW {
@@ -417,15 +412,15 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 group.overflow = new_gi as u32;
                 self.num_groups += 1;
                 group = &mut self.groups[new_gi];
-                break;
+                break 0;
             }
-        }
-        group.ctrl[hint] = tag;
+        };
+        group.ctrl[slot] = tag;
         unsafe {
-            group.keys[hint]
+            group.keys[slot]
                 .as_mut_ptr()
                 .copy_from_nonoverlapping(key_src, 1);
-            group.values[hint]
+            group.values[slot]
                 .as_mut_ptr()
                 .copy_from_nonoverlapping(value_src, 1);
         }
@@ -439,33 +434,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
 #[inline]
 fn chain_slot(chain: &[u32], pos: usize) -> (usize, usize) {
     (chain[pos / GROUP_SIZE] as usize, pos % GROUP_SIZE)
-}
-
-/// Compact the last group in a chain: move all occupied entries to slots
-/// 0..n and clear the rest. Computes hashes for each occupied entry and
-/// appends them to `hashes`.
-fn compact_last_group<K: Hash, V, S: BuildHasher>(
-    group: &mut Group<K, V>,
-    hash_builder: &S,
-    hashes: &mut Vec<u64>,
-) {
-    let mut write = 0usize;
-    let mut full_mask = group_ops::match_full(&group.ctrl);
-    while let Some(read) = group_ops::next_match(&mut full_mask) {
-        let hash = hash_builder.hash_one(unsafe { group.keys[read].assume_init_ref() });
-        hashes.push(hash);
-        if read != write {
-            unsafe {
-                group.keys[write] = std::ptr::read(&group.keys[read]);
-                group.values[write] = std::ptr::read(&group.values[read]);
-            }
-        }
-        write += 1;
-    }
-    // Mark tail slots as empty; real tags are filled in after sorting.
-    for slot in write..GROUP_SIZE {
-        group.ctrl[slot] = CTRL_EMPTY;
-    }
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -593,7 +561,7 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
                 let (new_gi, new_group) = unsafe {
                     let map = &mut *map;
                     if map.num_groups as usize == map.groups.len() {
-                        return insert_after_grow(map, hash, key, value);
+                        return insert_after_grow(map, key, value);
                     }
                     let new_gi = map.num_groups as usize;
                     map.num_groups += 1;
@@ -630,7 +598,6 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
 #[inline(never)]
 fn insert_after_grow<K: Hash + Eq, V, S: BuildHasher>(
     map: &mut HashSortedMap<K, V, S>,
-    _hash: u64,
     key: K,
     value: V,
 ) -> &mut V {
