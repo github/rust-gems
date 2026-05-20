@@ -9,7 +9,7 @@ use criterion::{
     criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
     Throughput,
 };
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 
 fn throughput_benchmark(c: &mut Criterion) {
     let keys: Vec<u64> = rng().random_iter().take(1000).collect();
