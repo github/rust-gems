@@ -1,0 +1,20 @@
+[package]
+name = "consistent-choose-k"
+version = "0.1.0"
+edition = "2021"
+description = "Stateless consistent choose-k hashing for replication, failover, and bounded-load placement."
+repository = "https://github.com/github/rust-gems"
+homepage = "https://github.com/github/rust-gems/tree/main/crates/consistent-choose-k"
+documentation = "https://docs.rs/consistent-choose-k"
+readme = "README.md"
+license = "MIT"
+keywords = ["consistent", "hashing", "replication", "choose-k", "sampling"]
+categories = ["algorithms", "data-structures", "mathematics", "science"]
+
+[lib]
+crate-type = ["lib", "staticlib"]
+bench = false
+
+[dependencies]
+
+[dev-dependencies]

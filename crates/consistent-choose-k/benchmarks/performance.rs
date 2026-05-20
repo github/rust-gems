@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use consistent_hashing::{ConsistentChooseKHasher, ConsistentHasher};
+use consistent_choose_k::{ConsistentChooseKHasher, ConsistentHasher};
 use criterion::{
     criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
     Throughput,

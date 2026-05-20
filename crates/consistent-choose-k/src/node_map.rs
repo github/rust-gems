@@ -74,7 +74,7 @@ use crate::{ConsistentChooseKHasher, ManySeqBuilder};
 /// # Example
 /// ```
 /// use std::hash::{DefaultHasher, Hash};
-/// use consistent_hashing::ConsistentNodeMap;
+/// use consistent_choose_k::ConsistentNodeMap;
 ///
 /// let mut map = ConsistentNodeMap::new();
 /// let a = map.add();

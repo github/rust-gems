@@ -32,7 +32,7 @@ impl Sample {
 /// # Example
 /// ```
 /// use std::hash::{DefaultHasher, Hash};
-/// use consistent_hashing::ConsistentChooseKHasher;
+/// use consistent_choose_k::ConsistentChooseKHasher;
 ///
 /// let mut h = DefaultHasher::default();
 /// 42u64.hash(&mut h);

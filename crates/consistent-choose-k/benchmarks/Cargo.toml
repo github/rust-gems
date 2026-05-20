@@ -1,5 +1,5 @@
 [package]
-name = "consistent-hashing-benchmarks"
+name = "consistent-choose-k-benchmarks"
 edition = "2021"
 
 [[bench]]
@@ -9,7 +9,7 @@ harness = false
 test = false
 
 [dependencies]
-consistent-hashing = { path = "../" }
+consistent-choose-k = { path = "../" }
 
 criterion = { version = "0.7", features = ["csv_output"] }
 rand = "0.9"

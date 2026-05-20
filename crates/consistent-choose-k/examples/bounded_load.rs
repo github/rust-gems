@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::Instant;
 
-use consistent_hashing::ConsistentChooseKHasher;
+use consistent_choose_k::ConsistentChooseKHasher;
 
 /// Bounded-load assignment.
 ///
