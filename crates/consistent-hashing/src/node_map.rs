@@ -162,13 +162,8 @@ impl ConsistentNodeMap {
         if self.is_empty() {
             return None;
         }
-        let iter = ConsistentChooseKHasher::new(builder, self.total);
-        for pos in iter {
-            if !self.deleted.contains(&pos) {
-                return Some(pos);
-            }
-        }
-        None
+        let mut iter = ConsistentChooseKHasher::new(builder, self.total);
+        iter.find(|pos| !self.deleted.contains(pos))
     }
 }
 

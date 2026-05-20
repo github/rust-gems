@@ -14,11 +14,11 @@ use rand::{rng, Rng};
 fn throughput_benchmark(c: &mut Criterion) {
     let keys: Vec<u64> = rng().random_iter().take(1000).collect();
 
-    let mut group = c.benchmark_group(format!("choose"));
+    let mut group = c.benchmark_group("choose");
     group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
     for n in [1usize, 10, 100, 1000, 10000] {
         group.throughput(Throughput::Elements(keys.len() as u64));
-        group.bench_with_input(BenchmarkId::new(format!("1"), n), &n, |b, n| {
+        group.bench_with_input(BenchmarkId::new("1", n), &n, |b, n| {
             b.iter_batched(
                 || &keys,
                 |keys| {
@@ -65,9 +65,9 @@ fn append_vs_new_with_k(c: &mut Criterion) {
                 b.iter(|| {
                     let h = DefaultHasher::default();
                     let mut iter = ConsistentChooseKHasher::new(h, n + k);
-                    black_box(for _ in 0..k {
-                        iter.grow_k();
-                    })
+                    for _ in 0..k {
+                        black_box(iter.grow_k());
+                    }
                 })
             });
         }
