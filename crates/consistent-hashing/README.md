@@ -141,7 +141,11 @@ of Algorithm L:
   can compute the assignment for the current cluster size in isolation.
 
 So the same construction simultaneously gives a stateless consistent-hashing
-ranking and a fully reproducible, addressable reservoir sample.
+ranking and a fully reproducible, addressable reservoir sample. Conversely,
+reservoir sampling provides another way to view consistent hashing with
+replication: it is the unique `k`-out-of-`n` growth process where each new node
+joins the active set with probability `k/(n+1)`, evicts at most one old node,
+and preserves a uniform active set after every growth step.
 
 ## N-Choose-K replication
 
