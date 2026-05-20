@@ -106,6 +106,43 @@ For small `k` neither optimization is probably improving the actual performance 
 
 The next section proves the correctness of this algorithm.
 
+## Relation to reservoir sampling
+
+`consistent_choose_k` solves the same distributional problem as
+**reservoir sampling without replacement** — drawing a uniform `k`-subset from
+`{0, …, n−1}` such that incrementing `n` evicts at most one element with
+probability `k/(n+1)`. This is exactly the invariant maintained by Vitter's
+classical streaming algorithms (Algorithm R, 1985; Algorithm L, Li 1994).
+
+The two approaches differ in *where the randomness lives* and *what queries
+are cheap*:
+
+|                                | Algorithm L (streaming)           | `consistent_choose_k`              |
+|--------------------------------|-----------------------------------|------------------------------------|
+| Randomness source              | fresh PRNG draws                  | deterministic `consistent_hash(key, …)` |
+| State                          | `O(k)` reservoir + threshold `W`  | none                               |
+| Build sample for `n`           | `O(k · (1 + log(n/k)))` (replay)  | `O(k²)` or `O(k log k)`, no replay |
+| Advance to next `n`            | `O(1)` amortized (geometric skip) | `O(k)` via a `grow_n` step         |
+
+In other words, `consistent_choose_k` is a **history-independent** analogue
+of Algorithm L:
+
+- An `O(k)` `grow_n(key, k, n) → (Option<evicted>, new_member?)` step would
+  mirror Algorithm L's geometric skip — advancing the active set from `n` to
+  `n+1` (or directly to the next `n` that actually changes the sample). The
+  ingredients are already there: the recursion `S(k, n+1)` differs from
+  `S(k, n)` in at most one element (Property 3), and that element is determined
+  by which level of the `consistent_choose_max` recursion the new `n` enters.
+- Unlike Algorithm L, the active set for **any** `n` can also be recomputed
+  from scratch in `O(k²)` (or `O(k log k)`) without walking the prefix `1..n` — because the
+  randomness for level `i` is materialized by `consistent_hash(key, i, n−i)`
+  rather than threaded through a running PRNG state. This is what makes
+  `consistent_choose_k` usable as a *consistent hashing* primitive: any node
+  can compute the assignment for the current cluster size in isolation.
+
+So the same construction simultaneously gives a stateless consistent-hashing
+ranking and a fully reproducible, addressable reservoir sample.
+
 ## N-Choose-K replication
 
 We define the consistent `n-choose-k` replication as follows:
