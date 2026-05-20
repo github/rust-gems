@@ -112,7 +112,7 @@ We define the consistent `n-choose-k` replication as follows:
 
 1. For a given number `n` of nodes, choose `k` distinct nodes `S`.
 2. For a given `key` the chosen set of nodes must be uniformly chosen from all possible sets of size `k`.
-3. When `n` increases by one, exactly one node in the chosen set will be changed.
+3. When `n` increases by one, at most one node in the chosen set will be changed.
 4. and the node will be changed with probability `k/(n+1)`.
 
 In the remainder of this section we prove that the `consistent_choose_k` algorithm satisfies those properties.
