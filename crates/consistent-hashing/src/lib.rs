@@ -1,7 +1,9 @@
 use std::hash::{Hash, Hasher};
 
 mod choose_k;
+mod node_map;
 pub use choose_k::ConsistentChooseKHasher;
+pub use node_map::ConsistentNodeMap;
 
 /// A trait which behaves like a pseudo-random number generator.
 /// It is used to generate consistent hashes within one bucket.

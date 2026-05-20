@@ -11,26 +11,26 @@ Common algorithms
 - [DXHash](https://arxiv.org/abs/2107.07930)
 - [JumpBackHash](https://arxiv.org/abs/2403.18682)
 
-## Complexity summary
+## Core idea
 
-where `N` is the number of nodes and `R` is the number of replicas.
+Many consistent-hashing algorithms are best understood as specialized solutions
+to one higher-level problem: primary placement, replication, bounded load,
+failover, or arbitrary deletions. A single flat complexity table is often
+misleading because those algorithms do not all expose the same operations.
 
-| Algorithm               | Lookup per key<br>(no replication)                                       | Node add/remove | Memory         | Lookup with replication                       |
-|-------------------------|--------------------------------------------------------------------------|-----------------|----------------|-----------------------------------------------|
-| Hash ring (with vnodes) | O(log(V·N)): binary search; V = 100–200 virtual nodes per physical node  | O(V·log(V·N))   | O(V·N)         | O(log(V·N) + R): walk to next R distinct nodes |
-| Rendezvous              | O(N): max score                                                          | O(1)            | O(N) node list | O(N log R): pick top R scores                 |
-| Jump consistent hash    | O(log(N)) expected                                                       | 0               | O(1)           | O(R log N)                                    |
-| AnchorHash              | O(1) expected                                                            | O(1)            | O(N)           | Not native                                    |
-| DXHash                  | O(1) expected                                                            | O(1)            | O(N)           | Not native                                    |
-| JumpBackHash            | O(1) expected                                                            | 0               | O(1)           | Not native                                    |
-| **ConsistentChooseK**   | **O(1) expected**                                                        | **0**           | **O(1)**       | **O(R^2)**; **O(R log(R))**: using heap       |
+This crate instead centers on `ConsistentChooseK`: a stateless per-key ranking
+of all nodes. The first item is the primary owner, the first `R` items are
+replicas, the next item after a failed node is its failover target, and the same
+ranking can drive bounded-load and deletion-tolerant assignment. The current
+implementation extracts the first `R` distinct candidates in `O(R^2)` time
+(`O(R log R)` with a heap optimization) and uses no persistent memory.
 
 Replication of keys
-- Hash ring: replicate by walking clockwise to the next R distinct nodes. Virtual nodes help spread replicas more evenly. Replicas are not independently distributed. 
+- Hash ring: replicate by walking clockwise to the next R distinct nodes. Virtual nodes help spread replicas more evenly. Replicas are not independently distributed.
 - Rendezvous hashing: replicate by selecting the top R nodes by score for the key. This naturally yields R distinct owners and supports weights.
 - Jump consistent hash: the base function doesn't support replication. While the math can be modified to support consistent replication, it cannot be efficiently solved for large k and even for small k (=2 or =3), a quadratic or cubic equation has to be solved.
 - JumpBackHash and variants: The trick of Jump consistent hash to support replication won't work here due to the introduction of additional state.
-- ConsistentChooseK: Faster and more memory efficient than all other solutions.
+- ConsistentChooseK: produces an ordered list of distinct, consistent candidates directly, making replication and related higher-level policies simple compositions over the same primitive.
 
 Why replication matters
 - Tolerates node failures and maintenance without data unavailability.
@@ -58,6 +58,24 @@ Traditionally this requires drawing d independent random nodes per key. However,
 ### Priority-based failover
 
 In active-passive or tiered architectures, each key needs a deterministic failover order. The ranking iterator provides exactly this: the first node is the primary, the second is the hot standby, and so on. When a node fails, the next node in the ranking takes over — consistently for all keys that had the failed node at the same rank position, and without any coordination or ring rebalancing.
+
+### Deletion-tolerant node maps
+
+`ConsistentNodeMap` uses the `ConsistentChooseK` ranking to support arbitrary node deletions with very small state. It stores only the total slot count and the set of deleted slots. Lookup generates the per-key choose-k ranking and returns the first slot that is not deleted.
+
+This solves the same deletion problem targeted by AnchorHash, MementoHash, and DxHash: when a node is removed, only keys assigned to that node move, and they are redistributed uniformly over the remaining nodes. The difference is that those algorithms keep replacement or redirect metadata that encodes enough of the removal history to repair hits on deleted nodes. `ConsistentNodeMap` is history-independent: it only needs the current deleted set.
+
+For many practical deployments, this also makes `ConsistentNodeMap` a compelling replacement for traditional hash-ring implementations with virtual nodes. Rings typically need hundreds of virtual nodes per physical node to obtain good balance, which makes their memory footprint orders of magnitude larger than the actual node set. Here the ranking is generated directly from the key, so deletion support only adds state proportional to the number of deleted slots rather than to a large virtual-node ring.
+
+The tradeoff is lookup work. If `h` deleted slots are encountered before the first live slot, the current iterator costs `O((h + 1)^2)` because producing the i-th choose-k candidate costs O(i). The expected number of deleted-node hits has the same harmonic/log behavior analyzed for history-based approaches, approximately `ln(total / active)` when `total` slots contain `active` live nodes. Thus the total expected lookup cost is `O((1 + ln(total / active))^2)`.
+
+| Algorithm | Total lookup time | Add node | Remove node | State | Predefined capacity? | History-dependent? |
+|-----------|-------------------|----------|-------------|-------|----------------------|--------------------|
+| Hash ring with `V` virtual nodes | `O(log(V·active))` | `O(V log(V·active))` | `O(V log(V·active))` | `O(V·active)` ring entries | No | No |
+| `ConsistentNodeMap` | `O((h + 1)^2)`, expected `O((1 + ln(total / active))^2)` | `O(1)` expected | `O(1)` expected | `O(deleted)` deleted-slot set | No | No |
+| AnchorHash | `O((h + 1)^2)`, expected `O((1 + ln(total / active))^2)` | `O(1)` expected | `O(1)` expected | `O(capacity)` anchor/removal state | Yes | Yes |
+| MementoHash | `O((h + 1)^2)`, expected `O((1 + ln(total / active))^2)` | `O(1)` expected | `O(1)` expected | `O(deleted)` replacement tuples | No | Yes |
+| DxHash | `O((h + 1)^2)`, expected `O((1 + ln(total / active))^2)` | `O(1)` expected | `O(1)` expected | `O(capacity)` redirect/displacement state with smaller constants than AnchorHash | Yes | Yes |
 
 ## ConsistentChooseK algorithm
 
