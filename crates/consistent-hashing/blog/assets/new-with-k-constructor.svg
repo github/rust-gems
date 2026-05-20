@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="820" viewBox="0 0 1060 820" role="img" aria-labelledby="title desc">
+  <title id="title">new_with_k constructor sweep</title>
+  <desc id="desc">A visual walk-through of new_with_k: start with one candidate per sequence, sweep right to left, lock maxima, and resample lower collisions below the locked position.</desc>
+  <style>
+    .title { font: 19px sans-serif; font-weight: 700; fill: #24292f; }
+    .label { font: 15px sans-serif; fill: #24292f; }
+    .small { font: 13px sans-serif; fill: #57606a; }
+    .axis { stroke: #8c959f; stroke-width: 2; }
+    .tick { stroke: #8c959f; stroke-width: 1.4; }
+    .sample { fill: #ddf4ff; stroke: #54aeef; stroke-width: 2; }
+    .locked { fill: #dafbe1; stroke: #2da44e; stroke-width: 3; }
+    .temp { fill: #fff8c5; stroke: #bf8700; stroke-width: 2.5; }
+    .collision { fill: #ffebe9; stroke: #cf222e; stroke-width: 2; }
+    .discarded { fill: #f6f8fa; stroke: #8c959f; stroke-width: 2; stroke-dasharray: 5 4; }
+    .panel { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.5; rx: 12; }
+    .repair { stroke: #bf8700; stroke-width: 2.5; fill: none; marker-end: url(#arrow); stroke-dasharray: 5 4; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#bf8700" />
+    </marker>
+  </defs>
+
+  <text x="530" y="34" text-anchor="middle" class="title">Direct construction with new_with_k(n = 10, k = 4)</text>
+
+  <!-- Row 1 -->
+  <rect x="45" y="60" width="970" height="125" class="panel"/>
+  <text x="75" y="90" class="label">Start: each sequence proposes one candidate in 0..10</text>
+  <line x1="140" y1="135" x2="940" y2="135" class="axis"/>
+  <g class="small">
+    <line x1="140" y1="128" x2="140" y2="142" class="tick"/><text x="140" y="164" text-anchor="middle">0</text>
+    <line x1="220" y1="128" x2="220" y2="142" class="tick"/><text x="220" y="164" text-anchor="middle">1</text>
+    <line x1="300" y1="128" x2="300" y2="142" class="tick"/><text x="300" y="164" text-anchor="middle">2</text>
+    <line x1="380" y1="128" x2="380" y2="142" class="tick"/><text x="380" y="164" text-anchor="middle">3</text>
+    <line x1="460" y1="128" x2="460" y2="142" class="tick"/><text x="460" y="164" text-anchor="middle">4</text>
+    <line x1="540" y1="128" x2="540" y2="142" class="tick"/><text x="540" y="164" text-anchor="middle">5</text>
+    <line x1="620" y1="128" x2="620" y2="142" class="tick"/><text x="620" y="164" text-anchor="middle">6</text>
+    <line x1="700" y1="128" x2="700" y2="142" class="tick"/><text x="700" y="164" text-anchor="middle">7</text>
+    <line x1="780" y1="128" x2="780" y2="142" class="tick"/><text x="780" y="164" text-anchor="middle">8</text>
+    <line x1="860" y1="128" x2="860" y2="142" class="tick"/><text x="860" y="164" text-anchor="middle">9</text>
+    <line x1="940" y1="128" x2="940" y2="142" class="tick"/><text x="940" y="164" text-anchor="middle">10</text>
+  </g>
+  <circle cx="380" cy="135" r="13" class="sample"/><text x="380" y="115" text-anchor="middle" class="small">seq 0</text>
+  <circle cx="766" cy="135" r="13" class="collision"/><text x="744" y="115" text-anchor="middle" class="small">seq 1</text>
+  <circle cx="794" cy="135" r="13" class="collision"/><text x="816" y="115" text-anchor="middle" class="small">seq 2</text>
+  <circle cx="540" cy="135" r="13" class="sample"/><text x="540" y="115" text-anchor="middle" class="small">seq 3</text>
+
+  <!-- Row 2 -->
+  <rect x="45" y="210" width="970" height="125" class="panel"/>
+  <text x="75" y="240" class="label">i = 3: lock the largest candidate at 8. Yellow samples are repair samples below 8.</text>
+  <line x1="140" y1="285" x2="940" y2="285" class="axis"/>
+  <g class="small">
+    <line x1="140" y1="278" x2="140" y2="292" class="tick"/><text x="140" y="314" text-anchor="middle">0</text>
+    <line x1="220" y1="278" x2="220" y2="292" class="tick"/><text x="220" y="314" text-anchor="middle">1</text>
+    <line x1="300" y1="278" x2="300" y2="292" class="tick"/><text x="300" y="314" text-anchor="middle">2</text>
+    <line x1="380" y1="278" x2="380" y2="292" class="tick"/><text x="380" y="314" text-anchor="middle">3</text>
+    <line x1="460" y1="278" x2="460" y2="292" class="tick"/><text x="460" y="314" text-anchor="middle">4</text>
+    <line x1="540" y1="278" x2="540" y2="292" class="tick"/><text x="540" y="314" text-anchor="middle">5</text>
+    <line x1="620" y1="278" x2="620" y2="292" class="tick"/><text x="620" y="314" text-anchor="middle">6</text>
+    <line x1="700" y1="278" x2="700" y2="292" class="tick"/><text x="700" y="314" text-anchor="middle">7</text>
+    <line x1="780" y1="278" x2="780" y2="292" class="tick"/><text x="780" y="314" text-anchor="middle">8</text>
+    <line x1="860" y1="278" x2="860" y2="292" class="tick"/><text x="860" y="314" text-anchor="middle">9</text>
+    <line x1="940" y1="278" x2="940" y2="292" class="tick"/><text x="940" y="314" text-anchor="middle">10</text>
+  </g>
+  <circle cx="380" cy="285" r="13" class="sample"/><text x="380" y="265" text-anchor="middle" class="small">seq 0</text>
+  <circle cx="460" cy="285" r="13" class="temp"/><text x="460" y="265" text-anchor="middle" class="small">seq 1</text>
+  <circle cx="620" cy="285" r="13" class="temp"/><text x="620" y="265" text-anchor="middle" class="small">seq 2</text>
+  <circle cx="540" cy="285" r="13" class="discarded"/><text x="540" y="265" text-anchor="middle" class="small">seq 3 discarded</text>
+  <circle cx="780" cy="285" r="15" class="locked"/><text x="780" y="260" text-anchor="middle" class="small">seq 2</text>
+  <path d="M764 255 C675 215, 530 220, 470 260" class="repair"/>
+  <path d="M792 255 C720 225, 650 230, 625 260" class="repair"/>
+
+  <!-- Row 3 -->
+  <rect x="45" y="360" width="970" height="125" class="panel"/>
+  <text x="75" y="390" class="label">i = 2: lock the maximum of the repaired prefix, at 6</text>
+  <line x1="140" y1="435" x2="940" y2="435" class="axis"/>
+  <g class="small">
+    <line x1="140" y1="428" x2="140" y2="442" class="tick"/><text x="140" y="464" text-anchor="middle">0</text>
+    <line x1="220" y1="428" x2="220" y2="442" class="tick"/><text x="220" y="464" text-anchor="middle">1</text>
+    <line x1="300" y1="428" x2="300" y2="442" class="tick"/><text x="300" y="464" text-anchor="middle">2</text>
+    <line x1="380" y1="428" x2="380" y2="442" class="tick"/><text x="380" y="464" text-anchor="middle">3</text>
+    <line x1="460" y1="428" x2="460" y2="442" class="tick"/><text x="460" y="464" text-anchor="middle">4</text>
+    <line x1="540" y1="428" x2="540" y2="442" class="tick"/><text x="540" y="464" text-anchor="middle">5</text>
+    <line x1="620" y1="428" x2="620" y2="442" class="tick"/><text x="620" y="464" text-anchor="middle">6</text>
+    <line x1="700" y1="428" x2="700" y2="442" class="tick"/><text x="700" y="464" text-anchor="middle">7</text>
+    <line x1="780" y1="428" x2="780" y2="442" class="tick"/><text x="780" y="464" text-anchor="middle">8</text>
+    <line x1="860" y1="428" x2="860" y2="442" class="tick"/><text x="860" y="464" text-anchor="middle">9</text>
+    <line x1="940" y1="428" x2="940" y2="442" class="tick"/><text x="940" y="464" text-anchor="middle">10</text>
+  </g>
+  <circle cx="380" cy="435" r="13" class="sample"/><text x="380" y="415" text-anchor="middle" class="small">seq 0</text>
+  <circle cx="460" cy="435" r="13" class="temp"/><text x="460" y="415" text-anchor="middle" class="small">seq 1</text>
+  <circle cx="620" cy="435" r="15" class="locked"/><text x="620" y="410" text-anchor="middle" class="small">seq 2</text>
+  <circle cx="780" cy="435" r="15" class="locked"/><text x="780" y="410" text-anchor="middle" class="small">seq 2</text>
+
+  <!-- Row 4 -->
+  <rect x="45" y="510" width="970" height="125" class="panel"/>
+  <text x="75" y="540" class="label">i = 1 locks the repaired sample at 4, then i = 0 locks the remaining sample at 3</text>
+  <line x1="140" y1="585" x2="940" y2="585" class="axis"/>
+  <g class="small">
+    <line x1="140" y1="578" x2="140" y2="592" class="tick"/><text x="140" y="614" text-anchor="middle">0</text>
+    <line x1="220" y1="578" x2="220" y2="592" class="tick"/><text x="220" y="614" text-anchor="middle">1</text>
+    <line x1="300" y1="578" x2="300" y2="592" class="tick"/><text x="300" y="614" text-anchor="middle">2</text>
+    <line x1="380" y1="578" x2="380" y2="592" class="tick"/><text x="380" y="614" text-anchor="middle">3</text>
+    <line x1="460" y1="578" x2="460" y2="592" class="tick"/><text x="460" y="614" text-anchor="middle">4</text>
+    <line x1="540" y1="578" x2="540" y2="592" class="tick"/><text x="540" y="614" text-anchor="middle">5</text>
+    <line x1="620" y1="578" x2="620" y2="592" class="tick"/><text x="620" y="614" text-anchor="middle">6</text>
+    <line x1="700" y1="578" x2="700" y2="592" class="tick"/><text x="700" y="614" text-anchor="middle">7</text>
+    <line x1="780" y1="578" x2="780" y2="592" class="tick"/><text x="780" y="614" text-anchor="middle">8</text>
+    <line x1="860" y1="578" x2="860" y2="592" class="tick"/><text x="860" y="614" text-anchor="middle">9</text>
+    <line x1="940" y1="578" x2="940" y2="592" class="tick"/><text x="940" y="614" text-anchor="middle">10</text>
+  </g>
+  <circle cx="380" cy="585" r="15" class="locked"/><text x="380" y="560" text-anchor="middle" class="small">seq 0</text>
+  <circle cx="460" cy="585" r="15" class="locked"/><text x="460" y="560" text-anchor="middle" class="small">seq 1</text>
+  <circle cx="620" cy="585" r="15" class="locked"/><text x="620" y="560" text-anchor="middle" class="small">seq 2</text>
+  <circle cx="780" cy="585" r="15" class="locked"/><text x="780" y="560" text-anchor="middle" class="small">seq 2</text>
+
+  <!-- Row 5 -->
+  <rect x="45" y="665" width="970" height="105" class="panel"/>
+  <text x="75" y="695" class="label">Final choose-4 set</text>
+  <line x1="140" y1="735" x2="940" y2="735" class="axis"/>
+  <g class="small">
+    <line x1="140" y1="728" x2="140" y2="742" class="tick"/><text x="140" y="762" text-anchor="middle">0</text>
+    <line x1="220" y1="728" x2="220" y2="742" class="tick"/><text x="220" y="762" text-anchor="middle">1</text>
+    <line x1="300" y1="728" x2="300" y2="742" class="tick"/><text x="300" y="762" text-anchor="middle">2</text>
+    <line x1="380" y1="728" x2="380" y2="742" class="tick"/><text x="380" y="762" text-anchor="middle">3</text>
+    <line x1="460" y1="728" x2="460" y2="742" class="tick"/><text x="460" y="762" text-anchor="middle">4</text>
+    <line x1="540" y1="728" x2="540" y2="742" class="tick"/><text x="540" y="762" text-anchor="middle">5</text>
+    <line x1="620" y1="728" x2="620" y2="742" class="tick"/><text x="620" y="762" text-anchor="middle">6</text>
+    <line x1="700" y1="728" x2="700" y2="742" class="tick"/><text x="700" y="762" text-anchor="middle">7</text>
+    <line x1="780" y1="728" x2="780" y2="742" class="tick"/><text x="780" y="762" text-anchor="middle">8</text>
+    <line x1="860" y1="728" x2="860" y2="742" class="tick"/><text x="860" y="762" text-anchor="middle">9</text>
+    <line x1="940" y1="728" x2="940" y2="742" class="tick"/><text x="940" y="762" text-anchor="middle">10</text>
+  </g>
+  <circle cx="380" cy="735" r="14" class="locked"/><text x="380" y="712" text-anchor="middle" class="small">seq 0</text>
+  <circle cx="460" cy="735" r="14" class="locked"/><text x="460" y="712" text-anchor="middle" class="small">seq 1</text>
+  <circle cx="620" cy="735" r="14" class="locked"/><text x="620" y="712" text-anchor="middle" class="small">seq 2</text>
+  <circle cx="780" cy="735" r="14" class="locked"/><text x="780" y="712" text-anchor="middle" class="small">seq 2</text>
+  <text x="530" y="805" text-anchor="middle" class="small">The concrete positions are illustrative; the axis gives the index, and the marker gives the sequence that produced the sample.</text>
+</svg>

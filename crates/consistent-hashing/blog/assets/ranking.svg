@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="295" viewBox="0 0 1060 295" role="img" aria-labelledby="title desc">
+  <title id="title">A key's ranking from ConsistentChooseK</title>
+  <desc id="desc">An axis showing positions 0..10 with four nodes selected. Each selected circle is labeled with its rank. Arcs above the axis show the order in which the iterator reveals them: node 3 (rank 1), node 8 (rank 2), node 4 (rank 3), node 6 (rank 4).</desc>
+  <style>
+    .title { font: 19px sans-serif; font-weight: 700; fill: #24292f; }
+    .label { font: 15px sans-serif; fill: #24292f; }
+    .small { font: 13px sans-serif; fill: #57606a; }
+    .axis { stroke: #8c959f; stroke-width: 2; }
+    .tick { stroke: #8c959f; stroke-width: 1.4; }
+    .selected { fill: #dafbe1; stroke: #2da44e; stroke-width: 3; }
+    .rank { font: 14px sans-serif; font-weight: 700; fill: #1a7f37; }
+    .panel { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.5; rx: 12; }
+    .order { stroke: #0969da; stroke-width: 2.5; fill: none; marker-end: url(#arrowblue); }
+  </style>
+  <defs>
+    <marker id="arrowblue" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#0969da" />
+    </marker>
+  </defs>
+
+  <text x="530" y="34" text-anchor="middle" class="title">A key's ranking from ConsistentChooseK (n = 10)</text>
+
+  <rect x="45" y="55" width="970" height="210" class="panel"/>
+  <text x="75" y="85" class="label">Each selected circle holds its rank number. Arrows trace the order in which the iterator reveals them.</text>
+
+  <line x1="140" y1="220" x2="940" y2="220" class="axis"/>
+  <g class="small">
+    <line x1="140" y1="213" x2="140" y2="227" class="tick"/><text x="140" y="249" text-anchor="middle">0</text>
+    <line x1="220" y1="213" x2="220" y2="227" class="tick"/><text x="220" y="249" text-anchor="middle">1</text>
+    <line x1="300" y1="213" x2="300" y2="227" class="tick"/><text x="300" y="249" text-anchor="middle">2</text>
+    <line x1="380" y1="213" x2="380" y2="227" class="tick"/><text x="380" y="249" text-anchor="middle">3</text>
+    <line x1="460" y1="213" x2="460" y2="227" class="tick"/><text x="460" y="249" text-anchor="middle">4</text>
+    <line x1="540" y1="213" x2="540" y2="227" class="tick"/><text x="540" y="249" text-anchor="middle">5</text>
+    <line x1="620" y1="213" x2="620" y2="227" class="tick"/><text x="620" y="249" text-anchor="middle">6</text>
+    <line x1="700" y1="213" x2="700" y2="227" class="tick"/><text x="700" y="249" text-anchor="middle">7</text>
+    <line x1="780" y1="213" x2="780" y2="227" class="tick"/><text x="780" y="249" text-anchor="middle">8</text>
+    <line x1="860" y1="213" x2="860" y2="227" class="tick"/><text x="860" y="249" text-anchor="middle">9</text>
+    <line x1="940" y1="213" x2="940" y2="227" class="tick"/><text x="940" y="249" text-anchor="middle">10</text>
+  </g>
+
+  <!-- Selected positions: 3 (rank 1), 8 (rank 2), 4 (rank 3), 6 (rank 4) -->
+  <circle cx="380" cy="220" r="16" class="selected"/>
+  <text x="380" y="225" text-anchor="middle" class="rank">1</text>
+  <circle cx="460" cy="220" r="16" class="selected"/>
+  <text x="460" y="225" text-anchor="middle" class="rank">3</text>
+  <circle cx="620" cy="220" r="16" class="selected"/>
+  <text x="620" y="225" text-anchor="middle" class="rank">4</text>
+  <circle cx="780" cy="220" r="16" class="selected"/>
+  <text x="780" y="225" text-anchor="middle" class="rank">2</text>
+
+  <!-- Order arrows along the axis: 3 -> 8 (low long arc), 8 -> 4 (high long arc), 4 -> 6 (short low arc) -->
+  <path d="M396 207 Q580 165, 764 207" class="order"/>
+  <path d="M765 200 Q620 105, 475 200" class="order"/>
+  <path d="M477 207 Q540 175, 603 207" class="order"/>
+
+  <text x="530" y="285" text-anchor="middle" class="small">The ranking is uniform, distinct, and stable; the iterator extends it on demand without reshuffling earlier ranks.</text>
+</svg>

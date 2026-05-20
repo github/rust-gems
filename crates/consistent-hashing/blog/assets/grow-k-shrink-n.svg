@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="900" viewBox="0 0 1060 900" role="img" aria-labelledby="title desc">
+  <title id="title">Incremental grow_k construction</title>
+  <desc id="desc">A visual walk-through showing grow_k building the same final set as new_with_k: first 3, then 8, then repairing below 8 to get 4, then repairing the old top from 8 down to 6 before restoring 8.</desc>
+  <style>
+    .title { font: 19px sans-serif; font-weight: 700; fill: #24292f; }
+    .label { font: 15px sans-serif; fill: #24292f; }
+    .small { font: 13px sans-serif; fill: #57606a; }
+    .axis { stroke: #8c959f; stroke-width: 2; }
+    .tick { stroke: #8c959f; stroke-width: 1.4; }
+    .locked { fill: #dafbe1; stroke: #2da44e; stroke-width: 3; }
+    .temp { fill: #fff8c5; stroke: #bf8700; stroke-width: 2.5; }
+    .new { fill: #ddf4ff; stroke: #8250df; stroke-width: 3; }
+    .discarded { fill: #f6f8fa; stroke: #8c959f; stroke-width: 2; stroke-dasharray: 5 4; }
+    .panel { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.5; rx: 12; }
+    .repair { stroke: #bf8700; stroke-width: 2.5; fill: none; marker-end: url(#arrow); stroke-dasharray: 5 4; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#bf8700" />
+    </marker>
+  </defs>
+
+  <text x="530" y="34" text-anchor="middle" class="title">Incremental construction with grow_k(n = 10)</text>
+  <rect x="150" y="43" width="16" height="16" class="new"/>
+  <text x="175" y="56" class="small">new sample</text>
+  <circle cx="320" cy="51" r="8" class="temp"/>
+  <text x="336" y="56" class="small">temporarily introduced by repair</text>
+  <circle cx="600" cy="51" r="8" class="locked"/>
+  <text x="616" y="56" class="small">settled in the current set</text>
+  <rect x="800" y="43" width="16" height="16" class="discarded"/>
+  <text x="825" y="56" class="small">discarded new sample</text>
+
+  <!-- Row 1 -->
+  <rect x="45" y="70" width="970" height="115" class="panel"/>
+  <text x="75" y="100" class="label">grow_k #1: sequence 0 proposes 3, so the set is [3]</text>
+  <line x1="140" y1="140" x2="940" y2="140" class="axis"/>
+  <g class="small">
+    <line x1="140" y1="133" x2="140" y2="147" class="tick"/><text x="140" y="169" text-anchor="middle">0</text>
+    <line x1="220" y1="133" x2="220" y2="147" class="tick"/><text x="220" y="169" text-anchor="middle">1</text>
+    <line x1="300" y1="133" x2="300" y2="147" class="tick"/><text x="300" y="169" text-anchor="middle">2</text>
+    <line x1="380" y1="133" x2="380" y2="147" class="tick"/><text x="380" y="169" text-anchor="middle">3</text>
+    <line x1="460" y1="133" x2="460" y2="147" class="tick"/><text x="460" y="169" text-anchor="middle">4</text>
+    <line x1="540" y1="133" x2="540" y2="147" class="tick"/><text x="540" y="169" text-anchor="middle">5</text>
+    <line x1="620" y1="133" x2="620" y2="147" class="tick"/><text x="620" y="169" text-anchor="middle">6</text>
+    <line x1="700" y1="133" x2="700" y2="147" class="tick"/><text x="700" y="169" text-anchor="middle">7</text>
+    <line x1="780" y1="133" x2="780" y2="147" class="tick"/><text x="780" y="169" text-anchor="middle">8</text>
+    <line x1="860" y1="133" x2="860" y2="147" class="tick"/><text x="860" y="169" text-anchor="middle">9</text>
+    <line x1="940" y1="133" x2="940" y2="147" class="tick"/><text x="940" y="169" text-anchor="middle">10</text>
+  </g>
+  <rect x="366" y="126" width="28" height="28" class="new"/><text x="380" y="118" text-anchor="middle" class="small">seq 0</text>
+
+  <!-- Row 2 -->
+  <rect x="45" y="215" width="970" height="125" class="panel"/>
+  <text x="75" y="245" class="label">grow_k #2: sequence 1 proposes 8, above the current top 3, so append it</text>
+  <line x1="140" y1="290" x2="940" y2="290" class="axis"/>
+  <g class="small">
+    <line x1="140" y1="283" x2="140" y2="297" class="tick"/><text x="140" y="319" text-anchor="middle">0</text>
+    <line x1="220" y1="283" x2="220" y2="297" class="tick"/><text x="220" y="319" text-anchor="middle">1</text>
+    <line x1="300" y1="283" x2="300" y2="297" class="tick"/><text x="300" y="319" text-anchor="middle">2</text>
+    <line x1="380" y1="283" x2="380" y2="297" class="tick"/><text x="380" y="319" text-anchor="middle">3</text>
+    <line x1="460" y1="283" x2="460" y2="297" class="tick"/><text x="460" y="319" text-anchor="middle">4</text>
+    <line x1="540" y1="283" x2="540" y2="297" class="tick"/><text x="540" y="319" text-anchor="middle">5</text>
+    <line x1="620" y1="283" x2="620" y2="297" class="tick"/><text x="620" y="319" text-anchor="middle">6</text>
+    <line x1="700" y1="283" x2="700" y2="297" class="tick"/><text x="700" y="319" text-anchor="middle">7</text>
+    <line x1="780" y1="283" x2="780" y2="297" class="tick"/><text x="780" y="319" text-anchor="middle">8</text>
+    <line x1="860" y1="283" x2="860" y2="297" class="tick"/><text x="860" y="319" text-anchor="middle">9</text>
+    <line x1="940" y1="283" x2="940" y2="297" class="tick"/><text x="940" y="319" text-anchor="middle">10</text>
+  </g>
+  <circle cx="380" cy="290" r="14" class="locked"/><text x="380" y="267" text-anchor="middle" class="small">seq 0</text>
+  <rect x="766" y="276" width="28" height="28" class="new"/><text x="780" y="267" text-anchor="middle" class="small">seq 1</text>
+  <text x="530" y="337" text-anchor="middle" class="small">set: [3, 8]</text>
+
+  <!-- Row 3 -->
+  <rect x="45" y="370" width="970" height="145" class="panel"/>
+  <text x="75" y="400" class="label">grow_k #3: sequence 2 also proposes 8. Tie at the top -> repair below 8, then keep the new top.</text>
+  <line x1="140" y1="455" x2="940" y2="455" class="axis"/>
+  <g class="small">
+    <line x1="140" y1="448" x2="140" y2="462" class="tick"/><text x="140" y="484" text-anchor="middle">0</text>
+    <line x1="220" y1="448" x2="220" y2="462" class="tick"/><text x="220" y="484" text-anchor="middle">1</text>
+    <line x1="300" y1="448" x2="300" y2="462" class="tick"/><text x="300" y="484" text-anchor="middle">2</text>
+    <line x1="380" y1="448" x2="380" y2="462" class="tick"/><text x="380" y="484" text-anchor="middle">3</text>
+    <line x1="460" y1="448" x2="460" y2="462" class="tick"/><text x="460" y="484" text-anchor="middle">4</text>
+    <line x1="540" y1="448" x2="540" y2="462" class="tick"/><text x="540" y="484" text-anchor="middle">5</text>
+    <line x1="620" y1="448" x2="620" y2="462" class="tick"/><text x="620" y="484" text-anchor="middle">6</text>
+    <line x1="700" y1="448" x2="700" y2="462" class="tick"/><text x="700" y="484" text-anchor="middle">7</text>
+    <line x1="780" y1="448" x2="780" y2="462" class="tick"/><text x="780" y="484" text-anchor="middle">8</text>
+    <line x1="860" y1="448" x2="860" y2="462" class="tick"/><text x="860" y="484" text-anchor="middle">9</text>
+    <line x1="940" y1="448" x2="940" y2="462" class="tick"/><text x="940" y="484" text-anchor="middle">10</text>
+  </g>
+  <circle cx="380" cy="455" r="14" class="locked"/><text x="380" y="432" text-anchor="middle" class="small">seq 0</text>
+  <circle cx="460" cy="455" r="14" class="temp"/><text x="460" y="432" text-anchor="middle" class="small">seq 1</text>
+  <rect x="766" y="441" width="28" height="28" class="new"/><text x="780" y="432" text-anchor="middle" class="small">seq 2</text>
+  <path d="M760 425 C650 375, 510 385, 465 430" class="repair"/>
+  <text x="530" y="508" text-anchor="middle" class="small">set: [3, 4, 8]. The old top sequence is repaired to 4; the new sequence owns the tied top.</text>
+
+  <!-- Row 4 -->
+  <rect x="45" y="545" width="970" height="145" class="panel"/>
+  <text x="75" y="575" class="label">grow_k #4: sequence 3 proposes 5. The old top sequence repairs from 8 down to 6, then 8 is restored.</text>
+  <line x1="140" y1="630" x2="940" y2="630" class="axis"/>
+  <g class="small">
+    <line x1="140" y1="623" x2="140" y2="637" class="tick"/><text x="140" y="659" text-anchor="middle">0</text>
+    <line x1="220" y1="623" x2="220" y2="637" class="tick"/><text x="220" y="659" text-anchor="middle">1</text>
+    <line x1="300" y1="623" x2="300" y2="637" class="tick"/><text x="300" y="659" text-anchor="middle">2</text>
+    <line x1="380" y1="623" x2="380" y2="637" class="tick"/><text x="380" y="659" text-anchor="middle">3</text>
+    <line x1="460" y1="623" x2="460" y2="637" class="tick"/><text x="460" y="659" text-anchor="middle">4</text>
+    <line x1="540" y1="623" x2="540" y2="637" class="tick"/><text x="540" y="659" text-anchor="middle">5</text>
+    <line x1="620" y1="623" x2="620" y2="637" class="tick"/><text x="620" y="659" text-anchor="middle">6</text>
+    <line x1="700" y1="623" x2="700" y2="637" class="tick"/><text x="700" y="659" text-anchor="middle">7</text>
+    <line x1="780" y1="623" x2="780" y2="637" class="tick"/><text x="780" y="659" text-anchor="middle">8</text>
+    <line x1="860" y1="623" x2="860" y2="637" class="tick"/><text x="860" y="659" text-anchor="middle">9</text>
+    <line x1="940" y1="623" x2="940" y2="637" class="tick"/><text x="940" y="659" text-anchor="middle">10</text>
+  </g>
+  <circle cx="380" cy="630" r="14" class="locked"/><text x="380" y="607" text-anchor="middle" class="small">seq 0</text>
+  <circle cx="460" cy="630" r="14" class="locked"/><text x="460" y="607" text-anchor="middle" class="small">seq 1</text>
+  <rect x="526" y="616" width="28" height="28" class="discarded"/><text x="540" y="607" text-anchor="middle" class="small">seq 3 discarded</text>
+  <circle cx="620" cy="630" r="14" class="temp"/><text x="620" y="607" text-anchor="middle" class="small">seq 2</text>
+  <circle cx="780" cy="630" r="14" class="locked"/><text x="780" y="607" text-anchor="middle" class="small">seq 2</text>
+  <path d="M774 602 C730 558, 660 558, 625 602" class="repair"/>
+  <text x="530" y="683" text-anchor="middle" class="small">set: [3, 4, 6, 8]. The new candidate 5 from seq 3 is discarded; the repair brings the old top sequence from 8 down to 6.</text>
+
+  <!-- Row 5 -->
+  <rect x="45" y="720" width="970" height="115" class="panel"/>
+  <text x="75" y="750" class="label">Final incremental prefix: the same choose-4 set as direct construction</text>
+  <line x1="140" y1="790" x2="940" y2="790" class="axis"/>
+  <g class="small">
+    <line x1="140" y1="783" x2="140" y2="797" class="tick"/><text x="140" y="817" text-anchor="middle">0</text>
+    <line x1="220" y1="783" x2="220" y2="797" class="tick"/><text x="220" y="817" text-anchor="middle">1</text>
+    <line x1="300" y1="783" x2="300" y2="797" class="tick"/><text x="300" y="817" text-anchor="middle">2</text>
+    <line x1="380" y1="783" x2="380" y2="797" class="tick"/><text x="380" y="817" text-anchor="middle">3</text>
+    <line x1="460" y1="783" x2="460" y2="797" class="tick"/><text x="460" y="817" text-anchor="middle">4</text>
+    <line x1="540" y1="783" x2="540" y2="797" class="tick"/><text x="540" y="817" text-anchor="middle">5</text>
+    <line x1="620" y1="783" x2="620" y2="797" class="tick"/><text x="620" y="817" text-anchor="middle">6</text>
+    <line x1="700" y1="783" x2="700" y2="797" class="tick"/><text x="700" y="817" text-anchor="middle">7</text>
+    <line x1="780" y1="783" x2="780" y2="797" class="tick"/><text x="780" y="817" text-anchor="middle">8</text>
+    <line x1="860" y1="783" x2="860" y2="797" class="tick"/><text x="860" y="817" text-anchor="middle">9</text>
+    <line x1="940" y1="783" x2="940" y2="797" class="tick"/><text x="940" y="817" text-anchor="middle">10</text>
+  </g>
+  <circle cx="380" cy="790" r="14" class="locked"/><text x="380" y="768" text-anchor="middle" class="small">seq 0</text>
+  <circle cx="460" cy="790" r="14" class="locked"/><text x="460" y="768" text-anchor="middle" class="small">seq 1</text>
+  <circle cx="620" cy="790" r="14" class="locked"/><text x="620" y="768" text-anchor="middle" class="small">seq 2</text>
+  <circle cx="780" cy="790" r="14" class="locked"/><text x="780" y="768" text-anchor="middle" class="small">seq 2</text>
+  <text x="530" y="875" text-anchor="middle" class="small">grow_k exposes the ranking prefix one element at a time without rebuilding earlier prefixes from scratch.</text>
+</svg>
