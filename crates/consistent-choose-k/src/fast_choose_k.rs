@@ -1,10 +1,10 @@
-use crate::min_seg_tree::MinSegTree;
+use crate::compact_min_seg_tree::CompactMinSegTree;
 use crate::{ConsistentHasher, ManySeqBuilder};
 
 /// "Block count" sentinel for slots that can never be selected (e.g. their
 /// sequence is exhausted). Chosen well above any realistic true count so that
 /// the lazy `-1` updates applied by `shrink_n` cannot drive it down to zero
-/// in any reasonable workload, and so that padding leaves in [`MinSegTree`]
+/// in any reasonable workload, and so that padding leaves in [`CompactMinSegTree`]
 /// are never selected.
 const C_INF: i64 = 1_000_000_000_000;
 
@@ -63,7 +63,7 @@ pub struct ConsistentChooseKFastHasher<H: ManySeqBuilder> {
     next: Vec<Option<usize>>,
     /// Per-slot block counts `c[i]`. See struct-level docs for definition.
     /// Empty when `k == 0`.
-    tree: MinSegTree,
+    tree: CompactMinSegTree,
 }
 
 impl<H: ManySeqBuilder> ConsistentChooseKFastHasher<H> {
@@ -76,7 +76,7 @@ impl<H: ManySeqBuilder> ConsistentChooseKFastHasher<H> {
             n,
             samples: Vec::new(),
             next: Vec::new(),
-            tree: MinSegTree::new(&[], C_INF),
+            tree: CompactMinSegTree::new(&[], C_INF),
         }
     }
 
@@ -117,7 +117,7 @@ impl<H: ManySeqBuilder> ConsistentChooseKFastHasher<H> {
             };
             c.push(ci);
         }
-        this.tree = MinSegTree::new(&c, C_INF);
+        this.tree = CompactMinSegTree::new(&c, C_INF);
         this
     }
 
@@ -188,7 +188,7 @@ impl<H: ManySeqBuilder> ConsistentChooseKFastHasher<H> {
             Some(v) => (k - self.samples[..k].partition_point(|&s| s < v)) as i64,
             None => C_INF,
         };
-        self.tree.append(c_k);
+        self.tree.push(c_k);
     }
 
     /// Decrements `n` to the current largest sample and replaces it with the

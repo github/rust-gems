@@ -143,7 +143,6 @@ impl CompactMinSegTree {
     /// is no padding slot left to overwrite.
     ///
     /// Time: amortized O(log size); worst-case O(size) on the doubling step.
-    #[allow(dead_code)]
     pub fn push(&mut self, value: i64) {
         if self.len == self.size {
             self.grow();

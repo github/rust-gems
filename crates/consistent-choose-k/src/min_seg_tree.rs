@@ -37,7 +37,7 @@ pub struct MinSegTree {
     /// accumulated from `suffix_add`).
     len: usize,
     /// Padding value used to fill leaves beyond `len`, including when the
-    /// tree grows via [`MinSegTree::append`].
+    /// tree grows via [`MinSegTree::push`].
     padding: i64,
 }
 
@@ -105,7 +105,7 @@ impl MinSegTree {
     /// Doubles the physical capacity when full.
     ///
     /// Amortized time: O(log size).
-    pub fn append(&mut self, val: i64) {
+    pub fn push(&mut self, val: i64) {
         if self.len == self.size {
             self.double_capacity();
         }
@@ -125,7 +125,7 @@ impl MinSegTree {
     fn double_capacity(&mut self) {
         if self.size == 0 {
             // Empty tree: grow to a single-leaf tree holding the padding
-            // value. The caller (`append`) immediately overwrites it via
+            // value. The caller (`push`) immediately overwrites it via
             // `set(0, val)`.
             self.seg = vec![self.padding];
             self.size = 1;
@@ -365,27 +365,27 @@ mod tests {
     }
 
     #[test]
-    fn append_from_empty() {
+    fn push_from_empty() {
         let mut t = MinSegTree::new(&[], 1_000_000_000);
         assert!(t.is_empty());
         assert_eq!(t.size(), 0);
-        t.append(5);
+        t.push(5);
         assert_eq!(t.len(), 1);
         assert_eq!(t.size(), 1);
         assert_eq!(t.rightmost_le_zero(), None);
-        t.append(-1);
+        t.push(-1);
         assert_eq!(t.len(), 2);
         assert_eq!(t.size(), 2);
         assert_eq!(t.rightmost_le_zero(), Some(1));
-        t.append(3);
+        t.push(3);
         assert_eq!(t.len(), 3);
         assert_eq!(t.size(), 4);
         assert_eq!(t.rightmost_le_zero(), Some(1));
-        t.append(-2);
+        t.push(-2);
         assert_eq!(t.len(), 4);
         assert_eq!(t.size(), 4);
         assert_eq!(t.rightmost_le_zero(), Some(3));
-        t.append(0);
+        t.push(0);
         assert_eq!(t.len(), 5);
         assert_eq!(t.size(), 8);
         // Values now [5, -1, 3, -2, 0, pad, pad, pad].
@@ -393,7 +393,7 @@ mod tests {
     }
 
     #[test]
-    fn append_preserves_existing_leaves_through_doubling() {
+    fn push_preserves_existing_leaves_through_doubling() {
         // After each doubling step the existing leaves must keep their values
         // (and prior `suffix_add` drift) intact.
         let mut t = MinSegTree::new(&[10, 20], 1_000_000_000);
@@ -401,17 +401,17 @@ mod tests {
         t.suffix_add(0, -5);
         // leaves now [5, 15]. No leaf <= 0 yet.
         assert_eq!(t.rightmost_le_zero(), None);
-        t.append(30);
+        t.push(30);
         assert_eq!(t.len(), 3);
         assert_eq!(t.size(), 4);
         // Drive leaf 1 negative; leaves 0 and 2 stay positive.
         t.set(1, -1);
         assert_eq!(t.rightmost_le_zero(), Some(1));
-        t.append(7);
+        t.push(7);
         assert_eq!(t.len(), 4);
         assert_eq!(t.size(), 4);
         assert_eq!(t.rightmost_le_zero(), Some(1));
-        t.append(0);
+        t.push(0);
         // First leaf in the new (size-8) tree's right subtree.
         assert_eq!(t.len(), 5);
         assert_eq!(t.size(), 8);
@@ -420,8 +420,8 @@ mod tests {
     }
 
     #[test]
-    fn append_matches_naive_under_random_ops() {
-        // Start empty and grow via `append`, mixed with `set`, `suffix_add`,
+    fn push_matches_naive_under_random_ops() {
+        // Start empty and grow via `push`, mixed with `set`, `suffix_add`,
         // and `rightmost_le_zero` queries. Cross-check against `Naive`.
         let mut t = MinSegTree::new(&[], 1_000_000_000);
         let mut naive = Naive::new(Vec::new());
@@ -435,11 +435,11 @@ mod tests {
         };
 
         for _ in 0..3_000 {
-            // Bias slightly toward `append` so the tree actually grows.
+            // Bias slightly toward `push` so the tree actually grows.
             let op = next() % 4;
             if op == 0 || t.is_empty() {
                 let v = (next() as i64) % 21 - 10;
-                t.append(v);
+                t.push(v);
                 naive.values.push(v);
             } else {
                 match op % 3 {
