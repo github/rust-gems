@@ -127,6 +127,24 @@ impl CompactMinSegTree {
         }
     }
 
+    /// Builds an empty tree, preallocating the underlying `val` buffer to
+    /// fit up to `capacity` leaves without reallocation.
+    ///
+    /// Time: O(1).
+    pub fn with_capacity(capacity: usize, padding: i64) -> Self {
+        let cap = if capacity == 0 {
+            0
+        } else {
+            capacity.next_power_of_two()
+        };
+        Self {
+            val: Vec::with_capacity(cap),
+            size: 0,
+            len: 0,
+            padding,
+        }
+    }
+
     /// Number of real leaves appended so far (excluding padding slots).
     #[allow(dead_code)]
     pub fn len(&self) -> usize {

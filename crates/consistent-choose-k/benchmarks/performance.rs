@@ -75,7 +75,7 @@ fn append_vs_new_with_k(c: &mut Criterion) {
             group.bench_function(BenchmarkId::new(format!("fast_append/k_{k}"), n), |b| {
                 b.iter(|| {
                     let h = DefaultHasher::default();
-                    let mut iter = ConsistentChooseKFastHasher::new(h, n + k);
+                    let mut iter = ConsistentChooseKFastHasher::new_with_capacity(h, n + k, k);
                     for _ in 0..k {
                         black_box(iter.grow_k());
                     }

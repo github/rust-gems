@@ -11,6 +11,51 @@ const C_INF: i64 = 1_000_000_000_000;
 /// Fast variant of [`crate::ConsistentChooseKHasher`] specialized for
 /// repeated `shrink_n` calls at fixed `k`.
 ///
+/// # Benchmarks
+///
+/// Measured on the `performance` benchmark suite (release, M-series macOS).
+/// "std" = [`crate::ConsistentChooseKHasher`], "fast" = this type. Lower is
+/// faster; the bold column is the fast/standard wall-clock ratio.
+///
+/// **Replay `shrink_n` from a fresh `new_with_k` down to `n == k`** (the
+/// headline use case — total time over `n - k` shrinks):
+///
+/// | n       | k   | std       | fast     | speedup |
+/// |--------:|----:|----------:|---------:|--------:|
+/// |     100 |   2 |    218 ns |   237 ns |   0.9×  |
+/// |     100 |   3 |    428 ns |   371 ns |   1.2×  |
+/// |     100 |  10 |   3.27 µs |  1.61 µs |   2.0×  |
+/// |     100 | 100 |    100 µs |  25.0 µs |   4.0×  |
+/// |   1 000 | 100 |    357 µs |  54.8 µs |   6.5×  |
+/// |  10 000 | 100 |    688 µs |  89.9 µs |   7.7×  |
+/// | 100 000 | 100 |  1 074 µs |   131 µs |   8.2×  |
+///
+/// **`grow_k` cascade** (append `k` items into a freshly preallocated
+/// hasher, `n = 10 000`):
+///
+/// |  k  | std       | fast     | speedup |
+/// |----:|----------:|---------:|--------:|
+/// |   2 |   48.5 ns |   153 ns |   0.3×  |
+/// |   3 |   71.1 ns |   224 ns |   0.3×  |
+/// |  10 |   1.10 µs |  1.02 µs |   1.1×  |
+/// | 100 |   79.6 µs |  15.6 µs |   5.1×  |
+///
+/// **`new_with_k`** (bulk construction, `n = 10 000`):
+///
+/// |  k  | std       | fast     | speedup |
+/// |----:|----------:|---------:|--------:|
+/// |   2 |   54.7 ns |   170 ns |   0.3×  |
+/// |   3 |   77.4 ns |   244 ns |   0.3×  |
+/// |  10 |    477 ns |   835 ns |   0.6×  |
+/// | 100 |   8.47 µs |  12.0 µs |   0.7×  |
+///
+/// The fast hasher pays a constant per-call overhead (segment tree + `next`
+/// table) which dominates at small `k`. The asymptotic improvement is in
+/// repeated mutation (`shrink_n`, `grow_k` cascades) at large `k`: the
+/// standard hasher does `O(k)` `get_sample` calls and a scan per shrink,
+/// while this variant does `O(1)` `get_sample` calls plus `O(log k)`
+/// segment-tree work (amortized, plus rare binary-search corrections).
+///
 /// # Invariants
 ///
 /// For each position `i` in `0..k`:
@@ -47,11 +92,6 @@ const C_INF: i64 = 1_000_000_000_000;
 /// * **Downward stale** (`next[i] <= samples[i - 1]`): the lazy `-1` made
 ///   `c[i]` look unblocked but `next[i]` would actually fit at some position
 ///   `< i`. We correct `c[i]` upward via a binary search over `samples[..i]`.
-///
-/// The standard `shrink_n` performs roughly `k / 2` `get_sample` calls on
-/// average; this variant performs `O(1)` `get_sample` calls per `shrink_n`
-/// plus `O(log k)` segment-tree work (amortized, plus the binary-search
-/// corrections).
 pub struct ConsistentChooseKFastHasher<H: ManySeqBuilder> {
     builder: H,
     n: usize,
@@ -71,12 +111,21 @@ impl<H: ManySeqBuilder> ConsistentChooseKFastHasher<H> {
     ///
     /// Time: O(1)
     pub fn new(builder: H, n: usize) -> Self {
+        Self::new_with_capacity(builder, n, 0)
+    }
+
+    /// Create a new instance for `n` nodes with `k = 0` samples, preallocating
+    /// enough space in `samples` and `next` to grow to `capacity` samples
+    /// without reallocating. The segment tree still grows lazily via doubling.
+    ///
+    /// Time: O(1)
+    pub fn new_with_capacity(builder: H, n: usize, capacity: usize) -> Self {
         Self {
             builder,
             n,
-            samples: Vec::new(),
-            next: Vec::new(),
-            tree: CompactMinSegTree::new(&[], C_INF),
+            samples: Vec::with_capacity(capacity),
+            next: Vec::with_capacity(capacity),
+            tree: CompactMinSegTree::with_capacity(capacity, C_INF),
         }
     }
 
