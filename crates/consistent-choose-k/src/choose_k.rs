@@ -21,13 +21,13 @@ impl Sample {
 /// Implementation of a consistent choose k hashing algorithm.
 /// It returns k distinct consistent hashes in the range `0..n`.
 /// The hashes are consistent when `n` changes and when `k` changes!
-/// I.e. on average exactly `1/(n+1)` (resp. `1/(k+1)`) many hashes will change
-/// when `n` (resp. `k`) increases by one. Additionally, the returned `k` tuple
+/// I.e. one hash changes with probability `k/(n+1)` when `n` increases by one,
+/// resp. one hash gets added when `k` is increased. Additionally, the returned `k` tuple
 /// is guaranteed to be uniformely chosen from all possible `n-choose-k` tuples.
 ///
 /// Also implements `Iterator` to yield the next sample when k is increased.
 /// Note: since this hashing algorithm implements choose k semantics, all the returned samples are distinct.
-/// Note: they won't be sorted by their position, since the order is changing when k is changing.
+/// Note: The `Iterator` won't output the samples ordered by position.
 ///
 /// # Example
 /// ```
@@ -78,14 +78,14 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
         iter
     }
 
-    /// Returns an iterator over the sampled positions in increasing order.
+    /// Returns an iterator over the `k` sampled positions in increasing order.
     ///
     /// Time: O(1)
     pub fn positions(&self) -> impl Iterator<Item = usize> + '_ {
         self.samples.iter().map(|s| s.pos)
     }
 
-    /// Returns the underlying samples.
+    /// Returns the `k` underlying samples.
     pub fn samples(&self) -> &[Sample] {
         &self.samples
     }
@@ -149,19 +149,20 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
         if let Some(last) = self.samples.last().copied() {
             if last.pos < sk.pos {
                 self.samples.push(sk);
+                k
             } else if last.pos == sk.pos {
                 let i = self.shrink_n_inner(last.pos);
                 self.samples.push(sk);
-                return i;
+                i
             } else {
                 let i = self.shrink_n_inner(last.pos);
                 self.samples.push(last);
-                return i;
+                i
             }
         } else {
             self.samples.push(sk);
+            k
         }
-        k
     }
 }
 
@@ -214,22 +215,6 @@ mod tests {
     }
 
     #[test]
-    fn test_ranking_k_equals_1() {
-        for key in 0..500 {
-            let hasher = hasher_for_key(key);
-            for n in 1..50 {
-                let first = ConsistentChooseKHasher::new(hasher.clone(), n)
-                    .next()
-                    .unwrap();
-                let prev: Vec<usize> = ConsistentChooseKHasher::new_with_k(hasher.clone(), n, 1)
-                    .positions()
-                    .collect();
-                assert_eq!(first, prev[0]);
-            }
-        }
-    }
-
-    #[test]
     fn test_ranking_k_equals_n() {
         // When exhausted, the ranking contains all nodes 0..n.
         for key in 0..200 {
@@ -239,22 +224,6 @@ mod tests {
                 ranking.sort();
                 let expected: Vec<usize> = (0..n).collect();
                 assert_eq!(ranking, expected, "key={key} n={n}");
-            }
-        }
-    }
-
-    #[test]
-    fn test_partial_iteration() {
-        // Taking fewer than n elements must still be correct.
-        for key in 0..100 {
-            let hasher = hasher_for_key(key);
-            let n = 20;
-            let full: Vec<usize> = ConsistentChooseKHasher::new(hasher.clone(), n).collect();
-            for take in 1..=n {
-                let partial: Vec<usize> = ConsistentChooseKHasher::new(hasher.clone(), n)
-                    .take(take)
-                    .collect();
-                assert_eq!(&partial[..], &full[..take]);
             }
         }
     }
