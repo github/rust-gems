@@ -1,23 +1,5 @@
 use crate::{ConsistentHasher, ManySeqBuilder};
 
-/// A sample from the consistent choose-k algorithm, pairing a hash value
-/// with the index of the hash sequence that produced it.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Sample {
-    pos: usize,
-    seq: usize,
-}
-
-impl Sample {
-    fn new(pos: usize, seq: usize) -> Self {
-        Self { pos, seq }
-    }
-
-    pub fn pos(&self) -> usize {
-        self.pos
-    }
-}
-
 /// Implementation of a consistent choose k hashing algorithm.
 /// It returns k distinct consistent hashes in the range `0..n`.
 /// The hashes are consistent when `n` changes and when `k` changes!
@@ -42,7 +24,7 @@ impl Sample {
 pub struct ConsistentChooseKHasher<H: ManySeqBuilder> {
     builder: H,
     n: usize,
-    pub(crate) samples: Vec<Sample>,
+    samples: Vec<usize>,
 }
 
 impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
@@ -64,30 +46,28 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
         assert!(n >= k, "n must be at least k");
         let mut iter = Self::new(builder, n);
         for i in 0..k {
-            iter.samples.push(Sample::new(iter.get_sample(i, n), i));
+            iter.samples.push(iter.get_sample(i, n));
         }
         for i in (0..k).rev() {
             let s = iter.samples[0..=i].iter().copied().max().expect("");
             iter.samples[i] = s;
             for j in 0..i {
-                if iter.samples[j].pos == s.pos {
-                    iter.samples[j] = Sample::new(iter.get_sample(j, s.pos), j);
+                if iter.samples[j] == s {
+                    iter.samples[j] = iter.get_sample(j, s);
                 }
             }
         }
         iter
     }
 
-    /// Returns an iterator over the `k` sampled positions in increasing order.
-    ///
-    /// Time: O(1)
-    pub fn positions(&self) -> impl Iterator<Item = usize> + '_ {
-        self.samples.iter().map(|s| s.pos)
+    /// Returns the `k` underlying samples.
+    pub fn samples(&self) -> &[usize] {
+        &self.samples
     }
 
-    /// Returns the `k` underlying samples.
-    pub fn samples(&self) -> &[Sample] {
-        &self.samples
+    /// Converts self into the `k` underlying samples vector.
+    pub fn into_samples(self) -> Vec<usize> {
+        self.samples
     }
 
     /// Returns the current universe size.
@@ -116,28 +96,27 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
     /// Panics: if `n` is already at most `k`.
     pub fn shrink_n(&mut self) -> usize {
         assert!(self.n > self.k());
-        let n = self.samples.last().expect("samples must not be empty").pos;
+        let n = *self.samples.last().expect("samples must not be empty");
         self.n = n;
         self.shrink_n_inner(n)
     }
 
     fn shrink_n_inner(&mut self, mut n: usize) -> usize {
         for i in (0..self.samples.len()).rev() {
-            if self.samples[i].pos < n {
+            if self.samples[i] < n {
                 // We are done!
                 return i + 1;
             }
-            // Here the maximum could be k, k-1, or i!
-            let k = self.samples[i].seq;
-            let si = Sample::new(self.get_sample(i, n), i);
-            let sk = Sample::new(self.get_sample(k, n), k);
-            let new_sample = si.max(sk);
-            if i > 0 && self.samples[i - 1] > new_sample {
+            // The new maximum over all sequences at position i is either
+            // the sample of the sequence i or the maximum over all other sequences.
+            // The latter is already known via self.samples[i-1].
+            let si = self.get_sample(i, n);
+            if i > 0 && self.samples[i - 1] > si {
                 self.samples[i] = self.samples[i - 1];
             } else {
-                self.samples[i] = new_sample;
+                self.samples[i] = si;
             }
-            n = self.samples[i].pos;
+            n = self.samples[i];
         }
         0
     }
@@ -151,17 +130,13 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
     pub fn grow_k(&mut self) -> usize {
         assert!(self.k() < self.n);
         let k = self.samples.len();
-        let sk = Sample::new(self.get_sample(k, self.n), k);
+        let sk = self.get_sample(k, self.n);
         if let Some(last) = self.samples.last().copied() {
-            if last.pos < sk.pos {
+            if last < sk {
                 self.samples.push(sk);
                 k
-            } else if last.pos == sk.pos {
-                let i = self.shrink_n_inner(last.pos);
-                self.samples.push(sk);
-                i
             } else {
-                let i = self.shrink_n_inner(last.pos);
+                let i = self.shrink_n_inner(last);
                 self.samples.push(last);
                 i
             }
@@ -180,7 +155,7 @@ impl<H: ManySeqBuilder> Iterator for ConsistentChooseKHasher<H> {
             return None;
         }
         let idx = self.grow_k();
-        Some(self.samples[idx].pos)
+        Some(self.samples[idx])
     }
 }
 
@@ -200,15 +175,13 @@ mod tests {
     fn test_ranking_matches_prev() {
         // Every prefix of the ranking must equal the sorted prev(n) set.
         for key in 0..200 {
-            for n in 2..25 {
+            for n in 2..30 {
                 let hasher = hasher_for_key(key);
                 let full: Vec<usize> = ConsistentChooseKHasher::new(hasher.clone(), n).collect();
                 assert_eq!(full.len(), n);
                 for k in 1..=n {
-                    let expected: Vec<usize> =
-                        ConsistentChooseKHasher::new_with_k(hasher.clone(), n, k)
-                            .positions()
-                            .collect();
+                    let expected =
+                        ConsistentChooseKHasher::new_with_k(hasher.clone(), n, k).into_samples();
                     let mut prefix = full[..k].to_vec();
                     prefix.sort();
                     assert_eq!(
@@ -240,18 +213,14 @@ mod tests {
         for k in 0..100 {
             let hasher = hasher_for_key(k);
             for n in K..1000 {
-                let samples: Vec<usize> =
-                    ConsistentChooseKHasher::new_with_k(hasher.clone(), n + 1, K)
-                        .positions()
-                        .collect();
+                let samples =
+                    ConsistentChooseKHasher::new_with_k(hasher.clone(), n + 1, K).into_samples();
                 assert!(samples.len() == K);
                 for i in 0..K - 1 {
                     assert!(samples[i] < samples[i + 1]);
                 }
-                let next: Vec<usize> =
-                    ConsistentChooseKHasher::new_with_k(hasher.clone(), n + 2, K)
-                        .positions()
-                        .collect();
+                let next =
+                    ConsistentChooseKHasher::new_with_k(hasher.clone(), n + 2, K).into_samples();
                 for i in 0..K {
                     assert!(samples[i] <= next[i]);
                 }
@@ -268,9 +237,8 @@ mod tests {
         let mut stats = vec![0; 8];
         for i in 0..32 {
             let hasher = hasher_for_key(i + 32783);
-            let samples: Vec<usize> = ConsistentChooseKHasher::new_with_k(hasher, stats.len(), 2)
-                .positions()
-                .collect();
+            let samples =
+                ConsistentChooseKHasher::new_with_k(hasher, stats.len(), 2).into_samples();
             for s in samples {
                 stats[s] += 1;
             }
@@ -282,13 +250,9 @@ mod tests {
             for n in k + 1..20 {
                 for key in 0..1000 {
                     let hasher = hasher_for_key(key);
-                    let set1: Vec<usize> =
-                        ConsistentChooseKHasher::new_with_k(hasher.clone(), n, k)
-                            .positions()
-                            .collect();
-                    let set2: Vec<usize> = ConsistentChooseKHasher::new_with_k(hasher, n, k + 1)
-                        .positions()
-                        .collect();
+                    let set1 =
+                        ConsistentChooseKHasher::new_with_k(hasher.clone(), n, k).into_samples();
+                    let set2 = ConsistentChooseKHasher::new_with_k(hasher, n, k + 1).into_samples();
                     assert_eq!(set1.len(), k);
                     assert_eq!(set2.len(), k + 1);
                     let mut merged = set1.clone();
@@ -306,10 +270,10 @@ mod tests {
         for k in 1..10 {
             for n in k + 1..30 {
                 let mut iter = ConsistentChooseKHasher::new_with_k(DefaultHasher::new(), n, k);
-                while iter.samples.last().unwrap().pos > k {
+                while *iter.samples.last().unwrap() > k {
                     let expected = ConsistentChooseKHasher::new_with_k(
                         DefaultHasher::new(),
-                        iter.samples.last().unwrap().pos,
+                        *iter.samples.last().unwrap(),
                         k,
                     );
                     iter.shrink_n();

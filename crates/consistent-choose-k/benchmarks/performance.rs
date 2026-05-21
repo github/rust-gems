@@ -19,31 +19,24 @@ fn throughput_benchmark(c: &mut Criterion) {
     for n in [1usize, 10, 100, 1000, 10000] {
         group.throughput(Throughput::Elements(keys.len() as u64));
         group.bench_with_input(BenchmarkId::new("1", n), &n, |b, n| {
-            b.iter_batched(
-                || &keys,
-                |keys| {
-                    for key in keys {
-                        let mut h = DefaultHasher::default();
-                        key.hash(&mut h);
-                        black_box(ConsistentHasher::new(h).prev(*n + 1));
-                    }
-                },
-                criterion::BatchSize::SmallInput,
-            )
+            b.iter(|| {
+                for key in &keys {
+                    let mut h = DefaultHasher::default();
+                    key.hash(&mut h);
+                    black_box(ConsistentHasher::new(h).prev(*n + 1));
+                }
+            })
         });
         for k in [1, 2, 3, 10, 100] {
+            group.throughput(Throughput::Elements((keys.len() * k) as u64));
             group.bench_with_input(BenchmarkId::new(format!("k_{k}"), n), &n, |b, n| {
-                b.iter_batched(
-                    || &keys,
-                    |keys| {
-                        for key in keys {
-                            let mut h = DefaultHasher::default();
-                            key.hash(&mut h);
-                            black_box(ConsistentChooseKHasher::new_with_k(h, *n + k, k));
-                        }
-                    },
-                    criterion::BatchSize::SmallInput,
-                )
+                b.iter(|| {
+                    for key in &keys {
+                        let mut h = DefaultHasher::default();
+                        key.hash(&mut h);
+                        black_box(ConsistentChooseKHasher::new_with_k(h, *n + k, k));
+                    }
+                })
             });
         }
     }
