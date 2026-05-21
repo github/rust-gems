@@ -112,7 +112,10 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
     /// being replaced with. Returns the index of the new largest sample.
     ///
     /// Time: O(k)
+    /// 
+    /// Panics: if `n` is already at most `k`.
     pub fn shrink_n(&mut self) -> usize {
+        assert!(self.n > self.k());
         let n = self.samples.last().expect("samples must not be empty").pos;
         self.n = n;
         self.shrink_n_inner(n)
@@ -143,7 +146,10 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
     /// element was inserted (i.e. its rank position).
     ///
     /// Time: O(k)
+    /// 
+    /// Panics: if `k` equals `n`.
     pub fn grow_k(&mut self) -> usize {
+        assert!(self.k() < self.n);
         let k = self.samples.len();
         let sk = Sample::new(self.get_sample(k, self.n), k);
         if let Some(last) = self.samples.last().copied() {
