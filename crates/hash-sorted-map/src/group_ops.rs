@@ -39,28 +39,8 @@ mod arch {
     }
 
     #[inline(always)]
-    pub fn match_empty(ctrl: &[u8; GROUP_SIZE]) -> Mask {
-        match_tag(ctrl, super::CTRL_EMPTY)
-    }
-
-    /// Mask of slots whose ctrl byte has the high bit set (occupied).
-    /// Uses SSE2 `_mm_movemask_epi8` which extracts the top bit of each byte.
-    #[inline(always)]
-    pub fn match_full(ctrl: &[u8; GROUP_SIZE]) -> Mask {
-        unsafe {
-            let group = x86::_mm_loadu_si128(ctrl.as_ptr() as *const x86::__m128i);
-            x86::_mm_movemask_epi8(group) as u32
-        }
-    }
-
-    #[inline(always)]
     pub fn lowest(mask: Mask) -> usize {
         mask.trailing_zeros() as usize
-    }
-
-    #[inline(always)]
-    pub fn clear_slot(mask: Mask, slot: usize) -> Mask {
-        mask & !(1u32 << slot)
     }
 
     #[inline(always)]
@@ -71,6 +51,13 @@ mod arch {
         let i = lowest(*mask);
         *mask &= *mask - 1;
         Some(i)
+    }
+
+    /// Number of trailing occupied (non-zero) bytes in the ctrl array.
+    #[inline(always)]
+    pub fn count_occupied(ctrl: &[u8; GROUP_SIZE]) -> usize {
+        let word = u128::from_ne_bytes(*ctrl);
+        GROUP_SIZE - (word.leading_zeros() / 8) as usize
     }
 }
 
@@ -90,31 +77,8 @@ mod arch {
     }
 
     #[inline(always)]
-    pub fn match_empty(ctrl: &[u8; GROUP_SIZE]) -> Mask {
-        unsafe {
-            let group = neon::vld1_u8(ctrl.as_ptr());
-            let cmp = neon::vceq_u8(group, neon::vdup_n_u8(0));
-            neon::vget_lane_u64(neon::vreinterpret_u64_u8(cmp), 0) & 0x8080808080808080
-        }
-    }
-
-    /// Mask of slots whose ctrl byte has the high bit set (occupied).
-    #[inline(always)]
-    pub fn match_full(ctrl: &[u8; GROUP_SIZE]) -> Mask {
-        unsafe {
-            let group = neon::vld1_u8(ctrl.as_ptr());
-            neon::vget_lane_u64(neon::vreinterpret_u64_u8(group), 0) & 0x8080808080808080
-        }
-    }
-
-    #[inline(always)]
     pub fn lowest(mask: Mask) -> usize {
         (mask.trailing_zeros() >> 3) as usize
-    }
-
-    #[inline(always)]
-    pub fn clear_slot(mask: Mask, slot: usize) -> Mask {
-        mask & !(0x80u64 << (slot * 8))
     }
 
     #[inline(always)]
@@ -125,6 +89,13 @@ mod arch {
         let i = lowest(*mask);
         *mask &= *mask - 1;
         Some(i)
+    }
+
+    /// Number of trailing occupied (non-zero) bytes in the ctrl array.
+    #[inline(always)]
+    pub fn count_occupied(ctrl: &[u8; GROUP_SIZE]) -> usize {
+        let word = u64::from_ne_bytes(*ctrl);
+        GROUP_SIZE - (word.leading_zeros() / 8) as usize
     }
 }
 
@@ -141,26 +112,8 @@ mod arch {
     }
 
     #[inline(always)]
-    pub fn match_empty(ctrl: &[u8; GROUP_SIZE]) -> Mask {
-        let word = u64::from_ne_bytes(*ctrl);
-        !word & 0x8080808080808080
-    }
-
-    /// Mask of slots whose ctrl byte has the high bit set (occupied).
-    #[inline(always)]
-    pub fn match_full(ctrl: &[u8; GROUP_SIZE]) -> Mask {
-        let word = u64::from_ne_bytes(*ctrl);
-        word & 0x8080808080808080
-    }
-
-    #[inline(always)]
     pub fn lowest(mask: Mask) -> usize {
         (mask.trailing_zeros() >> 3) as usize
-    }
-
-    #[inline(always)]
-    pub fn clear_slot(mask: Mask, slot: usize) -> Mask {
-        mask & !(0x80u64 << (slot * 8))
     }
 
     #[inline(always)]
@@ -171,6 +124,13 @@ mod arch {
         let i = lowest(*mask);
         *mask &= *mask - 1;
         Some(i)
+    }
+
+    /// Number of trailing occupied (non-zero) bytes in the ctrl array.
+    #[inline(always)]
+    pub fn count_occupied(ctrl: &[u8; GROUP_SIZE]) -> usize {
+        let word = u64::from_ne_bytes(*ctrl);
+        GROUP_SIZE - (word.leading_zeros() / 8) as usize
     }
 }
 
