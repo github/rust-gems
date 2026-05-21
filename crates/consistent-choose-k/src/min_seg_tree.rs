@@ -30,8 +30,15 @@
 pub struct MinSegTree {
     /// Offset values in implicit-heap layout.
     seg: Vec<i64>,
-    /// Number of leaves (a power of two, or 0 for an empty tree).
+    /// Physical capacity = `size` leaves. A power of two, or `0`.
     size: usize,
+    /// Logical number of real leaves currently in use. `len <= size`.
+    /// Leaves in `[len, size)` hold the padding value (modulo any drift
+    /// accumulated from `suffix_add`).
+    len: usize,
+    /// Padding value used to fill leaves beyond `len`, including when the
+    /// tree grows via [`MinSegTree::append`].
+    padding: i64,
 }
 
 impl MinSegTree {
@@ -48,6 +55,8 @@ impl MinSegTree {
             return Self {
                 seg: Vec::new(),
                 size: 0,
+                len: 0,
+                padding,
             };
         }
         let size = leaves.len().next_power_of_two();
@@ -66,13 +75,92 @@ impl MinSegTree {
             seg[r] -= m;
             seg[v] = m;
         }
-        Self { seg, size }
+        Self {
+            seg,
+            size,
+            len: leaves.len(),
+            padding,
+        }
     }
 
-    /// Number of leaves (including padding). Always a power of two, or `0`.
-    #[allow(dead_code)]
+    /// Physical number of leaves (including padding). Always a power of two,
+    /// or `0`.
     pub fn size(&self) -> usize {
         self.size
+    }
+
+    /// Logical number of leaves (excluding padding).
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// True iff no real leaves are stored.
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Appends a new leaf with value `val` at logical position `self.len()`.
+    /// Doubles the physical capacity when full.
+    ///
+    /// Amortized time: O(log size).
+    pub fn append(&mut self, val: i64) {
+        if self.len == self.size {
+            self.double_capacity();
+        }
+        self.set(self.len, val);
+        self.len += 1;
+    }
+
+    /// Doubles `self.size`, moving every existing tree node into its
+    /// corresponding slot in the larger heap layout. The new right subtree
+    /// is filled with `self.padding`-valued leaves.
+    ///
+    /// At level `L` of the old tree (root = level 0), each node sits at
+    /// index `2^L - 1 + j` for some `j` in `[0, 2^L)`. After doubling the
+    /// physical size, that same logical position is now at level `L + 1` in
+    /// the left subtree, i.e. index `(2^(L+1) - 1) + j = old_idx + 2^L`. We
+    /// just walk levels top-down and copy each node up to its new slot.
+    fn double_capacity(&mut self) {
+        if self.size == 0 {
+            // Empty tree: grow to a single-leaf tree holding the padding
+            // value. The caller (`append`) immediately overwrites it via
+            // `set(0, val)`.
+            self.seg = vec![self.padding];
+            self.size = 1;
+            return;
+        }
+        let new_size = self.size * 2;
+        let mut new_seg = vec![0i64; 2 * new_size - 1];
+
+        // Level-by-level shift. At level `L`, indices `[start, end)` in the
+        // old tree map to `[start + shift, end + shift)` in the new tree,
+        // where `shift = 2^L = end - start`.
+        let mut start = 0usize;
+        let mut end = 1usize;
+        let mut shift = 1usize;
+        while start < self.seg.len() {
+            new_seg[(start + shift)..(end + shift)].copy_from_slice(&self.seg[start..end]);
+            start = end;
+            end = 2 * end + 1;
+            shift *= 2;
+        }
+
+        // After the level-by-level copy, `new_seg[1]` holds the old root's
+        // value (= the global min of the old tree). The new root must be
+        // `min(old_min, padding)`; we lift that common min out and store
+        // the residual offsets at the two children of the new root.
+        // Everything below the right child is already zero, which is the
+        // correct offset for a uniform-padding subtree.
+        let old_root = new_seg[1];
+        let new_min = old_root.min(self.padding);
+        new_seg[0] = new_min;
+        new_seg[1] = old_root - new_min;
+        new_seg[2] = self.padding - new_min;
+
+        self.seg = new_seg;
+        self.size = new_size;
     }
 
     /// Sets leaf `i` to `val`.
@@ -274,5 +362,105 @@ mod tests {
         assert_eq!(t.rightmost_le_zero(), Some(0));
         t.set(0, 1);
         assert_eq!(t.rightmost_le_zero(), None);
+    }
+
+    #[test]
+    fn append_from_empty() {
+        let mut t = MinSegTree::new(&[], 1_000_000_000);
+        assert!(t.is_empty());
+        assert_eq!(t.size(), 0);
+        t.append(5);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t.size(), 1);
+        assert_eq!(t.rightmost_le_zero(), None);
+        t.append(-1);
+        assert_eq!(t.len(), 2);
+        assert_eq!(t.size(), 2);
+        assert_eq!(t.rightmost_le_zero(), Some(1));
+        t.append(3);
+        assert_eq!(t.len(), 3);
+        assert_eq!(t.size(), 4);
+        assert_eq!(t.rightmost_le_zero(), Some(1));
+        t.append(-2);
+        assert_eq!(t.len(), 4);
+        assert_eq!(t.size(), 4);
+        assert_eq!(t.rightmost_le_zero(), Some(3));
+        t.append(0);
+        assert_eq!(t.len(), 5);
+        assert_eq!(t.size(), 8);
+        // Values now [5, -1, 3, -2, 0, pad, pad, pad].
+        assert_eq!(t.rightmost_le_zero(), Some(4));
+    }
+
+    #[test]
+    fn append_preserves_existing_leaves_through_doubling() {
+        // After each doubling step the existing leaves must keep their values
+        // (and prior `suffix_add` drift) intact.
+        let mut t = MinSegTree::new(&[10, 20], 1_000_000_000);
+        assert_eq!(t.size(), 2);
+        t.suffix_add(0, -5);
+        // leaves now [5, 15]. No leaf <= 0 yet.
+        assert_eq!(t.rightmost_le_zero(), None);
+        t.append(30);
+        assert_eq!(t.len(), 3);
+        assert_eq!(t.size(), 4);
+        // Drive leaf 1 negative; leaves 0 and 2 stay positive.
+        t.set(1, -1);
+        assert_eq!(t.rightmost_le_zero(), Some(1));
+        t.append(7);
+        assert_eq!(t.len(), 4);
+        assert_eq!(t.size(), 4);
+        assert_eq!(t.rightmost_le_zero(), Some(1));
+        t.append(0);
+        // First leaf in the new (size-8) tree's right subtree.
+        assert_eq!(t.len(), 5);
+        assert_eq!(t.size(), 8);
+        // values: [5, -1, 30, 7, 0, pad, pad, pad].
+        assert_eq!(t.rightmost_le_zero(), Some(4));
+    }
+
+    #[test]
+    fn append_matches_naive_under_random_ops() {
+        // Start empty and grow via `append`, mixed with `set`, `suffix_add`,
+        // and `rightmost_le_zero` queries. Cross-check against `Naive`.
+        let mut t = MinSegTree::new(&[], 1_000_000_000);
+        let mut naive = Naive::new(Vec::new());
+
+        let mut state: u64 = 0xcafe_f00d_dead_beef;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+
+        for _ in 0..3_000 {
+            // Bias slightly toward `append` so the tree actually grows.
+            let op = next() % 4;
+            if op == 0 || t.is_empty() {
+                let v = (next() as i64) % 21 - 10;
+                t.append(v);
+                naive.values.push(v);
+            } else {
+                match op % 3 {
+                    0 => {
+                        let i = (next() as usize) % t.len();
+                        let v = (next() as i64) % 21 - 10;
+                        t.set(i, v);
+                        naive.set(i, v);
+                    }
+                    1 => {
+                        let lo = (next() as usize) % (t.len() + 1);
+                        let d = (next() as i64) % 9 - 4;
+                        t.suffix_add(lo, d);
+                        naive.suffix_add(lo, d);
+                    }
+                    _ => {
+                        assert_eq!(t.rightmost_le_zero(), naive.rightmost_le_zero());
+                    }
+                }
+            }
+        }
+        assert_eq!(t.rightmost_le_zero(), naive.rightmost_le_zero());
     }
 }

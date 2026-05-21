@@ -105,7 +105,19 @@ impl<H: ManySeqBuilder> ConsistentChooseKFastHasher<H> {
             }
         }
         this.samples = samples;
-        this.rebuild_from_samples();
+        // Initialize `next[i]` and the segment tree from `samples`.
+        let mut c: Vec<i64> = Vec::with_capacity(k);
+        this.next.reserve(k);
+        for i in 0..k {
+            let nv = this.get_sample(i, this.samples[i]);
+            this.next.push(nv);
+            let ci = match nv {
+                Some(v) => (i - this.lower_bound(v, i)) as i64,
+                None => C_INF,
+            };
+            c.push(ci);
+        }
+        this.tree = MinSegTree::new(&c, C_INF);
         this
     }
 
@@ -127,7 +139,7 @@ impl<H: ManySeqBuilder> ConsistentChooseKFastHasher<H> {
     /// Grow the sample set by one element. Returns the index at which the
     /// new element was inserted in the sorted samples list.
     ///
-    /// Time: O(k).
+    /// Amortized time: O(log k).
     ///
     /// Panics if `k == n`.
     pub fn grow_k(&mut self) -> usize {
@@ -136,65 +148,47 @@ impl<H: ManySeqBuilder> ConsistentChooseKFastHasher<H> {
         let sk = self
             .get_sample(k, self.n)
             .expect("sample sequence must not be exhausted");
-        let idx = if let Some(last) = self.samples.last().copied() {
-            if last < sk {
-                self.samples.push(sk);
+        match self.samples.last().copied() {
+            Some(last) if last >= sk => {
+                // Hard case: `sk` collides with existing samples. The standard
+                // algorithm is "cascade-replace `samples[..k]` as if universe
+                // shrank to `last`, then push `last` at position k". Our fast
+                // `shrink_n` already implements the cascade in O(log k)
+                // amortized, so we reuse it directly: it pops the old last,
+                // inserts a new sample at some `chosen_i`, and leaves
+                // `samples` with the same length `k`. We then append the
+                // saved `last` at the new top, restoring `n`.
+                let original_n = self.n;
+                let chosen_i = self.shrink_n();
+                self.n = original_n;
+                self.append_top(last);
+                chosen_i
+            }
+            _ => {
+                // Easy case: `sk` is strictly larger than every current
+                // sample (or `samples` is empty). Append it at the top.
+                self.append_top(sk);
                 k
-            } else {
-                let i = self.grow_k_cascade(last);
-                self.samples.push(last);
-                i
             }
-        } else {
-            self.samples.push(sk);
-            0
-        };
-        // The cascade may have touched samples in `[idx, k]`; rebuilding from
-        // scratch is O(new_k) = O(k + 1), the same asymptotic cost as the
-        // standard hasher's `grow_k`, so we don't bother updating in place.
-        self.rebuild_from_samples();
-        idx
-    }
-
-    /// Mirrors the standard hasher's `shrink_n_inner`: walks `samples` from the
-    /// top down, replacing each entry `>= n` with a fresh candidate from the
-    /// current sequence (chained against the smaller neighbour). Returns the
-    /// index at which the new (lower) sample lands.
-    fn grow_k_cascade(&mut self, mut n: usize) -> usize {
-        for i in (0..self.samples.len()).rev() {
-            if self.samples[i] < n {
-                return i + 1;
-            }
-            let si = self
-                .get_sample(i, n)
-                .expect("sample sequence must not be exhausted");
-            if i > 0 && self.samples[i - 1] > si {
-                self.samples[i] = self.samples[i - 1];
-            } else {
-                self.samples[i] = si;
-            }
-            n = self.samples[i];
         }
-        0
     }
 
-    /// Recomputes `next` and the segment tree from the current `samples`.
-    /// `samples` must already be sorted ascending.
-    fn rebuild_from_samples(&mut self) {
+    /// Append `new_sample` at position `k = self.samples.len()`, assuming it
+    /// is strictly greater than every current sample. Maintains `next` and
+    /// the segment tree.
+    ///
+    /// Amortized time: O(log k) (the segment tree doubles its capacity on
+    /// overflow; the per-call cost amortizes to O(log k)).
+    fn append_top(&mut self, new_sample: usize) {
         let k = self.samples.len();
-        let mut next: Vec<Option<usize>> = Vec::with_capacity(k);
-        let mut c: Vec<i64> = Vec::with_capacity(k);
-        for i in 0..k {
-            let nv = self.get_sample(i, self.samples[i]);
-            next.push(nv);
-            let ci = match nv {
-                Some(v) => (i - self.samples[..i].partition_point(|&s| s < v)) as i64,
-                None => C_INF,
-            };
-            c.push(ci);
-        }
-        self.next = next;
-        self.tree = MinSegTree::new(&c, C_INF);
+        self.samples.push(new_sample);
+        let nv = self.get_sample(k, new_sample);
+        self.next.push(nv);
+        let c_k = match nv {
+            Some(v) => (k - self.samples[..k].partition_point(|&s| s < v)) as i64,
+            None => C_INF,
+        };
+        self.tree.append(c_k);
     }
 
     /// Decrements `n` to the current largest sample and replaces it with the
@@ -436,6 +430,35 @@ mod tests {
                         standard.samples(),
                         "key={key} n={n} k={k}: grow_k built unexpected samples"
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_fast_grow_then_shrink_interleaved() {
+        // Interleave grow_k and shrink_n to stress the tree-doubling boundary
+        // and the lazy `c[i]` updates left behind by shrink_n on slots that
+        // are subsequently overwritten by grow_k.
+        for key in 0..50 {
+            for n_start in 5..15 {
+                let mut fast = ConsistentChooseKFastHasher::new(hasher_for_key(key), n_start);
+                let mut standard = ConsistentChooseKHasher::new(hasher_for_key(key), n_start);
+                // Grow to k=n/2.
+                let k_target = n_start / 2;
+                for _ in 0..k_target {
+                    assert_eq!(fast.grow_k(), standard.grow_k());
+                    assert_eq!(fast.samples(), standard.samples());
+                }
+                // Shrink n down until forced to stop.
+                while *standard.samples().last().unwrap() > standard.k() {
+                    assert_eq!(fast.shrink_n(), standard.shrink_n());
+                    assert_eq!(fast.samples(), standard.samples());
+                }
+                // Grow some more, if possible.
+                while fast.k() < fast.n() {
+                    assert_eq!(fast.grow_k(), standard.grow_k());
+                    assert_eq!(fast.samples(), standard.samples());
                 }
             }
         }

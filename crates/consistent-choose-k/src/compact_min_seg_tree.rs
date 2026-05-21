@@ -53,6 +53,14 @@ pub struct CompactMinSegTree {
     val: Vec<i64>,
     /// Number of leaves (a power of two, or 0).
     size: usize,
+    /// Number of *real* leaves (those at positions `0..len`). Slots in
+    /// `[len, size)` hold the [`Self::padding`] sentinel; `len` only changes
+    /// via [`CompactMinSegTree::push`].
+    len: usize,
+    /// Sentinel for as-yet-unset leaves. New slots created by
+    /// [`CompactMinSegTree::push`] are initialized with this value before
+    /// the actual write, and growing the tree fills the new half with it.
+    padding: i64,
 }
 
 /// Sign-bit mask used to encode the side flag inside a packed pair entry.
@@ -67,17 +75,25 @@ impl CompactMinSegTree {
     /// Time: O(leaves.len().next_power_of_two()).
     #[allow(dead_code)]
     pub fn new(leaves: &[i64], padding: i64) -> Self {
+        let len = leaves.len();
         if leaves.is_empty() {
             return Self {
                 val: Vec::new(),
                 size: 0,
+                len,
+                padding,
             };
         }
         let size = leaves.len().next_power_of_two();
         let mut val = vec![0i64; size];
         if size == 1 {
             val[0] = leaves[0];
-            return Self { val, size };
+            return Self {
+                val,
+                size,
+                len,
+                padding,
+            };
         }
         // Build the full relative-encoded segment tree, then collapse it.
         let mut seg = vec![padding; 2 * size - 1];
@@ -103,7 +119,77 @@ impl CompactMinSegTree {
                 seg[r] | SIDE_BIT
             };
         }
-        Self { val, size }
+        Self {
+            val,
+            size,
+            len,
+            padding,
+        }
+    }
+
+    /// Number of real leaves appended so far (excluding padding slots).
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// True iff no real leaves are stored.
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Appends `value` as a new leaf. Doubles the underlying tree if there
+    /// is no padding slot left to overwrite.
+    ///
+    /// Time: amortized O(log size); worst-case O(size) on the doubling step.
+    #[allow(dead_code)]
+    pub fn push(&mut self, value: i64) {
+        if self.len == self.size {
+            self.grow();
+        }
+        let i = self.len;
+        self.len = i + 1;
+        self.set(i, value);
+    }
+
+    /// Doubles `size`, preserving the existing tree as the left subtree of a
+    /// fresh root and filling the right subtree with all-padding leaves.
+    fn grow(&mut self) {
+        if self.size == 0 {
+            // Empty tree: allocate a single-leaf tree. The caller is
+            // expected to write the value via `set`/`push`, but pre-fill
+            // with `padding` so the slot is in a valid state regardless.
+            self.val.push(self.padding);
+            self.size = 1;
+            return;
+        }
+        let old_size = self.size;
+        let new_size = old_size * 2;
+        // Old `val[0]` is the actual min over the old real leaves. Padding
+        // is `>= ` every real value, so the new tree's actual min is the
+        // same value and lives at the same slot.
+        let old_root_min = self.val[0];
+        self.val.resize(new_size, 0);
+        // Push every level of the pair-heap one step deeper. The whole old
+        // level `[L, 2L)` (where `L` is a power of two) becomes the LEFT
+        // half of the new level one deeper, i.e. moves to `[2L, 3L)`. We
+        // process from the deepest level upward; each step is a
+        // contiguous slice copy followed by zeroing the now-vacated source.
+        let mut level = old_size / 2;
+        while level > 0 {
+            self.val.copy_within(level..2 * level, 2 * level);
+            self.val[level..2 * level].fill(0);
+            level /= 2;
+        }
+        // The right subtree consists entirely of padding leaves (already 0
+        // throughout). The new root pair's right child reaches that padding
+        // subtree (min = `padding`); its left child reaches the relocated
+        // old root (min = `old_root_min`).
+        let r_off = self.padding - old_root_min;
+        debug_assert!(r_off >= 0, "padding must be >= every real leaf");
+        self.val[1] = SIDE_BIT | r_off;
+        self.size = new_size;
     }
 
     /// Number of leaves (including padding). Always a power of two, or `0`.
@@ -476,5 +562,70 @@ mod tests {
         assert_eq!(t.rightmost_le_zero(), Some(0));
         t.set(0, 1);
         assert_eq!(t.rightmost_le_zero(), None);
+    }
+
+    /// `push` from empty must reproduce the result of `new` on the same
+    /// sequence of leaves, for every interesting size including the
+    /// power-of-two boundaries that trigger doubling.
+    #[test]
+    fn push_matches_new() {
+        for &n in &[0usize, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 32, 33] {
+            let leaves: Vec<i64> = (0..n as i64).map(|i| (i * 13) % 17 - 5).collect();
+            let padding = 1_000_000_000;
+            let mut pushed = CompactMinSegTree::new(&[], padding);
+            for &v in &leaves {
+                pushed.push(v);
+            }
+            let direct = CompactMinSegTree::new(&leaves, padding);
+            assert_eq!(pushed.size(), direct.size(), "size mismatch at n={n}");
+            assert_eq!(pushed.len(), direct.len(), "len mismatch at n={n}");
+            assert_eq!(
+                pushed.rightmost_le_zero(),
+                direct.rightmost_le_zero(),
+                "rightmost mismatch at n={n}",
+            );
+        }
+    }
+
+    /// Mix `push` with `set` / `suffix_add` / `rightmost_le_zero` and
+    /// cross-check against the brute-force model.
+    #[test]
+    fn push_mixed_with_other_ops() {
+        let padding = 1_000_000_000;
+        let mut t = CompactMinSegTree::new(&[], padding);
+        let mut naive: Vec<i64> = Vec::new();
+        let mut next = lcg_rng();
+
+        for _ in 0..2_000 {
+            match next() % 4 {
+                0 => {
+                    // push
+                    let v = (next() as i64) % 21 - 10;
+                    t.push(v);
+                    naive.push(v);
+                }
+                1 if !naive.is_empty() => {
+                    // set
+                    let i = (next() as usize) % naive.len();
+                    let v = (next() as i64) % 21 - 10;
+                    t.set(i, v);
+                    naive[i] = v;
+                }
+                2 if !naive.is_empty() => {
+                    // suffix_add only over the real prefix; padding slots
+                    // would otherwise be unfair game.
+                    let lo = (next() as usize) % (naive.len() + 1);
+                    let d = (next() as i64) % 9 - 4;
+                    t.suffix_add(lo, d);
+                    for v in &mut naive[lo..] {
+                        *v += d;
+                    }
+                }
+                _ => {
+                    let want = naive[..t.len()].iter().rposition(|&v| v <= 0);
+                    assert_eq!(t.rightmost_le_zero(), want);
+                }
+            }
+        }
     }
 }

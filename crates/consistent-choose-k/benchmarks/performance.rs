@@ -66,6 +66,21 @@ fn append_vs_new_with_k(c: &mut Criterion) {
                     }
                 })
             });
+            group.bench_function(BenchmarkId::new(format!("fast_new_with_k/k_{k}"), n), |b| {
+                b.iter(|| {
+                    let h = DefaultHasher::default();
+                    black_box(ConsistentChooseKFastHasher::new_with_k(h, n + k, k));
+                })
+            });
+            group.bench_function(BenchmarkId::new(format!("fast_append/k_{k}"), n), |b| {
+                b.iter(|| {
+                    let h = DefaultHasher::default();
+                    let mut iter = ConsistentChooseKFastHasher::new(h, n + k);
+                    for _ in 0..k {
+                        black_box(iter.grow_k());
+                    }
+                })
+            });
         }
     }
     group.finish();
