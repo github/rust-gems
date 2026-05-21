@@ -32,10 +32,18 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
     ///
     /// Time: O(1)
     pub fn new(builder: H, n: usize) -> Self {
+        Self::new_with_capacity(builder, n, 0)
+    }
+
+    /// Create a new iterator for `n` nodes starting with k=0, preallocating
+    /// enough space to grow to `capacity` samples without reallocating.
+    ///
+    /// Time: O(1)
+    pub fn new_with_capacity(builder: H, n: usize, capacity: usize) -> Self {
         Self {
             builder,
             n,
-            samples: Vec::new(),
+            samples: Vec::with_capacity(capacity),
         }
     }
 
@@ -44,7 +52,7 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
     /// Average time: O(k^2)
     pub fn new_with_k(builder: H, n: usize, k: usize) -> Self {
         assert!(n >= k, "n must be at least k");
-        let mut iter = Self::new(builder, n);
+        let mut iter = Self::new_with_capacity(builder, n, k);
         for i in 0..k {
             iter.samples.push(iter.get_sample(i, n));
         }
@@ -278,6 +286,28 @@ mod tests {
                     );
                     iter.shrink_n();
                     assert_eq!(iter.samples, expected.samples);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_with_capacity_matches_new() {
+        for key in 0..200 {
+            for n in 1..40 {
+                let hasher = hasher_for_key(key);
+                let mut standard = ConsistentChooseKHasher::new(hasher.clone(), n);
+                let mut standard_with_capacity =
+                    ConsistentChooseKHasher::new_with_capacity(hasher, n, n);
+
+                assert!(standard_with_capacity.samples.capacity() >= n);
+
+                for k in 1..=n {
+                    assert_eq!(
+                        standard_with_capacity.next(),
+                        standard.next(),
+                        "key={key} n={n} k={k}"
+                    );
                 }
             }
         }

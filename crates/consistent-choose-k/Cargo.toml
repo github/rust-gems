@@ -15,6 +15,11 @@ categories = ["algorithms", "data-structures", "mathematics", "science"]
 crate-type = ["lib", "staticlib"]
 bench = false
 
+[features]
+# Exposes internal data structures (segment trees) for benchmarking.
+# Not part of the public API.
+__bench_internals = []
+
 [dependencies]
 
 [dev-dependencies]
