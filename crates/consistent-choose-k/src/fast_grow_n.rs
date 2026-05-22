@@ -43,13 +43,12 @@ use std::collections::BinaryHeap;
 
 use crate::consistent_hash::ConsistentHashIterator;
 use crate::sample_treap::SampleTreap;
-use crate::{ConsistentHasher, ManySeqBuilder};
+use crate::ManySeqBuilder;
 
 /// Fast variant of [`crate::ConsistentChooseKHasher`] specialized for
 /// repeated `grow_n` calls at fixed `k`. See module-level documentation
 /// for the algorithm.
 pub struct ConsistentChooseKFastGrowHasher<H: ManySeqBuilder> {
-    builder: H,
     /// Current universe size.
     n: usize,
     /// Fixed sample count (number of sequences tracked in `next_heap`).
@@ -58,16 +57,18 @@ pub struct ConsistentChooseKFastGrowHasher<H: ManySeqBuilder> {
     /// component. A `None` next-candidate (sequence exhausted) is *not*
     /// pushed back; the heap shrinks instead.
     next_heap: BinaryHeap<Reverse<(usize, usize)>>,
+    /// One long-lived `ConsistentHashIterator` per sequence id, kept
+    /// positioned just past the seq's most recently popped/pushed sample.
+    /// Avoids rebuilding the iterator (and re-deriving its bucket state)
+    /// on every `grow_n` event.
+    iters: Vec<ConsistentHashIterator<H::Builder>>,
     /// Currently-selected samples in insertion order. Each entry's `life`
     /// is `seq_id - position`; an entry with `life <= 0` is displaced and
     /// will be evicted on the next firing.
     samples: SampleTreap,
 }
 
-impl<H: ManySeqBuilder> ConsistentChooseKFastGrowHasher<H>
-where
-    H::Builder: Clone,
-{
+impl<H: ManySeqBuilder> ConsistentChooseKFastGrowHasher<H> {
     /// Create a new instance for `k` sequences with `n = 0`. Seeds the
     /// heap with each sequence's first sample; the sample treap is empty
     /// until `grow_n` is called enough times for samples to fire.
@@ -75,9 +76,12 @@ where
     /// Time: O(k).
     pub fn new(builder: H, k: usize) -> Self {
         let mut next_heap = BinaryHeap::with_capacity(k);
+        let mut iters = Vec::with_capacity(k);
         let mut life = vec![0; k];
         for seq in 0..k {
-            for l in ConsistentHashIterator::new(0, builder.seq_builder(seq)) {
+            let mut iter = ConsistentHashIterator::new(0, builder.seq_builder(seq));
+            loop {
+                let l = iter.next().expect("seq must yield a sample >= k");
                 let sample = l + seq;
                 if sample >= k {
                     next_heap.push(Reverse((sample, seq)));
@@ -85,6 +89,7 @@ where
                 }
                 life[sample] = l.max(life[sample]);
             }
+            iters.push(iter);
         }
         let mut samples = SampleTreap::with_capacity(k);
         for (sample, life) in life.into_iter().enumerate() {
@@ -92,10 +97,10 @@ where
         }
 
         Self {
-            builder,
             n: k,
             k,
             next_heap,
+            iters,
             samples,
         }
     }
@@ -126,10 +131,17 @@ where
                 .next_heap
                 .pop()
                 .expect("there are always k elements in the heap!");
-            let after = ConsistentHasher::new(self.builder.seq_builder(seq))
-                .next(self.n.max(next + 1) - seq)
-                .expect("")
-                + seq;
+            // Advance this seq's cached iterator until the next candidate
+            // satisfies `>= self.n` (i.e. iter yield `>= self.n - seq`).
+            // Under the heap invariant the very first `.next()` already
+            // satisfies the bound, but we keep the inner loop for safety.
+            let threshold = self.n.max(next + 1) - seq;
+            let after = loop {
+                let l = self.iters[seq].next().expect("seq must yield more samples");
+                if l >= threshold {
+                    break l + seq;
+                }
+            };
             self.next_heap.push(Reverse((after, seq)));
             if next >= self.n {
                 self.n = next + 1;
