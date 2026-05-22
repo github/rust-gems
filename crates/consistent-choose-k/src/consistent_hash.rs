@@ -165,8 +165,13 @@ pub struct ConsistentHashIterator<H: HashSeqBuilder> {
 
 impl<H: HashSeqBuilder> ConsistentHashIterator<H> {
     pub fn new(n: usize, builder: H) -> Self {
+        // Buckets are indexed by the bit value `b` (a power of two) and
+        // cover the range `[b, 2*b)`. We want every bucket whose upper
+        // bound exceeds `n`, i.e. `2*b > n`, i.e.
+        // `b >= next_power_of_two(n/2 + 1)`.
+        let bit_min = (n / 2 + 1).next_power_of_two() as u64;
         Self {
-            bits: builder.bit_mask() & !((n + 2).next_power_of_two() as u64 / 2 - 1),
+            bits: builder.bit_mask() & !(bit_min - 1),
             stack: if n == 0 { vec![0] } else { vec![] },
             builder,
             n,
@@ -270,5 +275,23 @@ mod tests {
             stats,
             vec![7577, 7541, 7538, 7822, 7763, 7687, 7718, 7723, 7846, 7723, 7688, 7716, 7658]
         );
+    }
+
+    /// Regression test for an off-by-one in `ConsistentHashIterator::new`'s
+    /// bucket-mask construction: starting the iterator at `n` must not skip
+    /// over a value `>= n` that the full iteration from 0 would visit.
+    #[test]
+    fn test_iterator_start_includes_n() {
+        let builder = hasher_for_key(1).seq_builder(3);
+        let from_zero: Vec<usize> = ConsistentHashIterator::new(0, builder.clone())
+            .take(10)
+            .collect();
+        for &v in &from_zero {
+            assert_eq!(
+                ConsistentHashIterator::new(v, builder.clone()).next(),
+                Some(v),
+                "iterator starting at {v} must yield {v} as the first value (full sequence: {from_zero:?})",
+            );
+        }
     }
 }
