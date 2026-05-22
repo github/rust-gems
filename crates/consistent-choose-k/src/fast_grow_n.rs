@@ -77,30 +77,30 @@ impl<H: ManySeqBuilder> ConsistentChooseKFastGrowHasher<H> {
         for seq in 0..k {
             let bld = builder.seq_builder(seq);
             let mut seq_bits = bld.bit_mask();
-            let mut owner_pushed = false;
+            let mut is_owner = true;
             // Walk buckets low-bit-first. Push every sample `>= k` into
             // the heap, mark the first such (largest in its bucket, since
             // BucketIterator yields decreasing) as owner; lower samples
             // feed the life array. Stop after the first bucket that
             // contributes to the heap; later buckets are kept in
             // `seq_bits` for `grow_n` to drain via `refill`.
-            while seq_bits != 0 && !owner_pushed {
+            while seq_bits != 0 && is_owner {
                 let bit = seq_bits & seq_bits.wrapping_neg();
                 seq_bits ^= bit;
                 let iter = BucketIterator::new(bit as usize * 2, bit, bld.hash_seq(bit));
                 for l in iter {
                     let sample = l + seq;
                     if sample >= k {
-                        let owner = usize::from(!owner_pushed);
+                        let owner = usize::from(is_owner);
                         next_heap.push(Reverse((sample, seq * 2 + owner)));
-                        owner_pushed = true;
+                        is_owner = false;
                     } else {
                         life[sample] = l.max(life[sample]);
                     }
                 }
             }
             debug_assert!(
-                owner_pushed,
+                !is_owner,
                 "seq {seq} must contribute at least one sample >= k"
             );
             bits.push(seq_bits);
@@ -173,31 +173,17 @@ impl<H: ManySeqBuilder> ConsistentChooseKFastGrowHasher<H> {
     /// as the new owner for `seq`.
     fn refill(&mut self, seq: usize) {
         let bld = &self.builders[seq];
-        let n = self.n;
         let bits = &mut self.bits[seq];
-        while *bits != 0 {
-            let bit = *bits & bits.wrapping_neg();
-            *bits ^= bit;
-            let iter = BucketIterator::new(bit as usize * 2, bit, bld.hash_seq(bit));
-            let mut owner_pushed = false;
-            for l in iter {
-                let sample = l + seq;
-                // BucketIterator yields strictly decreasing, so once we
-                // drop below `n` everything after is stale too.
-                if sample < n {
-                    break;
-                }
-                let owner = usize::from(!owner_pushed);
-                self.next_heap.push(Reverse((sample, seq * 2 + owner)));
-                owner_pushed = true;
-            }
-            if owner_pushed {
-                return;
-            }
+        let bit = *bits & bits.wrapping_neg();
+        *bits ^= bit;
+        let iter = BucketIterator::new(bit as usize * 2, bit, bld.hash_seq(bit));
+        let mut is_owner = true;
+        for l in iter {
+            let sample = l + seq;
+            let owner = usize::from(is_owner);
+            self.next_heap.push(Reverse((sample, seq * 2 + owner)));
+            is_owner = false;
         }
-        // No more buckets — this seq is exhausted. Heap shrinks by one
-        // until it eventually empties (astronomically rare in practice
-        // for u64 hash sequences).
     }
 }
 
