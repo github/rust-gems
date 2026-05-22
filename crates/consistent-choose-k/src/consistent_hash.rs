@@ -63,7 +63,7 @@ impl<H: Hasher + Clone> ManySeqBuilder for H {
 /// hash iterator which enumerates all the hashes for a specific bucket.
 /// A bucket covers the range `(1<<bit)..(2<<bit)`.
 #[derive(Default)]
-struct BucketIterator<H: HashSequence> {
+pub(crate) struct BucketIterator<H: HashSequence> {
     hasher: H,
     n: usize, // Upper bound for the hash values within the bucket.
     is_first: bool,
@@ -71,7 +71,7 @@ struct BucketIterator<H: HashSequence> {
 }
 
 impl<H: HashSequence> BucketIterator<H> {
-    fn new(n: usize, bit: u64, hasher: H) -> Self {
+    pub(crate) fn new(n: usize, bit: u64, hasher: H) -> Self {
         Self {
             hasher,
             n,

@@ -11,39 +11,32 @@
 //! # Algorithm sketch
 //!
 //! State:
-//! * `next_heap`: min-heap of `(next_candidate_sample, seq_id)` — one
-//!   entry per active sequence, keyed by the sequence's smallest sample
-//!   strictly greater than its currently-selected sample (or its first
-//!   sample, if it has none yet).
+//! * `next_heap`: min-heap of `(sample, packed_seq)`. `packed_seq` is
+//!   `seq_id * 2 + owner_bit`. For each seq id with at least one entry
+//!   in the heap, exactly one entry — the largest — has its owner bit
+//!   set. When that entry is popped, the seq's next active bucket of
+//!   samples is loaded into the heap (and the new largest becomes the
+//!   new owner). Each bucket of a seq is materialized as a batch by
+//!   running the seq's [`BucketIterator`] to exhaustion; this avoids
+//!   re-running the seq's hash sequence on every single `grow_n` call.
+//! * `bits[seq]`: bitmask of buckets *not yet* pushed into the heap.
+//!   Lower bits correspond to smaller value ranges (`[bit, 2*bit)`),
+//!   so the lowest set bit is the next bucket to push.
+//! * `builders[seq]`: cached per-seq hash builder.
 //! * `samples`: a [`SampleTreap`] holding `(sample, life)` pairs in
 //!   insertion order, where `life = seq_id - position`. Once `k` samples
 //!   are present, an entry whose `life <= 0` is the *displaced* sample
 //!   that must be evicted on the next firing.
 //!
-//! `grow_n` (semantics: `n += 1`):
-//!
-//! 1. While the heap's smallest `next_candidate < n_new` (in practice
-//!    zero or one iteration, since `n` grows by one):
-//!    1. Pop `(s, seq_id)`.
-//!    2. Push the next candidate for `seq_id` (smallest sample > `s`)
-//!       back into the heap.
-//!    3. Append `(s, life = seq_id - new_position)` at the end of the
-//!       treap via `push_back`.
-//!    4. If the treap now has more than `k` entries (i.e. we displaced
-//!       a sample), find the rightmost position with `life <= 0` via
-//!       `find_rightmost_le_zero`, `remove_at` it, and apply
-//!       `add_life_suffix(p_dead, +1)` so the remaining entries (which
-//!       shifted left by one) see their `life` increase by one.
-//! 2. Set `n = n_new`.
-//!
-//! Per-call cost: O(log k) expected (heap pop/push + treap ops).
+//! Per-call cost: O(log k) expected — amortized constant heap pushes
+//! per `grow_n`, plus a single treap pop / push.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use crate::consistent_hash::ConsistentHashIterator;
+use crate::consistent_hash::BucketIterator;
 use crate::sample_treap::SampleTreap;
-use crate::ManySeqBuilder;
+use crate::{HashSeqBuilder, ManySeqBuilder};
 
 /// Fast variant of [`crate::ConsistentChooseKHasher`] specialized for
 /// repeated `grow_n` calls at fixed `k`. See module-level documentation
@@ -51,17 +44,18 @@ use crate::ManySeqBuilder;
 pub struct ConsistentChooseKFastGrowHasher<H: ManySeqBuilder> {
     /// Current universe size.
     n: usize,
-    /// Fixed sample count (number of sequences tracked in `next_heap`).
+    /// Fixed sample count (number of sequences tracked).
     k: usize,
-    /// Min-heap of `(next_candidate_sample, seq_id)` keyed by the first
-    /// component. A `None` next-candidate (sequence exhausted) is *not*
-    /// pushed back; the heap shrinks instead.
+    /// Min-heap keyed by `(sample, packed_seq)` where
+    /// `packed_seq = seq_id * 2 + owner_bit`. The owner bit is set on
+    /// exactly one entry per seq present in the heap (the largest); when
+    /// that entry is popped, the seq's next bucket is loaded.
     next_heap: BinaryHeap<Reverse<(usize, usize)>>,
-    /// One long-lived `ConsistentHashIterator` per sequence id, kept
-    /// positioned just past the seq's most recently popped/pushed sample.
-    /// Avoids rebuilding the iterator (and re-deriving its bucket state)
-    /// on every `grow_n` event.
-    iters: Vec<ConsistentHashIterator<H::Builder>>,
+    /// Per-seq cached hash builder, used to spin up `BucketIterator`s on
+    /// refill without re-deriving the builder.
+    builders: Vec<H::Builder>,
+    /// Per-seq bitmask of buckets not yet pushed into the heap.
+    bits: Vec<u64>,
     /// Currently-selected samples in insertion order. Each entry's `life`
     /// is `seq_id - position`; an entry with `life <= 0` is displaced and
     /// will be evicted on the next firing.
@@ -69,27 +63,48 @@ pub struct ConsistentChooseKFastGrowHasher<H: ManySeqBuilder> {
 }
 
 impl<H: ManySeqBuilder> ConsistentChooseKFastGrowHasher<H> {
-    /// Create a new instance for `k` sequences with `n = 0`. Seeds the
-    /// heap with each sequence's first sample; the sample treap is empty
-    /// until `grow_n` is called enough times for samples to fire.
+    /// Create a new instance for `k` sequences with `n = k`. Seeds the
+    /// life array from samples `< k` and pushes the first heap-worthy
+    /// bucket (the bucket containing the first sample `>= k`) into the
+    /// heap for every seq.
     ///
     /// Time: O(k).
     pub fn new(builder: H, k: usize) -> Self {
         let mut next_heap = BinaryHeap::with_capacity(k);
-        let mut iters = Vec::with_capacity(k);
+        let mut builders = Vec::with_capacity(k);
+        let mut bits = Vec::with_capacity(k);
         let mut life = vec![0; k];
         for seq in 0..k {
-            let mut iter = ConsistentHashIterator::new(0, builder.seq_builder(seq));
-            loop {
-                let l = iter.next().expect("seq must yield a sample >= k");
-                let sample = l + seq;
-                if sample >= k {
-                    next_heap.push(Reverse((sample, seq)));
-                    break;
+            let bld = builder.seq_builder(seq);
+            let mut seq_bits = bld.bit_mask();
+            let mut owner_pushed = false;
+            // Walk buckets low-bit-first. Push every sample `>= k` into
+            // the heap, mark the first such (largest in its bucket, since
+            // BucketIterator yields decreasing) as owner; lower samples
+            // feed the life array. Stop after the first bucket that
+            // contributes to the heap; later buckets are kept in
+            // `seq_bits` for `grow_n` to drain via `refill`.
+            while seq_bits != 0 && !owner_pushed {
+                let bit = seq_bits & seq_bits.wrapping_neg();
+                seq_bits ^= bit;
+                let iter = BucketIterator::new(bit as usize * 2, bit, bld.hash_seq(bit));
+                for l in iter {
+                    let sample = l + seq;
+                    if sample >= k {
+                        let owner = usize::from(!owner_pushed);
+                        next_heap.push(Reverse((sample, seq * 2 + owner)));
+                        owner_pushed = true;
+                    } else {
+                        life[sample] = l.max(life[sample]);
+                    }
                 }
-                life[sample] = l.max(life[sample]);
             }
-            iters.push(iter);
+            debug_assert!(
+                owner_pushed,
+                "seq {seq} must contribute at least one sample >= k"
+            );
+            bits.push(seq_bits);
+            builders.push(bld);
         }
         let mut samples = SampleTreap::with_capacity(k);
         for (sample, life) in life.into_iter().enumerate() {
@@ -100,7 +115,8 @@ impl<H: ManySeqBuilder> ConsistentChooseKFastGrowHasher<H> {
             n: k,
             k,
             next_heap,
-            iters,
+            builders,
+            bits,
             samples,
         }
     }
@@ -121,28 +137,22 @@ impl<H: ManySeqBuilder> ConsistentChooseKFastGrowHasher<H> {
     }
 
     /// Grow `n` by one and update the choose-k set accordingly. Returns
-    /// `Some(new_sample)` if a sequence fired (i.e. some sample changed),
-    /// `None` otherwise.
+    /// `Some(new_sample)` if a sequence fired (i.e. some sample changed).
     ///
     /// Time: O(log k) expected.
     pub fn grow_n(&mut self) -> Option<usize> {
         loop {
-            let Reverse((next, seq)) = self
+            let Reverse((next, packed_seq)) = self
                 .next_heap
                 .pop()
-                .expect("there are always k elements in the heap!");
-            // Advance this seq's cached iterator until the next candidate
-            // satisfies `>= self.n` (i.e. iter yield `>= self.n - seq`).
-            // Under the heap invariant the very first `.next()` already
-            // satisfies the bound, but we keep the inner loop for safety.
-            let threshold = self.n.max(next + 1) - seq;
-            let after = loop {
-                let l = self.iters[seq].next().expect("seq must yield more samples");
-                if l >= threshold {
-                    break l + seq;
-                }
-            };
-            self.next_heap.push(Reverse((after, seq)));
+                .expect("there are always entries in the heap!");
+            let seq = packed_seq >> 1;
+            // If this entry was the owner (largest in heap for `seq`),
+            // load the seq's next active bucket. We do this whether or
+            // not the entry is stale: owners always trigger a refill.
+            if (packed_seq & 1) == 1 {
+                self.refill(seq);
+            }
             if next >= self.n {
                 self.n = next + 1;
                 let pos = self
@@ -154,6 +164,40 @@ impl<H: ManySeqBuilder> ConsistentChooseKFastGrowHasher<H> {
                 break Some(next);
             }
         }
+    }
+
+    /// Push the next active bucket of `seq` into the heap. Skips
+    /// buckets whose samples are all below `self.n` (would be stale on
+    /// arrival) and any remaining samples within a straddling bucket
+    /// that are below `self.n`. Marks the first (largest) pushed sample
+    /// as the new owner for `seq`.
+    fn refill(&mut self, seq: usize) {
+        let bld = &self.builders[seq];
+        let n = self.n;
+        let bits = &mut self.bits[seq];
+        while *bits != 0 {
+            let bit = *bits & bits.wrapping_neg();
+            *bits ^= bit;
+            let iter = BucketIterator::new(bit as usize * 2, bit, bld.hash_seq(bit));
+            let mut owner_pushed = false;
+            for l in iter {
+                let sample = l + seq;
+                // BucketIterator yields strictly decreasing, so once we
+                // drop below `n` everything after is stale too.
+                if sample < n {
+                    break;
+                }
+                let owner = usize::from(!owner_pushed);
+                self.next_heap.push(Reverse((sample, seq * 2 + owner)));
+                owner_pushed = true;
+            }
+            if owner_pushed {
+                return;
+            }
+        }
+        // No more buckets — this seq is exhausted. Heap shrinks by one
+        // until it eventually empties (astronomically rare in practice
+        // for u64 hash sequences).
     }
 }
 
