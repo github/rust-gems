@@ -147,6 +147,67 @@ replication: it is the unique `k`-out-of-`n` growth process where each new node
 joins the active set with probability `k/(n+1)`, evicts at most one old node,
 and preserves a uniform active set after every growth step.
 
+## Fast incremental hashers
+
+For workloads that repeatedly grow or shrink `n` at a fixed `k`, this crate
+ships two stateful specializations of `ConsistentChooseKHasher` whose
+amortized per-step cost is `O(log k)` rather than `O(k log k)` for a fresh
+`new_with_k`. They share the same input contract and produce the same set
+as the stateless version after every step — they just avoid recomputing
+the whole ranking from scratch.
+
+| Type                            | Optimized for | Per-step cost | Construction |
+|---------------------------------|---------------|---------------|--------------|
+| `ConsistentChooseKHasher`       | one-shot      | `O(k log k)` total | `new_with_k(builder, n, k)` |
+| `ConsistentChooseKFastHasher`   | repeated `shrink_n` | `O(log k)` amortized | `new_with_k(builder, n, k)` |
+| `ConsistentChooseKFastGrowHasher` | repeated `grow_n` | `O(log k)` amortized | `new(builder, k)` starts at `n = k` |
+
+### Why two specializations?
+
+`grow_n` and `shrink_n` keep different invariants, so they want different
+in-memory layouts and cannot easily share a single representation:
+
+* **`ConsistentChooseKFastHasher`** (shrink): stores samples sorted by
+  value, with a per-position count of "how many already-selected
+  smaller samples block this slot". `shrink_n` is then a logarithmic
+  segment-tree descent to the displaced slot.
+* **`ConsistentChooseKFastGrowHasher`** (grow): stores samples in
+  insertion order, with a per-sample "life" `= seq_id - position`.
+  An entry whose `life ≤ 0` is the slot to evict on the next firing.
+  `grow_n` is a heap pop, a logarithmic rightmost-non-positive query
+  on the sample structure, and a constant-time append.
+
+Both are backed by an implicit-tree `SampleTreap` that supports
+`O(log k)` per operation for: insert, remove, point queries,
+range life additions with lazy propagation, and rightmost-`life ≤ 0`
+search via subtree-min augmentation.
+
+### Sequence iteration: bucket-batch heap
+
+Internally each of the `k` consistent-hash sequences advances through
+disjoint **buckets** covering value ranges `[b, 2b)` for powers of two
+`b`. The fast-grow hasher keeps a single min-heap keyed by
+`(sample, packed_seq)` where `packed_seq = seq * 2 + owner_bit`. When
+a seq's next bucket is loaded, every sample it produces is pushed at
+once, and the largest one is tagged with the owner bit. Popping that
+tagged entry is the signal to load the seq's next bucket. This
+amortizes the per-pop cost of the hash sequence over an entire bucket
+and avoids reconstructing per-seq iterator state.
+
+### When to use which
+
+* **Reservoir-style growth** (e.g. ingesting a stream and maintaining
+  a uniform top-`k`): use `ConsistentChooseKFastGrowHasher`. It is the
+  realization of the `O(k)`-per-step `grow_n` foreshadowed in the
+  reservoir-sampling section, and is competitive with Algorithm R
+  while remaining deterministically reproducible from `key` alone.
+  (Algorithm L's geometric-skip stays faster when *all* you need is
+  the sample; the choose-k variant pays for being history-independent.)
+* **Shrinking cluster / load-shedding**: use
+  `ConsistentChooseKFastHasher`.
+* **Single point lookup** (one `(n, k)` per key, no follow-up):
+  stick with the stateless `ConsistentChooseKHasher`.
+
 ## N-Choose-K replication
 
 We define the consistent `n-choose-k` replication as follows:
