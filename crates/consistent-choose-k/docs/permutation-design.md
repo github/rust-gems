@@ -275,6 +275,46 @@ here without breaking per-layer bijectivity: if the LCG cycle length
 exceeds the layer's output domain, the output repeats values within
 a single iterator lifetime.
 
+### Stateless PCG with bit reversal
+
+The stateless multi-round PCG above suffers from too many serial
+multiplies at small `n_bits` because `y * a` followed by `y ^= y >>
+shift` only diffuses bits *downwards*. Replacing the xor-shift with a
+**bit reversal** breaks that asymmetry: every round mixes high bits
+into low bits and vice versa, so a single multiplication can spread
+entropy across the whole width in both directions.
+
+A round becomes:
+
+```text
+y ^= k_xor;
+y *= k_mul | 1;          // odd multiplier
+y ^= y >> shift;         // local diffusion
+y  = y.reverse_bits() >> reverse_shift;
+```
+
+With this primitive a 2-bit-per-layer scheme passes χ² at `R =
+8/8/4/4` (vs Feistel's `12/10/6/4`), and a 1-bit-per-layer scheme
+passes at `R = 1/12/12/8/6/4`. So statistically the variant is at
+least as good as Feistel with comparable or slightly fewer rounds.
+
+The wall-clock comparison is roughly a wash:
+
+- On **ARM64** (Apple M4), `u32::reverse_bits` is a single-cycle
+  `RBIT` instruction. The 2-bit-per-layer PCG-reverse variant came
+  in ~10% faster than Feistel on median, with peaks around +30% at
+  small `n`. The 1-bit-per-layer variant gave that gain back (more
+  layer calls per emission), landing at parity.
+- On **x86_64**, `u32::reverse_bits` compiles to a 6–8-op sequence
+  of mask-and-swap (no native instruction), which is expected to
+  erase the ARM64 win and likely make the variant slower than
+  Feistel.
+
+Since the win is platform-dependent and small even where it exists,
+the shipping implementation stays on Feistel: it has uniformly good
+behaviour across architectures and no dependence on a single
+fast-bit-reverse instruction.
+
 ### Feistel
 
 Each layer `j` runs a small balanced Feistel network on
@@ -334,6 +374,11 @@ Forcing the per-layer width even (which is what "2 bits per layer"
 buys structurally) also keeps the Feistel halves perfectly symmetric
 and removes any need for cycle walking to stay inside `[0, n)` at the
 top.
+
+The PCG-reverse variant (which has no even-`n_bits` requirement) was
+tried at both 1-bit and 2-bit per layer; the 2-bit variant was
+faster there too, for the same reason — fewer layer calls per
+emission outweighs the modestly cheaper per-call cost.
 
 ## Universe cap: `n ≤ 2³⁰`
 
