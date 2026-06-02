@@ -56,6 +56,18 @@
 //! while keeping the consistency property; standard reservoir sampling wins on per-element
 //! streaming cost but loses on these two flexibilities.
 //!
+//! # Benchmark Results
+//!
+//! Performance comparison for computing the reservoir of size $k$ up to point $n = 10,000,000$:
+//!
+//! | Algorithm | Strategy / Complexity | $k = 100$ | $k = 1000$ | Consistency Support? | Fixed-$k$ Constrained? |
+//! | :--- | :--- | :--- | :--- | :--- | :--- |
+//! | **`ConsistentPermutation_Direct`** | Direct Random-Access / $O(k)$ | **`917 ns`** | **`8.01 µs`** | **Yes** (Perfect Profile) | No (Arbitrary subsets) |
+//! | **`ConsistentReservoir_Direct`** | Direct Build / $O(k)$ | **`1.68 µs`** | **`14.82 µs`** | **Yes** (Perfect Profile) | No (Iterator starts at $n$) |
+//! | **`Standard_Algorithm_L` (Vitter)**| Streaming Skip / $O(k \log(n/k))$| **`22.43 µs`** | **`178.82 µs`** | No | **Yes** (Must rebuild from $0$) |
+//! | **`ConsistentReservoir_Streaming`**| Incremental Streaming / $O(k \log(n/k))$| **`44.65 µs`** | **`1.63 ms`** | **Yes** (Stateful Iterator) | No (Sub-streams consistent)|
+//! | **`Standard_Algorithm_R` (Scan)**| Streaming Scan / $O(n)$ | **`28.68 ms`** | **`28.34 ms`** | No | **Yes** (Must rebuild from $0$) |
+//!
 //! # Data layout
 //!
 //! Everything lives in a single flat `values: Vec<u32>` plus a `pending: Vec<u32>`
@@ -183,37 +195,27 @@ pub struct ConsistentReservoir {
     /// values `< n`, which equals
     /// `ConsistentPermutation::new(n, master_key).take(k)`.
     n: u32,
+    /// Reusable scratchpad for holding the old reservoir of size `k` during grow layers.
+    old_reservoir: Vec<u32>,
+    /// Reusable scratchpad for bucket sort counts to avoid allocations.
+    counts_scratch: Vec<usize>,
 }
 
 /// Helper function to perform a flat, allocation-friendly bucket sort on values of a slice
-/// that are greater than or equal to `v_min`. It identifies their indices (ranks) and sorts them descending
-/// by their corresponding value in $O(n)$ average-case time.
-///
-/// This avoids allocating and sorting tuples/pairs of `(value, rank)`, and eliminates the need for
-/// an external ranks vector by filtering of `values` directly in-place.
-///
-/// # Arguments
-///
-/// * `values` - A read-only slice whose values are inspected.
-/// * `n_pending` - The precalculated count of values in `values` that are greater than or equal to `v_min`.
-/// * `v_min` - The lower bound value for range scaling (e.g., $m_{\text{old}}$).
-/// * `v_max` - The upper bound value for range scaling (e.g., $m_{\text{new}}$).
-///
-/// # Complexity
-///
-/// Runs in average-case $O(n)$ time and $O(n_{\text{pending}})$ auxiliary space (where $n_{\text{pending}}$ is the number of elements $\ge v_{\text{min}}$).
-fn bucket_sort_ranks_descending(
+/// that are greater than or equal to `v_min` into a pre-allocated destination buffer.
+fn bucket_sort_ranks_descending_in(
     values: &[u32],
-    n_pending: usize,
+    dest: &mut [u32],
+    counts: &mut [usize],
     v_min: u32,
     v_max: u32,
-) -> Vec<u32> {
+) {
+    let n_pending = dest.len();
     let range = (v_max - v_min) as u64;
-    if n_pending == 0 || range == 0{
-        return Vec::new();
+    if n_pending == 0 || range == 0 {
+        return;
     }
     // 1. Count elements in each bucket
-    let mut counts = vec![0usize; n_pending];
     for &val in values {
         if val >= v_min {
             let mut idx = (((val - v_min) as u64 * n_pending as u64) / range) as usize;
@@ -231,7 +233,6 @@ fn bucket_sort_ranks_descending(
         current_offset += count;
     }
     // 3. Place ranks into destination array while updating write heads in `counts`
-    let mut dest = vec![0u32; n_pending];
     for (rank, &val) in values.iter().enumerate() {
         if val >= v_min {
             let mut idx = (((val - v_min) as u64 * n_pending as u64) / range) as usize;
@@ -253,7 +254,6 @@ fn bucket_sort_ranks_descending(
             dest[start..end].sort_unstable_by_key(|&rank| Reverse(values[rank as usize]));
         }
     }
-    dest
 }
 
 /// Smallest `j_max` such that `4^(j_max+1) >= k`. Matches the
@@ -302,7 +302,9 @@ impl ConsistentReservoir {
                 pending_count += 1;
             }
         }
-        let pending = bucket_sort_ranks_descending(&values, pending_count, n, m);
+        let mut pending = vec![0u32; pending_count];
+        let mut counts_scratch = vec![0usize; pending_count];
+        bucket_sort_ranks_descending_in(&values, &mut pending, &mut counts_scratch, n, m);
         Self {
             values,
             pending,
@@ -310,6 +312,8 @@ impl ConsistentReservoir {
             j_max,
             master_key,
             n,
+            old_reservoir: Vec::new(),
+            counts_scratch,
         }
     }
 
@@ -359,10 +363,10 @@ impl ConsistentReservoir {
         // (if the iterator wasn't fully drained, those values are no
         // longer reachable anyway).
         self.values.truncate(k);
-        let old_reservoir = std::mem::take(&mut self.values);
-        debug_assert_eq!(old_reservoir.len(), k);
+        std::mem::swap(&mut self.values, &mut self.old_reservoir);
+        debug_assert_eq!(self.old_reservoir.len(), k);
 
-        let mut new_values: Vec<u32> = Vec::with_capacity(k);
+        self.values.clear();
         let mut next_old_idx = 0usize;
         let mut counter: u32 = 0;
         let mut pending_count = 0;
@@ -372,12 +376,12 @@ impl ConsistentReservoir {
             if is_descent {
                 // Consume the next old reservoir entry; this is the
                 // walk's only termination condition.
-                new_values.push(old_reservoir[next_old_idx]);
+                self.values.push(self.old_reservoir[next_old_idx]);
                 next_old_idx += 1;
             } else {
                 // Push the fresh emission.
                 // Ranks >= k are filtered out later by the iterator's guards.
-                new_values.push(raw);
+                self.values.push(raw);
                 pending_count += 1;
             }
             counter += 1;
@@ -385,9 +389,10 @@ impl ConsistentReservoir {
 
         let m_old = 1u32 << (2 * self.j_max + 2);
         let m_new = 1u32 << (2 * new_j_max + 2);
-        let pending = bucket_sort_ranks_descending(&new_values, pending_count, m_old, m_new);
-        self.values = new_values;
-        self.pending = pending;
+        self.pending.resize(pending_count, 0);
+        self.counts_scratch.resize(pending_count, 0);
+        self.counts_scratch.fill(0);
+        bucket_sort_ranks_descending_in(&self.values, &mut self.pending, &mut self.counts_scratch, m_old, m_new);
         self.j_max = new_j_max;
     }
 }
