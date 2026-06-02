@@ -86,7 +86,7 @@ fn splitmix64(seed: u64) -> u64 {
 ///
 /// `n_bits` must be **even** and in `2..=30`.
 #[inline]
-fn layer_apply(n_bits: u32, master_key: u64, x: u32) -> u32 {
+pub(crate) fn layer_apply(n_bits: u32, master_key: u64, x: u32) -> u32 {
     debug_assert!(n_bits >= 2 && n_bits <= 30 && n_bits.is_multiple_of(2));
     let rounds = rounds_for_n_bits(n_bits) as u32;
     let half_bits = n_bits / 2;
