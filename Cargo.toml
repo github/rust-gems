@@ -5,6 +5,7 @@ members = [
     "crates/bpe/benchmarks",
     "crates/bpe/tests",
     "crates/consistent-choose-k/benchmarks",
+    "crates/hash-sorted-map/benchmarks",
 ]
 resolver = "2"
 
