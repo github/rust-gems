@@ -1,0 +1,15 @@
+[package]
+name = "consistent-choose-k-benchmarks"
+edition = "2021"
+
+[[bench]]
+name = "performance"
+path = "performance.rs"
+harness = false
+test = false
+
+[dependencies]
+consistent-choose-k = { path = "../" }
+
+criterion = { version = "0.8", features = ["csv_output"] }
+rand = "0.10"

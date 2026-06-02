@@ -1,4 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use sparse_ngrams::{
     collect_sparse_grams_deque, collect_sparse_grams_scan, max_sparse_grams, NGram,
 };
