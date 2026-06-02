@@ -29,8 +29,8 @@ keys, which means:
 
 - **Overflow chaining** instead of open addressing — groups that fill up link
   to overflow groups rather than probing into neighbours.
-- **Slot hint** — a preferred slot index derived from the hash, checked before
-  scanning the group. Gives a direct hit on most inserts at low load.
+- **Contiguous packing** — occupied slots are always packed from position 0
+  with no gaps, enabling a single `leading_zeros()` to find the next free slot.
 - **SIMD group scanning** — uses NEON on aarch64, SSE2 on x86\_64, and a
   scalar fallback elsewhere to scan 8–16 control bytes in parallel.
 - **AoS group layout** — each group stores its control bytes, keys, and values
@@ -42,45 +42,32 @@ keys, which means:
 
 ## Benchmark results
 
-All benchmarks insert 1000 random trigram hashes (scrambled with
-`folded_multiply`) into maps with various configurations. Measured on Apple
-M-series (aarch64).
+Latest local Criterion snapshot from this repository's
+`target/criterion` outputs (lower is better):
 
-### Insert 1000 trigrams — pre-sized, no growth
+Hardware used for this snapshot:
 
-| Rank | Map | Time (µs) | vs best |
-|------|-----|-----------|---------|
-| 🥇 | FoldHashMap | 2.44 | — |
-| 🥈 | FxHashMap | 2.61 | +7% |
-| 🥉 | hashbrown::HashMap | 2.67 | +9% |
-| 4 | **HashSortedMap** | **2.71** | +11% |
-| 5 | hashbrown+Identity | 2.74 | +12% |
-| 6 | std::HashMap+FNV | 3.27 | +34% |
-| 7 | AHashMap | 3.22 | +32% |
-| 8 | std::HashMap | 8.49 | +248% |
+- CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz
+- Architecture: x86_64
+- Topology: 1 socket, 1 core, 2 threads
+- CPU frequency range: 800 MHz to 2800 MHz
+- Memory: 7.8 GiB RAM
 
-### Re-insert same keys (all overwrites)
+| Scenario                                     | HashSortedMap | Comparison                             | Result      |
+| :------------------------------------------- | ------------: | :------------------------------------- | :---------- |
+| Insert 1000 trigrams (pre-sized)             |       9.40 µs | hashbrown::HashMap: 14.55 µs           | ~35% faster |
+| Grow from capacity 128                       |      27.50 µs | hashbrown+Identity: 26.66 µs           | ~3% slower  |
+| Count 4000 trigrams (`entry().or_default()`) |      16.15 µs | hashbrown+Identity `entry()`: 15.49 µs | ~4% slower  |
+| Iterate 1000 trigrams (`iter()`)             |       3.02 µs | hashbrown+Identity `iter()`: 3.04 µs   | ~1% faster  |
+| Sort 100000 trigrams by hash                 |       1.66 ms | `Vec::sort_unstable`: 2.20 ms          | ~24% faster |
+| Merge 100 sorted maps + final sort           |     152.34 ms | hashbrown merge + vec sort: 193.37 ms  | ~21% faster |
 
-| Map | Time (µs) |
-|-----|-----------|
-| **HashSortedMap** | **2.36** ✅ |
-| hashbrown+Identity | 2.58 |
+Key takeaways:
 
-### Growth from small (`with_capacity(128)`, 3 resize rounds)
-
-| Map | Time (µs) | Growth penalty |
-|-----|-----------|----------------|
-| **HashSortedMap** | **4.85** | +2.14 |
-| hashbrown+Identity | 9.77 | +7.03 |
-
-### Key takeaways
-
-- **HashSortedMap matches the fastest hashbrown configurations** on pre-sized
-  first-time inserts and is **the fastest for overwrites**.
-- **Growth is ~2× faster** than hashbrown thanks to the optimized
-  `insert_for_grow` path that skips duplicate checking and uses raw copies.
-- The remaining gap to FoldHashMap (~11%) comes from foldhash's extremely
-  efficient hash function that pipelines well with hashbrown's SIMD scan.
+- Pre-sized inserts, sorting, and merge+sort remain the strongest paths.
+- Iteration is now roughly on par with `hashbrown+Identity`.
+- Growth and count/update workloads are currently slightly slower than
+  `hashbrown+Identity` in this run.
 
 ## Running
 
