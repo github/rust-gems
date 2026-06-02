@@ -89,15 +89,19 @@ fn grow_k_vs_permutation(c: &mut Criterion) {
             }
             group.throughput(Throughput::Elements((keys.len() * k) as u64));
 
-            group.bench_with_input(BenchmarkId::new(format!("new_with_k/k_{k}"), n), &n, |b, n| {
-                b.iter(|| {
-                    for key in &keys {
-                        let mut h = DefaultHasher::default();
-                        key.hash(&mut h);
-                        black_box(ConsistentChooseKHasher::new_with_k(h, *n, k));
-                    }
-                })
-            });
+            group.bench_with_input(
+                BenchmarkId::new(format!("new_with_k/k_{k}"), n),
+                &n,
+                |b, n| {
+                    b.iter(|| {
+                        for key in &keys {
+                            let mut h = DefaultHasher::default();
+                            key.hash(&mut h);
+                            black_box(ConsistentChooseKHasher::new_with_k(h, *n, k));
+                        }
+                    })
+                },
+            );
 
             group.bench_with_input(BenchmarkId::new(format!("grow_k/k_{k}"), n), &n, |b, n| {
                 b.iter(|| {
@@ -112,16 +116,20 @@ fn grow_k_vs_permutation(c: &mut Criterion) {
                 })
             });
 
-            group.bench_with_input(BenchmarkId::new(format!("permutation/k_{k}"), n), &n, |b, n| {
-                b.iter(|| {
-                    for key in &keys {
-                        let mut iter = ConsistentPermutation::new(*n as u32, *key);
-                        for _ in 0..k {
-                            black_box(iter.next());
+            group.bench_with_input(
+                BenchmarkId::new(format!("permutation/k_{k}"), n),
+                &n,
+                |b, n| {
+                    b.iter(|| {
+                        for key in &keys {
+                            let mut iter = ConsistentPermutation::new(*n as u32, *key);
+                            for _ in 0..k {
+                                black_box(iter.next());
+                            }
                         }
-                    }
-                })
-            });
+                    })
+                },
+            );
         }
     }
     group.finish();
@@ -192,39 +200,62 @@ fn reservoir_benchmarks(c: &mut Criterion) {
     for &n in &[100_000, 10_000_000] {
         for &k in &[100, 1000] {
             // 1. ConsistentReservoir direct build (O(k))
-            group.bench_function(BenchmarkId::new(format!("ConsistentReservoir_Direct/k_{k}"), n), |b| {
-                b.iter(|| {
-                    black_box(ConsistentReservoir::new(k, n, seed).reservoir().collect::<Vec<u32>>());
-                })
-            });
+            group.bench_function(
+                BenchmarkId::new(format!("ConsistentReservoir_Direct/k_{k}"), n),
+                |b| {
+                    b.iter(|| {
+                        black_box(
+                            ConsistentReservoir::new(k, n, seed)
+                                .reservoir()
+                                .collect::<Vec<u32>>(),
+                        );
+                    })
+                },
+            );
 
             // 2. ConsistentPermutation direct build (O(k))
-            group.bench_function(BenchmarkId::new(format!("ConsistentPermutation_Direct/k_{k}"), n), |b| {
-                b.iter(|| {
-                    black_box(ConsistentPermutation::new(n, seed).take(k as usize).collect::<Vec<u32>>());
-                })
-            });
+            group.bench_function(
+                BenchmarkId::new(format!("ConsistentPermutation_Direct/k_{k}"), n),
+                |b| {
+                    b.iter(|| {
+                        black_box(
+                            ConsistentPermutation::new(n, seed)
+                                .take(k as usize)
+                                .collect::<Vec<u32>>(),
+                        );
+                    })
+                },
+            );
 
             // 3. ConsistentReservoir streaming iteration from k to n (O(k log(n/k)))
-            group.bench_function(BenchmarkId::new(format!("ConsistentReservoir_Streaming/k_{k}"), n), |b| {
-                b.iter(|| {
-                    black_box(consistent_reservoir_to_n(k, n, seed));
-                })
-            });
+            group.bench_function(
+                BenchmarkId::new(format!("ConsistentReservoir_Streaming/k_{k}"), n),
+                |b| {
+                    b.iter(|| {
+                        black_box(consistent_reservoir_to_n(k, n, seed));
+                    })
+                },
+            );
 
             // 4. Standard Algorithm R (O(n) linear scan)
-            group.bench_function(BenchmarkId::new(format!("Standard_Algorithm_R/k_{k}"), n), |b| {
-                b.iter(|| {
-                    black_box(standard_reservoir_r(k, n, seed));
-                })
-            });
+            group.bench_function(
+                BenchmarkId::new(format!("Standard_Algorithm_R/k_{k}"), n),
+                |b| {
+                    b.iter(|| {
+                        black_box(standard_reservoir_r(k, n, seed));
+                    })
+                },
+            );
 
             // 5. Standard Algorithm L / Vitter (O(k log(n/k)) skip based)
-            group.bench_function(BenchmarkId::new(format!("Standard_Algorithm_L/k_{k}"), n), |b| {
-                b.iter(|| {
-                    black_box(standard_reservoir_l(k, n, seed));
-                })
-            });
+            group.bench_function(
+                BenchmarkId::new(format!("Standard_Algorithm_L/k_{k}"), n),
+                |b| {
+                    b.iter(|| {
+                        black_box(standard_reservoir_l(k, n, seed));
+                    })
+                },
+            );
         }
     }
     group.finish();

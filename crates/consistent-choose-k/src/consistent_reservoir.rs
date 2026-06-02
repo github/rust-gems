@@ -392,7 +392,13 @@ impl ConsistentReservoir {
         self.pending.resize(pending_count, 0);
         self.counts_scratch.resize(pending_count, 0);
         self.counts_scratch.fill(0);
-        bucket_sort_ranks_descending_in(&self.values, &mut self.pending, &mut self.counts_scratch, m_old, m_new);
+        bucket_sort_ranks_descending_in(
+            &self.values,
+            &mut self.pending,
+            &mut self.counts_scratch,
+            m_old,
+            m_new,
+        );
         self.j_max = new_j_max;
     }
 }

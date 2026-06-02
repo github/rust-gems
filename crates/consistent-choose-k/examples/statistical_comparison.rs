@@ -62,7 +62,7 @@ struct Acc {
     name: String,
     first: Vec<u64>,
     kth: Vec<u64>,
-    pair: Vec<u64>, // n*n, indexed by lo*n + hi (lo <= hi)
+    pair: Vec<u64>,      // n*n, indexed by lo*n + hi (lo <= hi)
     bits: Vec<Vec<u64>>, // bits[pos][bit]
 }
 
@@ -178,8 +178,7 @@ fn run_for_n(n: usize) {
             for pos in 0..kk {
                 let set = acc.bits[pos][b] as f64;
                 let unset = SAMPLES as f64 - set;
-                chi2 += (set - exp_set).powi(2) / exp_set
-                    + (unset - exp_unset).powi(2) / exp_unset;
+                chi2 += (set - exp_set).powi(2) / exp_set + (unset - exp_unset).powi(2) / exp_unset;
                 df += 1;
             }
         }
