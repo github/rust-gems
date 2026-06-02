@@ -36,6 +36,14 @@
 //!   tail entries; `grow_layer`, which costs `O(k)`, is
 //!   triggered on average once per `Θ(k)` admissions).
 //!
+//! Note that the heapification of `pending` runs in linear $O(k)$ time, but retrieving elements
+//! sequentially from the heap still carries a cost of up to $O(\log k)$ per pop. The sorting/priority-queue
+//! overhead could be completely eliminated and sped up to true $O(k)$ total complexity via bucket sort!
+//! Because all values generated in a layer are expected to be uniformly randomly chosen within the
+//! interval $[\frac{1}{4}m, m)$, bucket-sorting them into $O(k)$ buckets achieves a linear worst-case average-case runtime.
+//! With that optimization, the complexity of consistent reservoir sampling would match that of standard
+//! reservoir sampling amortized ($O(1)$ per processed item).
+//!
 //! Contrast with the classic random-jump reservoir sampling
 //! algorithms (Vitter L):
 //!
