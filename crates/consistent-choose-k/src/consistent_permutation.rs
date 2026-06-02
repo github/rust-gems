@@ -87,7 +87,7 @@ fn splitmix64(seed: u64) -> u64 {
 /// `n_bits` must be **even** and in `2..=30`.
 #[inline]
 pub(crate) fn layer_apply(n_bits: u32, master_key: u64, x: u32) -> u32 {
-    debug_assert!(n_bits >= 2 && n_bits <= 30 && n_bits.is_multiple_of(2));
+    debug_assert!((2..=30).contains(&n_bits) && n_bits.is_multiple_of(2));
     let rounds = rounds_for_n_bits(n_bits) as u32;
     let half_bits = n_bits / 2;
     let half_mask = (1u32 << half_bits) - 1;
@@ -136,13 +136,6 @@ pub struct ConsistentPermutation {
     /// `2^30 <= u32::MAX`.
     counters: Vec<u32>,
     n: u32,
-    /// Top layer index. Layer `j` has `n_bits = 2j + 2`.
-    j_max: u32,
-    /// `1 << (2 * j_max + 2)` — the top layer's domain size. Used as
-    /// the iterator's termination signal: once `counters[j_max]`
-    /// reaches `top_cap`, every walk has completed and exactly `n`
-    /// values have been emitted.
-    top_cap: u32,
 }
 
 impl ConsistentPermutation {
@@ -168,13 +161,10 @@ impl ConsistentPermutation {
         // for both even and odd bit-widths.
         let j_max = if n <= 1 { 0 } else { (n - 1).ilog2() / 2 };
         let counters = vec![0u32; (j_max + 1) as usize];
-        let top_cap = 1u32 << (2 * j_max + 2);
         Self {
             master_key,
             counters,
             n,
-            j_max,
-            top_cap,
         }
     }
 
@@ -188,18 +178,19 @@ impl Iterator for ConsistentPermutation {
     type Item = u32;
 
     fn next(&mut self) -> Option<u32> {
-        let j_max = self.j_max;
+        let num_layers = self.counters.len();
+        let j_max = (num_layers - 1) as u32;
         let n = self.n;
         let mk = self.master_key;
 
         // Phase 1: walk the top layer (where skips and exhaustion
         // happen) until we either emit an in-range value or descend.
-        let n_bits_top = 2 * j_max + 2;
+        let n_bits_top = 2 * num_layers as u32;
         let top_shift = 2 * j_max;
-        let mut j;
+        let top_cap = 1u32 << n_bits_top;
         loop {
             let counter = self.counters[j_max as usize];
-            if counter >= self.top_cap {
+            if counter >= top_cap {
                 return None;
             }
             let raw = layer_apply(n_bits_top, mk, counter);
@@ -218,7 +209,6 @@ impl Iterator for ConsistentPermutation {
             if j_max == 0 {
                 return Some(0);
             }
-            j = j_max - 1;
             break;
         }
 
@@ -226,7 +216,7 @@ impl Iterator for ConsistentPermutation {
         // never exhaust within a single walk, and their raw values
         // are always in `[4^j, 4^(j+1)) ⊂ [0, n)`, so neither
         // exhaustion nor range checks are needed.
-        loop {
+        for j in (0..j_max).rev() {
             let counter = self.counters[j as usize];
             let n_bits = 2 * j + 2;
             let raw = layer_apply(n_bits, mk, counter);
@@ -236,11 +226,8 @@ impl Iterator for ConsistentPermutation {
             if top_bits != 0 {
                 return Some(raw);
             }
-            if j == 0 {
-                return Some(0);
-            }
-            j -= 1;
         }
+        Some(0)
     }
 }
 

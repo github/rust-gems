@@ -434,7 +434,7 @@ impl Iterator for ConsistentReservoir {
         {
             self.values.pop();
         }
-        return Some((added_value, evicted_value));
+        Some((added_value, evicted_value))
     }
 }
 

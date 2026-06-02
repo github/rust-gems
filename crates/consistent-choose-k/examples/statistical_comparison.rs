@@ -87,9 +87,9 @@ impl Acc {
             (v[1], v[0])
         };
         self.pair[(lo as usize) * n + hi as usize] += 1;
-        for pos in 0..kk {
+        for (pos, &val) in v.iter().enumerate().take(kk) {
             for b in 0..n_bits {
-                if (v[pos] >> b) & 1 == 1 {
+                if (val >> b) & 1 == 1 {
                     self.bits[pos][b] += 1;
                 }
             }
@@ -101,8 +101,10 @@ fn run_for_n(n: usize) {
     let kk = 2usize.min(n - 1).max(1);
     let n_bits = ((n - 1).next_power_of_two().trailing_zeros() as usize).max(1);
 
+    type GenFn = Box<dyn Fn(u64, usize, usize) -> Vec<u32>>;
+
     // Build the list of methods to test.
-    let methods: Vec<(&'static str, Box<dyn Fn(u64, usize, usize) -> Vec<u32>>)> = vec![
+    let methods: Vec<(&'static str, GenFn)> = vec![
         ("ChooseKHasher    ", Box::new(chooseh_take)),
         ("Permutation      ", Box::new(perm_take)),
     ];
