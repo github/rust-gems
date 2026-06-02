@@ -171,20 +171,13 @@ fn standard_reservoir_l(k: u32, n: u32, seed: u64) -> Vec<u32> {
 
 fn consistent_reservoir_to_n(k: u32, target_n: u32, seed: u64) -> Vec<u32> {
     let mut r = ConsistentReservoir::new(k, k, seed);
-    let mut reservoir = r.reservoir().collect::<Vec<u32>>();
     while r.n() < target_n {
-        if let Some((added, evicted)) = r.next() {
-            if added >= target_n {
-                break;
-            }
-            if let Some(pos) = reservoir.iter().position(|&x| x == evicted) {
-                reservoir[pos] = added;
-            }
-        } else {
-            break;
+        match r.next() {
+            Some((added, _)) if added < target_n => {}
+            _ => break,
         }
     }
-    reservoir
+    r.reservoir().collect()
 }
 
 fn reservoir_benchmarks(c: &mut Criterion) {

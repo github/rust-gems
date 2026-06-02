@@ -62,11 +62,11 @@
 //!
 //! | Algorithm | Strategy / Complexity | $k = 100$ | $k = 1000$ | Consistency Support? | Fixed-$k$ Constrained? |
 //! | :--- | :--- | :--- | :--- | :--- | :--- |
-//! | **`ConsistentPermutation_Direct`** | Direct Random-Access / $O(k)$ | **`917 ns`** | **`8.01 µs`** | **Yes** (Perfect Profile) | No (Arbitrary subsets) |
-//! | **`ConsistentReservoir_Direct`** | Direct Build / $O(k)$ | **`1.68 µs`** | **`14.82 µs`** | **Yes** (Perfect Profile) | No (Iterator starts at $n$) |
-//! | **`Standard_Algorithm_L` (Vitter)**| Streaming Skip / $O(k \log(n/k))$| **`22.43 µs`** | **`178.82 µs`** | No | **Yes** (Must rebuild from $0$) |
-//! | **`ConsistentReservoir_Streaming`**| Incremental Streaming / $O(k \log(n/k))$| **`44.65 µs`** | **`1.63 ms`** | **Yes** (Stateful Iterator) | No (Sub-streams consistent)|
-//! | **`Standard_Algorithm_R` (Scan)**| Streaming Scan / $O(n)$ | **`28.68 ms`** | **`28.34 ms`** | No | **Yes** (Must rebuild from $0$) |
+//! | **`ConsistentPermutation_Direct`** | Direct Random-Access / $O(k)$ | **`883 ns`** | **`7.80 µs`** | **Yes** (Perfect Profile) | No (Arbitrary subsets) |
+//! | **`ConsistentReservoir_Direct`** | Direct Build / $O(k)$ | **`1.61 µs`** | **`14.30 µs`** | **Yes** (Perfect Profile) | No (Iterator starts at $n$) |
+//! | **`Standard_Algorithm_L` (Vitter)**| Streaming Skip / $O(k \log(n/k))$| **`22.12 µs`** | **`183.17 µs`** | No | **Yes** (Must rebuild from $0$) |
+//! | **`ConsistentReservoir_Streaming`**| Incremental Streaming / $O(k \log(n/k))$| **`24.06 µs`** | **`318.88 µs`** | **Yes** (Stateful Iterator) | No (Sub-streams consistent)|
+//! | **`Standard_Algorithm_R` (Scan)**| Streaming Scan / $O(n)$ | **`28.22 ms`** | **`28.26 ms`** | No | **Yes** (Must rebuild from $0$) |
 //!
 //! # Data layout
 //!
