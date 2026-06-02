@@ -30,18 +30,16 @@
 //!   reservoir for a fixed `n` and `k` from scratch: **`O(k)`**.
 //! * [`ConsistentReservoir::new(k, n, key)`](Self::new) — set up
 //!   the iterator at any starting `n`: **`O(k)`** (the
-//!   `O(k)` walk plus a linear-time heapification of `pending`).
+//!   `O(k)` walk plus an average-case linear-time bucket sort of `pending` ranks).
 //! * [`Iterator::next`] — get the next `(added, evicted)` pair:
-//!   **`O(log k)` amortised** (each call pops amortized a constant number of
-//!   tail entries; `grow_layer`, which costs `O(k)`, is
+//!   **`O(1)` amortised** (each call pops amortized a constant number of
+//!   tail entries; `grow_layer`, which costs $O(k)$ average-case, is
 //!   triggered on average once per `Θ(k)` admissions).
 //!
-//! Note that the heapification of `pending` runs in linear $O(k)$ time, but retrieving elements
-//! sequentially from the heap still carries a cost of up to $O(\log k)$ per pop. The sorting/priority-queue
-//! overhead could be completely eliminated and sped up to true $O(k)$ total complexity via bucket sort!
+//! The sorting overhead is minimized to a true $O(k)$ average-case complexity via bucket sort!
 //! Because all values generated in a layer are expected to be uniformly randomly chosen within the
 //! interval $[\frac{1}{4}m, m)$, bucket-sorting them into $O(k)$ buckets achieves a linear worst-case average-case runtime.
-//! With that optimization, the complexity of consistent reservoir sampling would match that of standard
+//! With this optimization, the complexity of consistent reservoir sampling matches that of standard
 //! reservoir sampling amortized ($O(1)$ per processed item).
 //!
 //! Contrast with the classic random-jump reservoir sampling
@@ -60,8 +58,8 @@
 //!
 //! # Data layout
 //!
-//! Everything lives in a single flat `values: Vec<u32>` plus a `pending: BinaryHeap<(Reverse<u32>, u32)>`
-//! of `(Reverse(value), rank)` pairs representing candidate fresh admissions.
+//! Everything lives in a single flat `values: Vec<u32>` plus a `pending: Vec<u32>`
+//! of rank indices into `values`, representing candidate fresh admissions.
 //!
 //! After construction (or after [`Self::grow_layer`]), `values` is
 //! exactly the first `k + |pending|` emissions of
@@ -70,10 +68,9 @@
 //! permutation. Descents (old-reservoir items) and non-descents
 //! (fresh items) as well as active and inactive items are interleaved.
 //!
-//! `pending` is a min-heap storing the `(Reverse(value), rank)` of the
-//! **non-descent** emissions (i.e. the new items that might enter the reservoir
-//! as `n` grows). By storing reversed values, `pending.pop()` efficiently returns
-//! the entry with the smallest fresh value first — the next admission as `n` grows.
+//! `pending` is a vector of ranks/indices sorted descending by their corresponding value in `values`.
+//! By storing them descending, `pending.pop()` efficiently returns the rank pointing to the smallest
+//! fresh value first in $O(1)$ time — the next admission as `n` grows.
 //!
 //! # Active reservoir via `n`
 //!
@@ -92,8 +89,8 @@
 //! `m = 4^(j_max+1) >= n`. Walk `ConsistentPermutation::new(m, key)`
 //! pushing each emission into `values` until we have collected
 //! exactly `k` in-range values (i.e. `< n`). Every out-of-range
-//! emission seen along the way has its rank and value recorded in `pending`;
-//! finally `pending` is initialized in $O(k)$ time using $O(k)$ linear heapification.
+//! emission seen along the way has its rank recorded in `pending_vec`;
+//! finally `pending` is initialized in average-case $O(k)$ time using flat bucket sorting.
 //!
 //! The loop is guaranteed to terminate with the last push being an
 //! in-range value — that's what triggers `count == k`. So
@@ -107,13 +104,13 @@
 //! walking the new top layer's counter until all `k` old-reservoir
 //! entries have been consumed by descents. Every emission is pushed
 //! to `new_values` in walk order; non-descents additionally have
-//! their rank and value recorded in `pending`. The walk terminates on a
+//! their rank recorded in `pending_vec`. The walk terminates on a
 //! descent so `values.last()` is again a real reservoir item.
 //!
 //! Non-descents at counters `>= k` are real emissions of the new
 //! permutation but their rank places them outside the top-`k`. They
 //! still end up in `values` and `pending`, and are filtered out
-//! later when popped from the heap.
+//! later when popped.
 //!
 //! # Invariants
 //!
@@ -128,9 +125,8 @@
 //!    value.** Pending entries were emitted with value `>= n` by
 //!    [`ConsistentPermutation`], whereas active entries are by
 //!    definition `< n`. In particular the smallest pending value
-//!    — which `pending.pop()` returns, since `pending` is structured
-//!    as a min-heap — is the next candidate to cross into
-//!    the active window as `n` grows.
+//!    — which corresponds to the rank popped by `pending.pop()` — is
+//!    the next candidate to cross into the active window as `n` grows.
 //! 3. **`pending` must contain all elements from `values` which are greater or equal to `n`.**
 //!    Since there are exactly `k` elements less than `n` in `values`, `pending.len()`
 //!    must be larger or equal to `values.len() - k` (note that there can be values in
@@ -146,7 +142,7 @@
 //! resides exactly at the tail of `values`. Therefore, we can immediately
 //! obtain the evicted value by popping `values`.
 //!
-//! **Finding the admission.** Pop `added_rank` from the `pending` min-heap until it is
+//! **Finding the admission.** Pop `added_rank` from `pending` until it is
 //! strictly less than `values.len()`. If it is out-of-bounds, it corresponds
 //! to an element that was previously popped from `values` because it was pending
 //! at the tail, so we safely discard it and continue. Otherwise, the corresponding
@@ -161,14 +157,8 @@
 //! The stream only terminates once the universe reaches the [`ConsistentPermutation`]
 //! cap (`m = 2^30`); until then, `grow_layer` re-establishes the invariants whenever
 //! `pending` empties.
-//! or the tail is active (value `< n`).
-//!
-//! The stream only terminates once the universe reaches the [`ConsistentPermutation`]
-//! cap (`m = 2^30`); until then, `grow_layer` re-establishes the invariants whenever
-//! `pending` empties.
 
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 
 use crate::consistent_permutation::{layer_apply, ConsistentPermutation};
 
@@ -181,9 +171,9 @@ pub struct ConsistentReservoir {
     /// `values[r]` is always the rank-`r` emission of the current
     /// top-level permutation.
     values: Vec<u32>,
-    /// Min-heap storing `(Reverse(value), rank)` for candidate fresh admissions.
-    /// `pop()` returns the entry with the smallest value first.
-    pending: BinaryHeap<(Reverse<u32>, u32)>,
+    /// Ranks of pending candidate admissions, sorted **descending by value** using `values`
+    /// so `pop()` returns the rank corresponding to the smallest value first.
+    pending: Vec<u32>,
     k: u32,
     /// Top Feistel layer index. The current top-level universe size
     /// is `m = 4^(j_max+1) = 1 << (2*j_max + 2)`.
@@ -193,6 +183,77 @@ pub struct ConsistentReservoir {
     /// values `< n`, which equals
     /// `ConsistentPermutation::new(n, master_key).take(k)`.
     n: u32,
+}
+
+/// Helper function to perform a flat, allocation-friendly bucket sort on values of a slice
+/// that are greater than or equal to `v_min`. It identifies their indices (ranks) and sorts them descending
+/// by their corresponding value in $O(n)$ average-case time.
+///
+/// This avoids allocating and sorting tuples/pairs of `(value, rank)`, and eliminates the need for
+/// an external ranks vector by filtering of `values` directly in-place.
+///
+/// # Arguments
+///
+/// * `values` - A read-only slice whose values are inspected.
+/// * `n_pending` - The precalculated count of values in `values` that are greater than or equal to `v_min`.
+/// * `v_min` - The lower bound value for range scaling (e.g., $m_{\text{old}}$).
+/// * `v_max` - The upper bound value for range scaling (e.g., $m_{\text{new}}$).
+///
+/// # Complexity
+///
+/// Runs in average-case $O(n)$ time and $O(n_{\text{pending}})$ auxiliary space (where $n_{\text{pending}}$ is the number of elements $\ge v_{\text{min}}$).
+fn bucket_sort_ranks_descending(
+    values: &[u32],
+    n_pending: usize,
+    v_min: u32,
+    v_max: u32,
+) -> Vec<u32> {
+    let range = (v_max - v_min) as u64;
+    if n_pending == 0 || range == 0{
+        return Vec::new();
+    }
+    // 1. Count elements in each bucket
+    let mut counts = vec![0usize; n_pending];
+    for &val in values {
+        if val >= v_min {
+            let mut idx = (((val - v_min) as u64 * n_pending as u64) / range) as usize;
+            if idx >= n_pending {
+                idx = n_pending - 1;
+            }
+            counts[idx] += 1;
+        }
+    }
+    // 2. Compute starting offsets for buckets descending from n_pending-1 to 0 in-place inside `counts`
+    let mut current_offset = 0;
+    for i in (0..n_pending).rev() {
+        let count = counts[i];
+        counts[i] = current_offset;
+        current_offset += count;
+    }
+    // 3. Place ranks into destination array while updating write heads in `counts`
+    let mut dest = vec![0u32; n_pending];
+    for (rank, &val) in values.iter().enumerate() {
+        if val >= v_min {
+            let mut idx = (((val - v_min) as u64 * n_pending as u64) / range) as usize;
+            if idx >= n_pending {
+                idx = n_pending - 1;
+            }
+            let pos = counts[idx];
+            dest[pos] = rank as u32;
+            counts[idx] += 1;
+        }
+    }
+    // 4. Sort each bucket in-place descending by value.
+    // After step 3, `counts[i]` holds the exclusive end of bucket `i`.
+    // The starting index of bucket `i` is 0 if `i == n_pending - 1`, otherwise `counts[i + 1]`.
+    for i in 0..n_pending {
+        let start = if i == n_pending - 1 { 0 } else { counts[i + 1] };
+        let end = counts[i];
+        if end > start + 1 {
+            dest[start..end].sort_unstable_by_key(|&rank| Reverse(values[rank as usize]));
+        }
+    }
+    dest
 }
 
 /// Smallest `j_max` such that `4^(j_max+1) >= k`. Matches the
@@ -228,8 +289,8 @@ impl ConsistentReservoir {
         let j_max = smallest_j_max(n);
         let m = 1u32 << (2 * j_max + 2);
         let mut values = vec![];
-        let mut pending_vec = vec![];
         let mut count = 0;
+        let mut pending_count = 0;
         for value in ConsistentPermutation::new(m, master_key) {
             values.push(value);
             if value < n {
@@ -238,10 +299,10 @@ impl ConsistentReservoir {
                     break;
                 }
             } else {
-                pending_vec.push((Reverse(value), values.len() as u32 - 1));
+                pending_count += 1;
             }
         }
-        let pending = BinaryHeap::from(pending_vec);
+        let pending = bucket_sort_ranks_descending(&values, pending_count, n, m);
         Self {
             values,
             pending,
@@ -302,9 +363,9 @@ impl ConsistentReservoir {
         debug_assert_eq!(old_reservoir.len(), k);
 
         let mut new_values: Vec<u32> = Vec::with_capacity(k);
-        let mut pending_vec: Vec<(Reverse<u32>, u32)> = Vec::new();
         let mut next_old_idx = 0usize;
         let mut counter: u32 = 0;
+        let mut pending_count = 0;
         while next_old_idx < k {
             let raw = layer_apply(new_n_bits, self.master_key, counter);
             let is_descent = (raw >> new_top_shift) & 0b11 == 0;
@@ -314,17 +375,17 @@ impl ConsistentReservoir {
                 new_values.push(old_reservoir[next_old_idx]);
                 next_old_idx += 1;
             } else {
-                // Push the fresh emission and remember its rank
-                // (= counter). Ranks >= k are filtered out later by
-                // the iterator's guards.
+                // Push the fresh emission.
+                // Ranks >= k are filtered out later by the iterator's guards.
                 new_values.push(raw);
-                pending_vec.push((Reverse(raw), counter));
+                pending_count += 1;
             }
             counter += 1;
         }
-        debug_assert_eq!(new_values.len(), k + pending_vec.len());
-        let pending = BinaryHeap::from(pending_vec);
 
+        let m_old = 1u32 << (2 * self.j_max + 2);
+        let m_new = 1u32 << (2 * new_j_max + 2);
+        let pending = bucket_sort_ranks_descending(&new_values, pending_count, m_old, m_new);
         self.values = new_values;
         self.pending = pending;
         self.j_max = new_j_max;
@@ -356,10 +417,11 @@ impl Iterator for ConsistentReservoir {
             .pop()
             .expect("values has more than k entries, so pop() is safe");
 
-        let (Reverse(added_value), _) = std::iter::from_fn(|| self.pending.pop())
-            .find(|&(_, rank)| rank < self.values.len() as u32)
-            .expect("pending is non-empty by our invariants");
+        let added_rank = std::iter::from_fn(|| self.pending.pop())
+            .find(|&rank| (rank as usize) < self.values.len())
+            .expect("pending is non-empty by our invariants") as usize;
 
+        let added_value = self.values[added_rank];
         debug_assert!(added_value >= self.n);
         self.n = added_value + 1;
         // Restore invariant 4: any pending elements at the tail of values must be popped.
