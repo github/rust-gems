@@ -5,7 +5,7 @@ use crate::{ConsistentHasher, ManySeqBuilder};
 /// The hashes are consistent when `n` changes and when `k` changes!
 /// I.e. one hash changes with probability `k/(n+1)` when `n` increases by one,
 /// resp. one hash gets added when `k` is increased. Additionally, the returned `k` tuple
-/// is guaranteed to be uniformely chosen from all possible `n-choose-k` tuples.
+/// is guaranteed to be uniformly chosen from all possible `n-choose-k` tuples.
 ///
 /// Also implements `Iterator` to yield the next sample when k is increased.
 /// Note: since this hashing algorithm implements choose k semantics, all the returned samples are distinct.
@@ -49,7 +49,11 @@ impl<H: ManySeqBuilder> ConsistentChooseKHasher<H> {
             iter.samples.push(iter.get_sample(i, n));
         }
         for i in (0..k).rev() {
-            let s = iter.samples[0..=i].iter().copied().max().expect("");
+            let s = iter.samples[0..=i]
+                .iter()
+                .copied()
+                .max()
+                .expect("subslice 0..=i has at least one element");
             iter.samples[i] = s;
             for j in 0..i {
                 if iter.samples[j] == s {
