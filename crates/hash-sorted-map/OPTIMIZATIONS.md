@@ -11,7 +11,7 @@ This document analyzes the design trade-offs versus
 [hashbrown](https://github.com/rust-lang/hashbrown) — the Swiss-table
 implementation that backs `std::collections::HashMap` — and records the
 experimental results that guided the current design. The benchmark suite
-drives `std::HashMap` directly with various hashers.
+drives `std::collections::HashMap` directly with various explicit `BuildHasher` configurations.
 
 ---
 
