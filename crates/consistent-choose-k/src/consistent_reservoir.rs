@@ -436,7 +436,13 @@ impl Iterator for ConsistentReservoir {
         debug_assert!(added_value >= self.n);
         self.n = added_value + 1;
         // Restore invariant 4: any pending elements at the tail of values must be popped.
-        while self.values.len() > self.k as usize && self.values.last().copied().unwrap() >= self.n
+        while self.values.len() > self.k as usize
+            && self
+                .values
+                .last()
+                .copied()
+                .expect("since values is non-empty")
+                >= self.n
         {
             self.values.pop();
         }
