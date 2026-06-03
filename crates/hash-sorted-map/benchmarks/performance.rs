@@ -26,9 +26,12 @@ fn bench_insert(c: &mut Criterion) {
         );
     });
 
-    group.bench_function("hashbrown::HashMap", |b| {
+    group.bench_function("std::HashMap+FoldHash", |b| {
         b.iter_batched(
-            || hashbrown::HashMap::with_capacity(trigrams.len()),
+            || std::collections::HashMap::<u32, usize, foldhash::fast::FixedState>::with_capacity_and_hasher(
+                trigrams.len(),
+                foldhash::fast::FixedState::default(),
+            ),
             |mut map| {
                 for (i, &key) in trigrams.iter().enumerate() {
                     map.insert(key, i);
@@ -52,24 +55,11 @@ fn bench_insert(c: &mut Criterion) {
         );
     });
 
-    group.bench_function("AHashMap", |b| {
+    group.bench_function("std::HashMap+AHash", |b| {
         b.iter_batched(
-            || ahash::AHashMap::with_capacity(trigrams.len()),
-            |mut map| {
-                for (i, &key) in trigrams.iter().enumerate() {
-                    map.insert(key, i);
-                }
-                map
-            },
-            BatchSize::SmallInput,
-        );
-    });
-
-    group.bench_function("FoldHashMap", |b| {
-        b.iter_batched(
-            || hashbrown::HashMap::<u32, usize, foldhash::fast::FixedState>::with_capacity_and_hasher(
+            || std::collections::HashMap::<u32, usize, ahash::RandomState>::with_capacity_and_hasher(
                 trigrams.len(),
-                foldhash::fast::FixedState::default(),
+                ahash::RandomState::default(),
             ),
             |mut map| {
                 for (i, &key) in trigrams.iter().enumerate() {
@@ -99,10 +89,10 @@ fn bench_insert(c: &mut Criterion) {
         );
     });
 
-    group.bench_function("hashbrown+Identity", |b| {
+    group.bench_function("std::HashMap+Identity", |b| {
         b.iter_batched(
             || {
-                hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
+                std::collections::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
                     trigrams.len(),
                     Default::default(),
                 )
@@ -142,11 +132,11 @@ fn bench_reinsert(c: &mut Criterion) {
     let trigrams = trigrams();
     let mut group = c.benchmark_group("reinsert_1000_trigrams");
 
-    group.bench_function("hashbrown+Identity", |b| {
+    group.bench_function("std::HashMap+Identity", |b| {
         b.iter_batched(
             || {
                 let mut map =
-                    hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
+                    std::collections::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
                         trigrams.len(),
                         Default::default(),
                     );
@@ -194,10 +184,10 @@ fn bench_grow(c: &mut Criterion) {
     let trigrams = trigrams();
     let mut group = c.benchmark_group("grow_from_128_insert_1000_trigrams");
 
-    group.bench_function("hashbrown+Identity", |b| {
+    group.bench_function("std::HashMap+Identity", |b| {
         b.iter_batched(
             || {
-                hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
+                std::collections::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
                     128,
                     Default::default(),
                 )
@@ -237,10 +227,10 @@ fn bench_count(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("count_4000_trigrams_get_or_default");
 
-    group.bench_function("hashbrown+Identity entry()", |b| {
+    group.bench_function("std::HashMap+Identity entry()", |b| {
         b.iter_batched(
             || {
-                hashbrown::HashMap::<u32, u32, IdentityBuildHasher>::with_capacity_and_hasher(
+                std::collections::HashMap::<u32, u32, IdentityBuildHasher>::with_capacity_and_hasher(
                     trigrams.len(),
                     Default::default(),
                 )
@@ -299,11 +289,11 @@ fn bench_iter(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("iter_1000_trigrams");
 
-    group.bench_function("hashbrown+Identity iter()", |b| {
+    group.bench_function("std::HashMap+Identity iter()", |b| {
         b.iter_batched(
             || {
                 let mut map =
-                    hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
+                    std::collections::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
                         trigrams.len(),
                         Default::default(),
                     );
@@ -346,11 +336,11 @@ fn bench_iter(c: &mut Criterion) {
         );
     });
 
-    group.bench_function("hashbrown+Identity into_iter()", |b| {
+    group.bench_function("std::HashMap+Identity into_iter()", |b| {
         b.iter_batched(
             || {
                 let mut map =
-                    hashbrown::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
+                    std::collections::HashMap::<u32, usize, IdentityBuildHasher>::with_capacity_and_hasher(
                         trigrams.len(),
                         Default::default(),
                     );
@@ -507,10 +497,10 @@ fn bench_merge_sort(c: &mut Criterion) {
         });
     });
 
-    // ── 3. hashbrown HashMap merge, then sort into Vec ──────────────
-    group.bench_function("hashbrown merge + Vec sort", |b| {
+    // ── 3. std::HashMap merge, then sort into Vec ──────────────────
+    group.bench_function("std::HashMap+Identity merge + Vec sort", |b| {
         b.iter(|| {
-            let mut map = hashbrown::HashMap::<u32, u32, IdentityBuildHasher>::with_hasher(
+            let mut map = std::collections::HashMap::<u32, u32, IdentityBuildHasher>::with_hasher(
                 IdentityBuildHasher::default(),
             );
             for container in &hash_maps {
@@ -528,10 +518,10 @@ fn bench_merge_sort(c: &mut Criterion) {
         });
     });
 
-    // ── 4. hashbrown HashMap merge only (no sort) ───────────────────
-    group.bench_function("hashbrown merge", |b| {
+    // ── 4. std::HashMap merge only (no sort) ───────────────────────
+    group.bench_function("std::HashMap+Identity merge", |b| {
         b.iter(|| {
-            let mut map = hashbrown::HashMap::<u32, u32, IdentityBuildHasher>::with_hasher(
+            let mut map = std::collections::HashMap::<u32, u32, IdentityBuildHasher>::with_hasher(
                 IdentityBuildHasher::default(),
             );
             for container in &hash_maps {
@@ -557,11 +547,11 @@ fn bench_merge_sort(c: &mut Criterion) {
         });
     });
 
-    // ── 6. hashbrown presized merge only ────────────────────────────
-    group.bench_function("hashbrown merge presized", |b| {
+    // ── 6. std::HashMap presized merge only ────────────────────────
+    group.bench_function("std::HashMap+Identity merge presized", |b| {
         b.iter(|| {
             let mut map =
-                hashbrown::HashMap::<u32, u32, IdentityBuildHasher>::with_capacity_and_hasher(
+                std::collections::HashMap::<u32, u32, IdentityBuildHasher>::with_capacity_and_hasher(
                     1_000_000,
                     IdentityBuildHasher::default(),
                 );
