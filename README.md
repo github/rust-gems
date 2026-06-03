@@ -6,6 +6,7 @@ A collection of useful algorithms written in Rust. Currently contains:
 - [`bpe`](crates/bpe): fast, correct, and novel algorithms for the [Byte Pair Encoding Algorithm](https://en.wikipedia.org/wiki/Large_language_model#BPE) which are particularly useful for chunking of documents.
 - [`bpe-openai`](crates/bpe-openai): Fast tokenizers for OpenAI token sets based on the `bpe` crate.
 - [`consistent-choose-k`](crates/consistent-choose-k): constant time consistent hashing algorithms with support for replication and bounded load.
+- [`hash-sorted-map`](crates/hash-sorted-map): a hash map whose groups are ordered by hash prefix, enabling efficient sorted-order iteration and linear-time merging.
 - [`sparse-ngrams`](crates/sparse-ngrams): fast sparse n-gram extraction from byte slices. Selects variable-length n-grams (2–8 bytes) deterministically using bigram frequency priorities, suitable for substring search indexes.
 - [`string-offsets`](crates/string-offsets): converts string positions between bytes, chars, UTF-16 code units, and line numbers. Useful when sending string indices across language boundaries.
 
