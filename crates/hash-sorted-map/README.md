@@ -62,7 +62,7 @@ Hardware used for this snapshot:
 | Sort 100000 trigrams by hash                 |       1.66 ms | `Vec::sort_unstable`: 2.20 ms             | ~24% faster |
 | Merge 100 sorted maps + final sort           |     152.34 ms | `std::HashMap+Identity` merge + vec sort: 193.37 ms | ~21% faster |
 
-> Note: `std::collections::HashMap` is `hashbrown` under the hood, so the benchmark drives `std::HashMap` directly with the various hashers `hashbrown` would otherwise pick.
+> Note: `std::collections::HashMap` is `hashbrown` under the hood, so the benchmark drives `std::collections::HashMap` directly with the same custom `BuildHasher`s that were previously passed to `hashbrown`.
 
 Key takeaways:
 
