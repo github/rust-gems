@@ -53,21 +53,23 @@ Hardware used for this snapshot:
 - CPU frequency range: 800 MHz to 2800 MHz
 - Memory: 7.8 GiB RAM
 
-| Scenario                                     | HashSortedMap | Comparison                             | Result      |
-| :------------------------------------------- | ------------: | :------------------------------------- | :---------- |
-| Insert 1000 trigrams (pre-sized)             |       9.40 µs | hashbrown::HashMap: 14.55 µs           | ~35% faster |
-| Grow from capacity 128                       |      27.50 µs | hashbrown+Identity: 26.66 µs           | ~3% slower  |
-| Count 4000 trigrams (`entry().or_default()`) |      16.15 µs | hashbrown+Identity `entry()`: 15.49 µs | ~4% slower  |
-| Iterate 1000 trigrams (`iter()`)             |       3.02 µs | hashbrown+Identity `iter()`: 3.04 µs   | ~1% faster  |
-| Sort 100000 trigrams by hash                 |       1.66 ms | `Vec::sort_unstable`: 2.20 ms          | ~24% faster |
-| Merge 100 sorted maps + final sort           |     152.34 ms | hashbrown merge + vec sort: 193.37 ms  | ~21% faster |
+| Scenario                                     | HashSortedMap | Comparison                                | Result      |
+| :------------------------------------------- | ------------: | :---------------------------------------- | :---------- |
+| Insert 1000 trigrams (pre-sized)             |       9.40 µs | `std::HashMap+FoldHash`: 14.55 µs         | ~35% faster |
+| Grow from capacity 128                       |      27.50 µs | `std::HashMap+Identity`: 26.66 µs         | ~3% slower  |
+| Count 4000 trigrams (`entry().or_default()`) |      16.15 µs | `std::HashMap+Identity` `entry()`: 15.49 µs | ~4% slower |
+| Iterate 1000 trigrams (`iter()`)             |       3.02 µs | `std::HashMap+Identity` `iter()`: 3.04 µs | ~1% faster  |
+| Sort 100000 trigrams by hash                 |       1.66 ms | `Vec::sort_unstable`: 2.20 ms             | ~24% faster |
+| Merge 100 sorted maps + final sort           |     152.34 ms | `std::HashMap+Identity` merge + vec sort: 193.37 ms | ~21% faster |
+
+> Note: `std::collections::HashMap` is `hashbrown` under the hood, so the benchmark drives `std::collections::HashMap` directly with the same custom `BuildHasher`s that were previously passed to `hashbrown`.
 
 Key takeaways:
 
 - Pre-sized inserts, sorting, and merge+sort remain the strongest paths.
-- Iteration is now roughly on par with `hashbrown+Identity`.
+- Iteration is now roughly on par with `std::HashMap+Identity`.
 - Growth and count/update workloads are currently slightly slower than
-  `hashbrown+Identity` in this run.
+  `std::HashMap+Identity` in this run.
 
 ## Running
 

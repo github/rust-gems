@@ -8,8 +8,10 @@ and an **optimized growth strategy**. It is generic over key type, value type,
 and hash builder.
 
 This document analyzes the design trade-offs versus
-[hashbrown](https://github.com/rust-lang/hashbrown) and records the
-experimental results that guided the current design.
+[hashbrown](https://github.com/rust-lang/hashbrown) — the Swiss-table
+implementation that backs `std::collections::HashMap` — and records the
+experimental results that guided the current design. The benchmark suite
+drives `std::collections::HashMap` directly with various explicit `BuildHasher` configurations.
 
 ---
 
@@ -197,70 +199,69 @@ Hardware used for the current local snapshot:
 
 ### Insert (1000 trigrams, pre-sized)
 
-| Implementation       | Time (µs) | vs hashbrown |
-|----------------------|-----------|--------------|
-| FoldHashMap          | 13.88     | −5%          |
-| FxHashMap            | 14.60     | ~0%          |
-| hashbrown+Identity   | 14.44     | baseline     |
-| hashbrown::HashMap   | 14.55     | +1%          |
-| std::HashMap+FNV     | 15.55     | +8%          |
-| AHashMap             | 15.59     | +8%          |
-| **HashSortedMap**    | **9.40**  | **−35%**     |
-| std::HashMap         | 25.26     | +75%         |
+| Implementation              | Time (µs) | vs `std::HashMap+Identity` |
+|-----------------------------|-----------|----------------------------|
+| `std::HashMap+FoldHash`     | 13.88     | −4%                        |
+| `FxHashMap`                 | 14.60     | +1%                        |
+| `std::HashMap+Identity`     | 14.44     | baseline                   |
+| `std::HashMap+FNV`          | 15.55     | +8%                        |
+| `std::HashMap+AHash`        | 15.59     | +8%                        |
+| **`HashSortedMap`**         | **9.40**  | **−35%**                   |
+| `std::HashMap` (RandomState)| 25.26     | +75%                       |
 
 ### Reinsert (1000 trigrams, all keys exist)
 
-| Implementation       | Time (µs) |
-|----------------------|-----------|
-| **HashSortedMap**    | **6.59**  |
-| hashbrown+Identity   | 6.95      |
+| Implementation          | Time (µs) |
+|-------------------------|-----------|
+| **`HashSortedMap`**     | **6.59**  |
+| `std::HashMap+Identity` | 6.95      |
 
 ### Growth (128 → 1000 trigrams, 3 resize rounds)
 
-| Implementation       | Time (µs) |
-|----------------------|-----------|
-| hashbrown+Identity   | 26.66     |
-| **HashSortedMap**    | **27.50** |
+| Implementation          | Time (µs) |
+|-------------------------|-----------|
+| `std::HashMap+Identity` | 26.66     |
+| **`HashSortedMap`**     | **27.50** |
 
 ### Count (4000 trigrams, mixed insert/update)
 
-| Implementation                   | Time (µs) |
-|----------------------------------|-----------|
-| hashbrown+Identity entry()       | 15.49     |
-| **HashSortedMap get_or_default** | **15.88** |
-| **HashSortedMap entry().or_default()** | **16.15** |
+| Implementation                          | Time (µs) |
+|-----------------------------------------|-----------|
+| `std::HashMap+Identity` `entry()`       | 15.49     |
+| **`HashSortedMap get_or_default`**      | **15.88** |
+| **`HashSortedMap entry().or_default()`**| **16.15** |
 
 ### Iteration (1000 trigrams)
 
-| Implementation                | Time (µs) |
-|-------------------------------|-----------|
-| **HashSortedMap iter()**      | **3.02**  |
-| hashbrown+Identity iter()     | 3.04      |
-| **HashSortedMap into_iter()** | **3.03**  |
-| hashbrown+Identity into_iter()| 3.56      |
+| Implementation                       | Time (µs) |
+|--------------------------------------|-----------|
+| **`HashSortedMap iter()`**           | **3.02**  |
+| `std::HashMap+Identity` `iter()`     | 3.04      |
+| **`HashSortedMap into_iter()`**      | **3.03**  |
+| `std::HashMap+Identity` `into_iter()`| 3.56      |
 
 ### Sort (100K trigrams)
 
-| Implementation              | Time (ms) |
-|-----------------------------|-----------|
-| **HashSortedMap sort_by_hash** | **1.66** |
-| Vec::sort_unstable          | 2.20      |
+| Implementation                 | Time (ms) |
+|--------------------------------|-----------|
+| **`HashSortedMap sort_by_hash`** | **1.66** |
+| `Vec::sort_unstable`           | 2.20      |
 
 ### Merge (100 maps × 100K keys each → sorted output)
 
-| Implementation                    | Time (ms) | vs HSM merge+sort |
-|-----------------------------------|-----------|--------------------|
-| hashbrown merge presized          | 160.79    | +6%               |
-| **HashSortedMap merge presized**  | **117.01**| **−23%**          |
-| **HashSortedMap merge (no sort)** | **141.57**| **−7%**           |
-| hashbrown merge                   | 163.59    | +7%               |
-| **HashSortedMap merge + sort**    | **152.34**| **baseline**      |
-| hashbrown merge + Vec sort        | 193.37    | +27%              |
-| k-way merge sorted vecs           | 445       | +192%             |
+| Implementation                                | Time (ms) | vs HSM merge+sort |
+|-----------------------------------------------|-----------|--------------------|
+| `std::HashMap+Identity` merge presized        | 160.79    | +6%                |
+| **`HashSortedMap` merge presized**            | **117.01**| **−23%**           |
+| **`HashSortedMap` merge (no sort)**           | **141.57**| **−7%**            |
+| `std::HashMap+Identity` merge                 | 163.59    | +7%                |
+| **`HashSortedMap` merge + sort**              | **152.34**| **baseline**       |
+| `std::HashMap+Identity` merge + Vec sort      | 193.37    | +27%               |
+| k-way merge sorted vecs                       | 445       | +192%              |
 
 **Key takeaways:**
-- Pre-sized insert is **~35% faster** than hashbrown+Identity
-- Reinsert and iter paths are now close to parity with hashbrown+Identity
-- Growth path is currently **~3% slower** than hashbrown+Identity
-- sort_by_hash is **~24% faster** than Vec::sort_unstable
-- merge + sort is **~21% faster** than hashbrown merge + Vec sort
+- Pre-sized insert is **~35% faster** than `std::HashMap+Identity`
+- Reinsert and iter paths are now close to parity with `std::HashMap+Identity`
+- Growth path is currently **~3% slower** than `std::HashMap+Identity`
+- sort_by_hash is **~24% faster** than `Vec::sort_unstable`
+- merge + sort is **~21% faster** than `std::HashMap+Identity` merge + Vec sort
