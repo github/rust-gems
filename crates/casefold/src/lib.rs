@@ -175,16 +175,56 @@ fn fold_non_ascii_tail(bytes: &[u8], mut read: usize) -> Vec<u8> {
             read += 1;
             continue;
         }
-        // SAFETY: `bytes` originated from a `String` and `read` always sits
-        // on a char boundary, so the tail is well-formed UTF-8.
-        let c = {
-            let tail = unsafe { std::str::from_utf8_unchecked(&bytes[read..]) };
-            tail.chars().next().unwrap()
-        };
-        read += c.len_utf8();
+        // SAFETY: `bytes` originated from a `String`, `read` always sits on
+        // a char boundary, the byte at `read` has its high bit set (checked
+        // above), and the remainder of the buffer is well-formed UTF-8, so
+        // the lead-byte / continuation-byte reads inside the helper are in
+        // bounds.
+        let (c, c_len) = unsafe { decode_utf8_non_ascii(bytes, read) };
+        read += c_len;
         out.extend_from_slice(simple_fold_non_ascii(c).encode_utf8(&mut buf).as_bytes());
     }
     out
+}
+
+/// Decodes a single multibyte UTF-8 character starting at `bytes[read]`.
+///
+/// # Safety
+///
+/// * `read < bytes.len()`.
+/// * `bytes[read]` has the high bit set (lead byte of a 2-, 3-, or 4-byte
+///   UTF-8 sequence).
+/// * `bytes[read..]` is valid UTF-8, so the appropriate number of
+///   continuation bytes is in bounds and well-formed.
+#[inline]
+unsafe fn decode_utf8_non_ascii(bytes: &[u8], read: usize) -> (char, usize) {
+    // Any multibyte UTF-8 lead implies at least one continuation byte, so
+    // `read + 1` is always in bounds — load `b1` unconditionally so the
+    // common 2-byte case (Greek/Cyrillic/Latin Extended) has no per-call
+    // load on the critical path inside its branch.
+    let b0 = *bytes.get_unchecked(read);
+    let b1 = *bytes.get_unchecked(read + 1);
+    if b0 < 0xE0 {
+        // 2-byte: 110xxxxx 10xxxxxx
+        let cp = (((b0 & 0x1F) as u32) << 6) | ((b1 & 0x3F) as u32);
+        return (char::from_u32_unchecked(cp), 2);
+    }
+    // 3- or 4-byte lead — both have a valid `read + 2`.
+    let b2 = *bytes.get_unchecked(read + 2);
+    if b0 < 0xF0 {
+        // 3-byte: 1110xxxx 10xxxxxx 10xxxxxx
+        let cp = (((b0 & 0x0F) as u32) << 12)
+            | (((b1 & 0x3F) as u32) << 6)
+            | ((b2 & 0x3F) as u32);
+        return (char::from_u32_unchecked(cp), 3);
+    }
+    // 4-byte: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+    let b3 = *bytes.get_unchecked(read + 3);
+    let cp = (((b0 & 0x07) as u32) << 18)
+        | (((b1 & 0x3F) as u32) << 12)
+        | (((b2 & 0x3F) as u32) << 6)
+        | ((b3 & 0x3F) as u32);
+    (char::from_u32_unchecked(cp), 4)
 }
 
 /// Number of distinct code points with a simple fold.

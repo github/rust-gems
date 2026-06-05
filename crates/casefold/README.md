@@ -153,16 +153,16 @@ on the same Apple M-series machine:
 
 | Workload (input size)          | `fold_into_bytes` | `str::to_lowercase` | `chars().flat_map(to_lowercase)` |
 |--------------------------------|-------------------:|---------------------:|---------------------------------:|
-| Pure ASCII (5 700 B)           | **41.6 GiB/s**     |        27.0 GiB/s    |                       380 MiB/s  |
-| Mixed BMP (Latin/Greek/Cyrillic, 8 800 B, ~33% multibyte chars by count) | **538 MiB/s** | 294 MiB/s | 207 MiB/s |
-| Length-changing folds (1 700 B, mixed with ASCII)        | **964 MiB/s**      |        496 MiB/s     |                       270 MiB/s  |
+| Pure ASCII (5 700 B)           | **41.2 GiB/s**     |        27.0 GiB/s    |                       380 MiB/s  |
+| Mixed BMP (Latin/Greek/Cyrillic, 8 800 B, ~33% multibyte chars by count) | **577 MiB/s** | 294 MiB/s | 207 MiB/s |
+| Length-changing folds (1 700 B, mixed with ASCII)        | **1 012 MiB/s**    |        496 MiB/s     |                       270 MiB/s  |
 
 Per input byte the mixed-BMP workload is slower than the length-changing
 one because it contains ~3× more multibyte characters per byte (each
 multibyte char takes a full UTF-8 decode + table lookup + encode, while
 ASCII bytes after the first non-ASCII byte are skipped at memory speed).
 Measured per multibyte character actually folded, the mixed-BMP throughput
-(~186 M chars/s) is *higher* than the length-changing one (~119 M chars/s).
+(~199 M chars/s) is *higher* than the length-changing one (~125 M chars/s).
 
 Reproduce with:
 
