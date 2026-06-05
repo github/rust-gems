@@ -51,14 +51,15 @@ struct Run {
 fn parse_folds(text: &str) -> Vec<Fold> {
     let mut out = Vec::new();
     for raw in text.lines() {
-        let line = raw.split('#').next().unwrap().trim();
+        let line = raw.split('#').next().unwrap_or("").trim();
         if line.is_empty() {
             continue;
         }
         let mut parts = line.split(';').map(|s| s.trim());
-        let cp = u32::from_str_radix(parts.next().unwrap(), 16).unwrap();
-        let status = parts.next().unwrap();
-        let mapping = parts.next().unwrap();
+        let cp_str = parts.next().expect("code point field");
+        let cp = u32::from_str_radix(cp_str, 16).expect("code point is hex");
+        let status = parts.next().expect("status field");
+        let mapping = parts.next().expect("mapping field");
         // C = common (1:1), S = simple (1:1). Both are part of simple casefold.
         // F = full (1:N), T = Turkic (locale-specific) — both skipped.
         if status != "C" && status != "S" {
@@ -66,7 +67,7 @@ fn parse_folds(text: &str) -> Vec<Fold> {
         }
         let targets: Vec<u32> = mapping
             .split_whitespace()
-            .map(|s| u32::from_str_radix(s, 16).unwrap())
+            .map(|s| u32::from_str_radix(s, 16).expect("mapping is hex"))
             .collect();
         assert_eq!(targets.len(), 1, "C/S mappings are always 1:1");
         out.push(Fold {
