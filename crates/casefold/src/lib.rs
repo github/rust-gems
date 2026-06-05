@@ -162,7 +162,7 @@ fn successor(cp: u32) -> Option<(u32, u32)> {
 
     // Within-slot linear scan: intervals share a common high prefix, so the
     // right one is the first end-low (bits 0..6 of the packed run) that is
-    // ≥ `low_v`. Slots hold at most ~18 entries and ~3.8 on average; the scan
+    // ≥ `low_v`. Slots hold at most 30 entries and ~3.8 on average; the scan
     // is branch-predictable and reads sequential u32s.
     let slice = &RUN_DATA[lo..hi];
     let mut off = 0;

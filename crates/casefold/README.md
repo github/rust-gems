@@ -102,7 +102,7 @@ The successor lookup is:
    popcount(PAGE_BITMAP[page/64] & ((1 << (page%64)) - 1))` — one load
    plus one masked popcount.
 4. Linear-scan `RUN_DATA[PAGE_OFFSET[dense] .. PAGE_OFFSET[dense+1]]` for
-   the first entry whose `& 0x3F` is ≥ `cp & 0x3F`. Pages hold at most ~18
+   the first entry whose `& 0x3F` is ≥ `cp & 0x3F`. Pages hold at most 30
    runs (averaging ~3.8), so the search touches a small contiguous slice and
    is branch-predictable.
 
@@ -119,12 +119,12 @@ hashbrown 0.15's default hasher):
 
 | Workload                                 | Casefold table     | HashMap        |
 |------------------------------------------|-------------------:|---------------:|
-| Sequential BMP scan (63 488 chars)       | **1 820 Melem/s**  |  387 Melem/s   |
-| Random BMP (10 000 chars)                | **1 480 Melem/s**  |  579 Melem/s   |
-| Random ASCII (10 000 chars)              | **3 110 Melem/s**  |  607 Melem/s   |
-| Only-folds (every defined fold)          |     331 Melem/s    |  720 Melem/s   |
+| Sequential BMP scan (63 488 chars)       | **1 900 Melem/s**  |  383 Melem/s   |
+| Random BMP (10 000 chars)                | **1 550 Melem/s**  |  600 Melem/s   |
+| Random ASCII (10 000 chars)              | **3 110 Melem/s**  |  624 Melem/s   |
+| Only-folds (every defined fold)          |     339 Melem/s    |  722 Melem/s   |
 
-Casefold wins three of four workloads decisively (4.7×, 2.6×, and 5.1×
+Casefold wins three of four workloads decisively (5.0×, 2.6×, and 5.0×
 respectively) while using ~14× less memory than the `HashMap`. The
 `only_folds` workload — every input is a code point that *does* fold — is
 the worst case for the bitmap design (no early-out on the empty-bit test)

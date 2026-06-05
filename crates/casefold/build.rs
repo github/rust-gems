@@ -13,9 +13,9 @@ const MAX_RUN_LEN: u32 = 127;
 
 /// Page = 64-cp block. After splitting each run is fully contained in one
 /// page, so each run's `end` is uniquely identified by its 6-bit low part
-/// within the page. With N=64 the densest page holds at most ~30 runs, so a
-/// binary search within the page resolves the right run in a handful of
-/// comparisons — never a global successor scan.
+/// within the page. With N=64 the densest page holds at most 30 runs, so a
+/// linear scan within the page resolves the right run in a handful of
+/// branch-predictable comparisons — never a global successor scan.
 const PAGE_BITS: u32 = 6;
 const PAGE_MASK: u32 = (1u32 << PAGE_BITS) - 1;
 
@@ -204,8 +204,8 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
     assert_eq!(cumul as usize, num_populated_pages);
     assert!(cumul <= 255, "POPCNT_SAMPLES must fit in u8");
 
-    // Per-run packed u32 layout (replaces the former LOW_BYTES, STRIDE_LEN,
-    // DELTA, DELTA_FLAG, and DELTA_LARGE arrays):
+    // Per-run packed u32 layout (one entry per run, parallel to PAGE_OFFSET
+    // which slices RUN_DATA into per-page groups):
     //
     //   bits  0..6   end_low = end & PAGE_MASK                 (6 bits)
     //   bit   6      stride - 1                                (1 bit, 0 or 1)
@@ -213,9 +213,10 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
     //   bits 14..32  delta, sign-extended                      (18 bits, ±131072)
     //
     // 18-bit signed delta range easily covers the largest Unicode simple-fold
-    // delta (Cherokee, +38864). The single-array layout lets the within-page
-    // linear scan read the next entry's `end_low` with the same indexed load
-    // that decodes the run on a hit — one cache line covers ~16 runs.
+    // delta (max |δ| in the data is 42561). The single-array layout lets the
+    // within-page linear scan read the next entry's `end_low` with the same
+    // indexed load that decodes the run on a hit — one 64-byte cache line
+    // covers 16 packed runs.
     let mut run_data = Vec::<u32>::with_capacity(runs.len());
     let mut max_abs_delta: i32 = 0;
     for (i, r) in runs.iter().enumerate() {
