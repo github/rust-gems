@@ -12,6 +12,12 @@ path = "performance.rs"
 harness = false
 test = false
 
+[[bench]]
+name = "conversion"
+path = "conversion.rs"
+harness = false
+test = false
+
 [dependencies]
 casefold = { path = ".." }
 criterion = "0.8"

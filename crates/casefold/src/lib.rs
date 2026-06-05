@@ -68,15 +68,28 @@ const PAGE_MASK: u32 = (1u32 << PAGE_BITS) - 1;
 #[inline]
 pub fn simple_fold(c: char) -> char {
     let cp = c as u32;
-    // ASCII fast path: A..Z → a..z, every other ASCII byte is identity.
+    // ASCII fast path: branchless A..Z → a..z, identity otherwise.
     if cp < 0x80 {
-        return if cp.wrapping_sub(b'A' as u32) < 26 {
-            // Safe: result is in 'a'..='z'.
-            unsafe { char::from_u32_unchecked(cp | 0x20) }
-        } else {
-            c
-        };
+        let is_upper = u32::from(cp.wrapping_sub(b'A' as u32) < 26);
+        // Safe: `cp | 0x20` for any ASCII byte stays in the ASCII range, and
+        // for cp in 'A'..='Z' it produces 'a'..='z'. For any other ASCII byte
+        // `is_upper` is 0, so the OR is a no-op.
+        return unsafe { char::from_u32_unchecked(cp | (is_upper << 5)) };
     }
+    simple_fold_non_ascii(c)
+}
+
+/// Identical to [`simple_fold`], but assumes `c as u32 >= 0x80`. Use this in
+/// hot loops where the caller has already separated ASCII from non-ASCII (the
+/// generic `simple_fold` retests `cp < 0x80` on every call).
+///
+/// On an ASCII codepoint this still returns the correct (identity) result —
+/// every ASCII char's lookup misses the bitmap and returns `c` — but the
+/// ASCII fast path that `simple_fold` provides is skipped, so calling this
+/// on ASCII is slower than `simple_fold`.
+#[inline]
+pub fn simple_fold_non_ascii(c: char) -> char {
+    let cp = c as u32;
     if cp > LAST_COVERED {
         return c;
     }
@@ -100,15 +113,90 @@ pub fn simple_fold(c: char) -> char {
     char::from_u32(folded).unwrap_or(c)
 }
 
-/// Total compressed size of the embedded table, in bytes. Useful for tests
-/// and documentation.
-pub const fn table_size_bytes() -> usize {
-    PAGE_BITMAP.len() * 8 + POPCNT_SAMPLES.len() + PAGE_OFFSET.len() + RUN_DATA.len() * 4
+/// Consumes `s` and returns its simple-fold form as a `Vec<u8>`, reusing the
+/// `String`'s heap buffer whenever every char folds to a sequence of the same
+/// byte length.
+///
+/// Falls back to allocating a fresh buffer as soon as any non-ASCII byte
+/// is encountered (folded characters may shrink, e.g. U+212A KELVIN SIGN is
+/// 3 bytes but folds to `k` = 1 byte, or grow, e.g. U+023A `Ⱥ` is 2 bytes
+/// but folds to U+2C65 `ⱥ` = 3 bytes, so in-place rewriting wouldn't work
+/// in general — and benchmarking showed the always-reallocate path is
+/// faster than a length-preserving in-place tier anyway). The returned
+/// bytes are always valid UTF-8.
+///
+/// # Example
+///
+/// ```
+/// use casefold::fold_into_bytes;
+/// assert_eq!(fold_into_bytes("Hello, WORLD!".to_string()), b"hello, world!");
+/// assert_eq!(fold_into_bytes("ÜBER".to_string()), "über".as_bytes());
+/// // Length-changing fold (U+212A KELVIN SIGN → U+006B, 3 bytes → 1 byte):
+/// assert_eq!(fold_into_bytes("\u{212A}elvin".to_string()), b"kelvin");
+/// ```
+pub fn fold_into_bytes(s: String) -> Vec<u8> {
+    let mut bytes = s.into_bytes();
+    // Tier 1 — full straight-through pass: lowercase every ASCII A..Z byte
+    // in place (a no-op on any non-ASCII byte, since `b.wrapping_sub(b'A')`
+    // is ≥ 26 for every byte outside 0x41..0x5A), and OR all bytes together
+    // so a single sign-bit test afterwards tells us whether the input
+    // contained any multibyte UTF-8 sequences. No early `break`, no
+    // input-dependent control flow — LLVM auto-vectorizes the loop.
+    let mut high_bit_acc: u8 = 0;
+    for b in &mut bytes {
+        high_bit_acc |= *b;
+        let is_upper = b.wrapping_sub(b'A') < 26;
+        *b |= u8::from(is_upper) << 5;
+    }
+    if high_bit_acc & 0x80 == 0 {
+        return bytes;
+    }
+    // Non-ASCII bytes are present. Locate the first one (SIMD-fast via
+    // `position`/memchr) and hand off to the UTF-8 path from there — the
+    // ASCII prefix is already lowercased and `simple_fold` is idempotent
+    // on lower-case ASCII, so skipping it is purely an optimization.
+    let first_non_ascii = bytes.iter().position(|&b| b & 0x80 != 0).unwrap();
+    fold_non_ascii_tail(&bytes, first_non_ascii)
+}
+
+/// Tier 2 — reallocating UTF-8 fold path. Copies the already-folded ASCII
+/// prefix `bytes[..read]` into a fresh allocation, then walks the remaining
+/// tail byte-by-byte: ASCII bytes (already lowercased by `fold_into_bytes`'
+/// pass 1) are copied verbatim, multibyte characters are decoded, folded
+/// via [`simple_fold_non_ascii`], and re-encoded into the output buffer.
+fn fold_non_ascii_tail(bytes: &[u8], mut read: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() + 4);
+    out.extend_from_slice(&bytes[..read]);
+    let mut buf = [0u8; 4];
+    while read < bytes.len() {
+        // ASCII bytes were already lowercased by pass 1 — copy verbatim.
+        if bytes[read] & 0x80 == 0 {
+            out.push(bytes[read]);
+            read += 1;
+            continue;
+        }
+        // SAFETY: `bytes` originated from a `String` and `read` always sits
+        // on a char boundary, so the tail is well-formed UTF-8.
+        let c = {
+            let tail = unsafe { std::str::from_utf8_unchecked(&bytes[read..]) };
+            tail.chars().next().unwrap()
+        };
+        read += c.len_utf8();
+        out.extend_from_slice(simple_fold_non_ascii(c).encode_utf8(&mut buf).as_bytes());
+    }
+    out
 }
 
 /// Number of distinct code points with a simple fold.
 pub const fn num_fold_entries() -> u32 {
     NUM_FOLD_ENTRIES
+}
+
+/// Total compressed size of the embedded table, in bytes. Used by the
+/// size-budget test.
+#[cfg(test)]
+const fn table_size_bytes() -> usize {
+    PAGE_BITMAP.len() * 8 + POPCNT_SAMPLES.len() + PAGE_OFFSET.len() + RUN_DATA.len() * 4
 }
 
 // ---- Paged bitmap lookup ------------------------------------------------
@@ -248,5 +336,106 @@ mod tests {
         let sz = table_size_bytes();
         eprintln!("table size: {sz} bytes for {} entries", num_fold_entries());
         assert!(sz < 1300, "table size {sz} exceeds 1300 B budget");
+    }
+
+    #[test]
+    fn fold_into_bytes_ascii() {
+        assert_eq!(fold_into_bytes(String::new()), b"");
+        assert_eq!(fold_into_bytes("Hello, WORLD!".into()), b"hello, world!");
+        assert_eq!(fold_into_bytes("abc 123 XYZ".into()), b"abc 123 xyz");
+    }
+
+    #[test]
+    fn fold_into_bytes_ascii_then_utf8_handoff() {
+        // ASCII prefix gets lowercased by the tier-1 loop, then control
+        // hands off to the tier-2 reallocating UTF-8 path at the first
+        // multibyte lead.
+        assert_eq!(
+            fold_into_bytes("MIXED Größe TEXT".into()),
+            "mixed größe text".as_bytes(),
+        );
+        // ASCII prefix, then a *shrinking* fold inside the tail.
+        assert_eq!(
+            fold_into_bytes("LORD \u{212A}elvin".into()),
+            b"lord kelvin",
+        );
+        // ASCII prefix, then a *growing* fold.
+        assert_eq!(
+            fold_into_bytes("abc\u{023A}".into()),
+            "abc\u{2C65}".as_bytes(),
+        );
+    }
+
+    #[test]
+    fn fold_into_bytes_length_preserving_bmp() {
+        assert_eq!(fold_into_bytes("ÄÖÜ".into()), "äöü".as_bytes());
+        assert_eq!(fold_into_bytes("ΑΒΓ".into()), "αβγ".as_bytes());
+        assert_eq!(fold_into_bytes("漢字".into()), "漢字".as_bytes());
+    }
+
+    #[test]
+    fn fold_into_bytes_reuses_buffer_for_ascii_input() {
+        // Pure-ASCII inputs are lowercased in place — the returned Vec must
+        // hold the exact same allocation as the input String.
+        let s = "MIXED case AsCiI 12345".to_string();
+        let original_ptr = s.as_ptr();
+        let out = fold_into_bytes(s);
+        assert_eq!(out, b"mixed case ascii 12345");
+        assert_eq!(out.as_ptr(), original_ptr);
+    }
+
+    #[test]
+    fn fold_into_bytes_handles_shrinking_fold() {
+        // U+212A KELVIN SIGN (3 bytes) folds to U+006B 'k' (1 byte).
+        assert_eq!(fold_into_bytes("\u{212A}elvin".into()), b"kelvin");
+        // Shrink inside a longer string.
+        let out = fold_into_bytes("LORD \u{212A}elvin RULES".into());
+        assert_eq!(out, b"lord kelvin rules");
+        // U+2126 OHM SIGN (3 bytes) folds to U+03C9 'ω' (2 bytes).
+        assert_eq!(fold_into_bytes("\u{2126}".into()), "\u{03C9}".as_bytes());
+    }
+
+    #[test]
+    fn fold_into_bytes_handles_growing_fold() {
+        // The Unicode 16.0 simple-fold table has exactly two folds that
+        // grow in UTF-8 length (verified by scanning CaseFolding.txt):
+        // U+023A → U+2C65 and U+023E → U+2C66, both 2 B → 3 B.
+
+        // U+023A 'Ⱥ' is 2 bytes, folds to U+2C65 'ⱥ' = 3 bytes.
+        assert_eq!(
+            fold_into_bytes("\u{023A}".into()),
+            "\u{2C65}".as_bytes()
+        );
+        // U+023E 'Ⱦ' is 2 bytes, folds to U+2C66 'ⱦ' = 3 bytes.
+        assert_eq!(
+            fold_into_bytes("\u{023E}".into()),
+            "\u{2C66}".as_bytes()
+        );
+
+        // Each one mid-string, with mixed length-preserving context on both
+        // sides so that the bail-out path also copies a prefix that already
+        // contains a length-preserving rewrite.
+        let out = fold_into_bytes("ABC\u{023A}xyz".into());
+        assert_eq!(out, "abc\u{2C65}xyz".as_bytes());
+        let out = fold_into_bytes("ABC\u{023E}xyz".into());
+        assert_eq!(out, "abc\u{2C66}xyz".as_bytes());
+
+        // Both growing folds inside the same string: the second one occurs
+        // after we have already switched to the allocating buffer.
+        let out = fold_into_bytes("\u{023A}\u{023E}".into());
+        assert_eq!(out, "\u{2C65}\u{2C66}".as_bytes());
+
+        // Mixed: a length-preserving fold, then a shrinking fold, then both
+        // growing folds — exercises every branch in one input.
+        let out = fold_into_bytes("Ä\u{212A}\u{023A}\u{023E}".into());
+        assert_eq!(out, "ä\u{006B}\u{2C65}\u{2C66}".as_bytes());
+    }
+
+    #[test]
+    fn fold_into_bytes_matches_per_char_fold() {
+        // Cross-check against per-char `simple_fold` on a varied input.
+        let input = "Quick BROWN Fox 🦊 ÜBER Größe ΣΟΦΙΑ \u{0130}\u{023A}漢";
+        let expected: String = input.chars().map(simple_fold).collect();
+        assert_eq!(fold_into_bytes(input.to_string()), expected.as_bytes());
     }
 }

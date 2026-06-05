@@ -17,6 +17,18 @@ assert_eq!(simple_fold('Ω'), 'ω');
 assert_eq!(simple_fold('漢'), '漢');     // no fold defined → identity
 ```
 
+For bulk string folding the crate also exposes `fold_into_bytes`, which
+consumes a `String` and returns a `Vec<u8>`. Pure-ASCII inputs are
+lowercased in place via the string's existing heap allocation (a single
+auto-vectorized pass over the bytes); inputs containing any non-ASCII
+character fall back to a fresh buffer, since simple folds in general can
+change UTF-8 length (e.g. U+212A KELVIN SIGN → `k`, or U+023A Ⱥ → U+2C65 ⱥ).
+
+```rust
+use casefold::fold_into_bytes;
+assert_eq!(fold_into_bytes("Hello, WORLD!".to_string()), b"hello, world!");
+```
+
 ## Why does this crate exist?
 
 Unicode 16.0 defines 1484 simple-fold mappings. Common ways to store them:
@@ -120,16 +132,37 @@ hashbrown 0.15's default hasher):
 | Workload                                 | Casefold table     | HashMap        |
 |------------------------------------------|-------------------:|---------------:|
 | Sequential BMP scan (63 488 chars)       | **1 900 Melem/s**  |  383 Melem/s   |
-| Random BMP (10 000 chars)                | **1 550 Melem/s**  |  600 Melem/s   |
-| Random ASCII (10 000 chars)              | **3 110 Melem/s**  |  624 Melem/s   |
+| Random BMP (10 000 chars)                | **1 680 Melem/s**  |  555 Melem/s   |
+| Random ASCII (10 000 chars)              | **3 100 Melem/s**  |  622 Melem/s   |
 | Only-folds (every defined fold)          |     339 Melem/s    |  722 Melem/s   |
 
-Casefold wins three of four workloads decisively (5.0×, 2.6×, and 5.0×
+Casefold wins three of four workloads decisively (5.0×, 3.0×, and 5.0×
 respectively) while using ~14× less memory than the `HashMap`. The
 `only_folds` workload — every input is a code point that *does* fold — is
 the worst case for the bitmap design (no early-out on the empty-bit test)
 and the best case for the `HashMap` (every probe hits a stored key); even
 so, the table stays within a small constant factor.
+
+### Bulk string conversion (`fold_into_bytes`)
+
+`fold_into_bytes(s: String) -> Vec<u8>` consumes the input `String`,
+auto-vectorizes a single in-place pass over the bytes for pure-ASCII
+inputs, and falls back to a fresh buffer + per-char fold loop as soon as
+any non-ASCII byte is encountered. Compared against the standard library
+on the same Apple M-series machine:
+
+| Workload (input size)          | `fold_into_bytes` | `str::to_lowercase` | `chars().flat_map(to_lowercase)` |
+|--------------------------------|-------------------:|---------------------:|---------------------------------:|
+| Pure ASCII (5 700 B)           | **41.6 GiB/s**     |        27.0 GiB/s    |                       380 MiB/s  |
+| Mixed BMP (Latin/Greek/Cyrillic, 8 800 B, ~33% multibyte chars by count) | **538 MiB/s** | 294 MiB/s | 207 MiB/s |
+| Length-changing folds (1 700 B, mixed with ASCII)        | **964 MiB/s**      |        496 MiB/s     |                       270 MiB/s  |
+
+Per input byte the mixed-BMP workload is slower than the length-changing
+one because it contains ~3× more multibyte characters per byte (each
+multibyte char takes a full UTF-8 decode + table lookup + encode, while
+ASCII bytes after the first non-ASCII byte are skipped at memory speed).
+Measured per multibyte character actually folded, the mixed-BMP throughput
+(~186 M chars/s) is *higher* than the length-changing one (~119 M chars/s).
 
 Reproduce with:
 
