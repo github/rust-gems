@@ -240,15 +240,17 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
     // Sanity: size accounting (printed as build warnings for visibility).
     let index_bytes = page_bitmap.len() * 8 + popcnt_samples.len() + page_offset.len();
     let total = index_bytes + run_data.len() * 4;
-    println!(
-        "cargo:warning=casefold table: {} fold entries, {} runs, {} populated pages, {} bytes total ({:.2} bits/entry), max |delta| = {}",
-        folds.len(),
-        n,
-        num_populated_pages,
-        total,
-        total as f64 * 8.0 / folds.len() as f64,
-        max_abs_delta,
-    );
+    if env::var_os("CASEFOLD_BUILD_INFO").is_some() {
+        println!(
+            "cargo:warning=casefold table: {} fold entries, {} runs, {} populated pages, {} bytes total ({:.2} bits/entry), max |delta| = {}",
+            folds.len(),
+            n,
+            num_populated_pages,
+            total,
+            total as f64 * 8.0 / folds.len() as f64,
+            max_abs_delta,
+        );
+    }
 
     // Emit Rust source.
     let mut s = String::new();
