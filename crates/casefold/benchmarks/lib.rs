@@ -21,20 +21,22 @@ pub fn reference_map() -> FoldHashMap {
         .expect("read CaseFolding.txt (run from crate dir)");
     let mut out = FoldHashMap::with_hasher(FixedState::default());
     for raw in text.lines() {
-        let line = raw.split('#').next().unwrap().trim();
+        let line = raw.split('#').next().unwrap_or("").trim();
         if line.is_empty() {
             continue;
         }
         let mut parts = line.split(';').map(|s| s.trim());
-        let cp = u32::from_str_radix(parts.next().unwrap(), 16).unwrap();
-        let status = parts.next().unwrap();
-        let mapping = parts.next().unwrap();
+        let cp_str = parts.next().expect("code point field");
+        let cp = u32::from_str_radix(cp_str, 16).expect("code point is hex");
+        let status = parts.next().expect("status field");
+        let mapping = parts.next().expect("mapping field");
         if status != "C" && status != "S" {
             continue;
         }
-        let target =
-            u32::from_str_radix(mapping.split_whitespace().next().unwrap(), 16).unwrap();
+        let target_str = mapping.split_whitespace().next().unwrap_or("");
+        let target = u32::from_str_radix(target_str, 16).expect("mapping is hex");
         out.insert(cp, target);
+    }
     }
     out
 }
