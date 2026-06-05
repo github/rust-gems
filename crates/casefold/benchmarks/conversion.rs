@@ -33,6 +33,15 @@ fn to_ascii_lowercase_into_bytes(s: String) -> Vec<u8> {
     s.to_ascii_lowercase().into_bytes()
 }
 
+/// `simd-normalizer::casefold` — SIMD-accelerated Unicode simple case
+/// folding (C+S, Unicode 17.0). On aarch64 uses NEON; on x86_64 uses
+/// SSE4.2/AVX2/AVX-512 via runtime CPUID dispatch.
+#[inline]
+fn simd_normalizer_casefold_into_bytes(s: String) -> Vec<u8> {
+    let folded = simd_normalizer::casefold(&s, simd_normalizer::CaseFoldMode::Standard);
+    folded.into_owned().into_bytes()
+}
+
 fn ascii_input() -> String {
     // A typical English sentence repeated to reach a meaningful working size.
     let unit = "The Quick BROWN fox JUMPS over THE lazy DOG. 0123456789. ";
@@ -90,6 +99,17 @@ fn bench_conversion(c: &mut Criterion, name: &str, input: &str) {
             b.iter_batched(
                 || input.to_string(),
                 |s| to_ascii_lowercase_into_bytes(black_box(s)),
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+
+    group.bench_function(
+        BenchmarkId::new("simd_normalizer::casefold", input.len()),
+        |b| {
+            b.iter_batched(
+                || input.to_string(),
+                |s| simd_normalizer_casefold_into_bytes(black_box(s)),
                 criterion::BatchSize::SmallInput,
             );
         },
