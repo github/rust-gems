@@ -245,8 +245,8 @@ fn worstcase_comparison_benchmark(c: &mut Criterion) {
 }
 
 fn pretokenization_benchmark(c: &mut Criterion) {
-    for (name, tokenizer, _, _) in TOKENIZERS.iter() {
-        let text = create_test_string(&tokenizer.bpe, 80_000);
+    for (name, tok, _, _) in TOKENIZERS.iter() {
+        let text = create_test_string(&tok.bpe, 80_000);
 
         let mut group = c.benchmark_group(format!("pretokenization-{name}"));
         group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
@@ -255,7 +255,7 @@ fn pretokenization_benchmark(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new("split", bytes), &bytes, |b, bytes| {
                 b.iter_batched(
                     || select_test_string(&text, *bytes),
-                    |text| tokenizer.split(text).count(),
+                    |text| tok.split(text).count(),
                     criterion::BatchSize::SmallInput,
                 )
             });
