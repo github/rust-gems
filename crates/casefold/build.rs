@@ -28,7 +28,7 @@ fn main() {
     let runs = split_runs_at_page_boundary(&runs);
     let out = emit_tables(&folds, &runs);
 
-    let out_path: PathBuf = env::var_os("OUT_DIR").unwrap().into();
+    let out_path: PathBuf = env::var_os("OUT_DIR").expect("OUT_DIR is set during build").into();
     fs::write(out_path.join("table.rs"), out).expect("write table.rs");
 }
 
