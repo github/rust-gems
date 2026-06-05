@@ -244,12 +244,32 @@ fn worstcase_comparison_benchmark(c: &mut Criterion) {
     }
 }
 
+fn pretokenization_benchmark(c: &mut Criterion) {
+    for (name, tok, _, _) in TOKENIZERS.iter() {
+        let text = create_test_string(&tok.bpe, 80_000);
+
+        let mut group = c.benchmark_group(format!("pretokenization-{name}"));
+        group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
+        for bytes in [10, 100, 1000, 10000] {
+            group.throughput(criterion::Throughput::Bytes(bytes as u64));
+            group.bench_with_input(BenchmarkId::new("split", bytes), &bytes, |b, bytes| {
+                b.iter_batched(
+                    || select_test_string(&text, *bytes),
+                    |text| tok.split(text).count(),
+                    criterion::BatchSize::SmallInput,
+                )
+            });
+        }
+        group.finish();
+    }
+}
+
 criterion_group!(
     name = benches;
     config = Criterion::default()
                 .warm_up_time(Duration::from_millis(500))
                 .measurement_time(Duration::from_millis(4000))
                 .nresamples(1000);
-    targets = counting_benchmark, encoding_benchmark, appending_benchmark, comparison_benchmark, worstcase_comparison_benchmark
+    targets = counting_benchmark, encoding_benchmark, appending_benchmark, pretokenization_benchmark, comparison_benchmark, worstcase_comparison_benchmark
 );
 criterion_main!(benches);

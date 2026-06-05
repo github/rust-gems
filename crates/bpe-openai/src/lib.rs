@@ -4,7 +4,6 @@ use bpe::byte_pair_encoding::BytePairEncoding;
 use either::Either;
 use regex_automata::{
     meta::{BuildError, Regex},
-    util::captures::Captures,
     Anchored, Input,
 };
 
@@ -177,7 +176,6 @@ impl Pretokenizer {
             lookahead: &self.lookahead,
             text,
             last: 0,
-            caps: Captures::matches(self.pat.group_info().clone()),
         }
     }
 }
@@ -195,7 +193,6 @@ struct Splits<'a> {
     lookahead: &'a [bool],
     text: &'a str,
     last: usize,
-    caps: Captures,
 }
 
 impl<'a> Iterator for Splits<'a> {
@@ -203,9 +200,7 @@ impl<'a> Iterator for Splits<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let input = Input::new(&self.text[self.last..]).anchored(Anchored::Yes);
-        self.caps.clear();
-        self.pat.captures(input, &mut self.caps);
-        let m = self.caps.get_match()?;
+        let m = self.pat.find(input)?;
         let start = self.last;
         let mut end = self.last + m.range().end;
         if self.lookahead[m.pattern().as_usize()] {
