@@ -62,6 +62,25 @@ fn growing_input() -> String {
     unit.repeat(100)
 }
 
+fn cjk_input() -> String {
+    // Predominantly 3-byte CJK (fold-free lead bytes 0xE3..0xEE) with a few
+    // ASCII spaces. Exercises the non-ASCII tail loop where every multibyte
+    // char misses the fold table.
+    let unit = "日本語のテキスト 漢字 ひらがな カタカナ 한국어 中文字符 ";
+    unit.repeat(100)
+}
+
+fn symbols_input() -> String {
+    // Punctuation / arrows / math / box-drawing from U+2000..2BFF plus Myanmar
+    // (U+1000..109F). These live in blocks 0xE2 / 0xE1, whose *lead byte* does
+    // contain folds elsewhere (Greek Ext, Latin Ext Additional, Roman
+    // numerals…), so a lead-byte filter passes them — but every one of these
+    // chars sits on a fold-free 64-cp page, so the page-precision probe rejects
+    // them without decoding.
+    let unit = "— “quote” … → ⇒ ∑ ∫ ≤ ≥ │ ┌ ┐ မြန်မာ စာ ◆ ★ ";
+    unit.repeat(100)
+}
+
 fn bench_conversion(c: &mut Criterion, name: &str, input: &str) {
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes(input.len() as u64));
@@ -122,6 +141,8 @@ fn benches(c: &mut Criterion) {
     bench_conversion(c, "convert_ascii", &ascii_input());
     bench_conversion(c, "convert_mixed_bmp", &mixed_bmp_input());
     bench_conversion(c, "convert_growing", &growing_input());
+    bench_conversion(c, "convert_cjk", &cjk_input());
+    bench_conversion(c, "convert_symbols", &symbols_input());
 }
 
 criterion_group!(benches_group, benches);

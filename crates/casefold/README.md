@@ -46,7 +46,7 @@ information-theoretic floor for 1484 arbitrary code-point pairs.
 ## How the encoding works
 
 Three observations make the data extraordinarily compressible *and* fast to
-query:
+query (a fourth keeps the bulk path fast on text that never folds):
 
 1. **Most folds occur in runs.** Stretches of adjacent code points share the
    same delta to their fold, e.g. `U+0041..U+005A` (`A`–`Z`) all map with
@@ -69,6 +69,16 @@ query:
    The within-page scan reads the next entry's `end_low` from the same load
    that decodes the run on a hit, so there are no parallel arrays and no
    escape table.
+
+4. **The bulk path rejects whole characters from their first bytes.** For a
+   2-/3-byte UTF-8 sequence the page index `cp >> 6` is fully determined by
+   the first one or two bytes — only the final continuation byte carries the
+   within-page offset `cp & 0x3F`. So `fold_into_bytes` probes `PAGE_BITMAP`
+   straight from `b0` (and `b1`); a clear page bit copies the character
+   verbatim without assembling `cp` or scanning a run. This skips fold-free
+   scripts (CJK, Hangul, Kana, Arabic, Hebrew, Indic) *and* the empty 64-cp
+   pages inside otherwise-foldable blocks (e.g. Myanmar, punctuation/symbol
+   blocks), reusing the very same table the per-`char` lookup uses.
 
 ### Table layout (1248 B total)
 
@@ -145,24 +155,41 @@ so, the table stays within a small constant factor.
 
 ### Bulk string conversion (`fold_into_bytes`)
 
-`fold_into_bytes(s: String) -> Vec<u8>` consumes the input `String`,
-auto-vectorizes a single in-place pass over the bytes for pure-ASCII
-inputs, and falls back to a fresh buffer + per-char fold loop as soon as
-any non-ASCII byte is encountered. Compared against the standard library
-on the same Apple M-series machine:
+`fold_into_bytes(s: String) -> Vec<u8>` consumes the input `String` and
+auto-vectorizes a single in-place pass that lowercases ASCII and detects
+whether any multibyte sequence is present. It then scans the multibyte tail
+and **hands back the original allocation untouched unless a character actually
+folds** — so pure-ASCII input and any text whose multibyte characters never
+fold (CJK, Hangul, Kana, Arabic, Hebrew, Indic, symbols, …) avoid a second
+buffer entirely. Only when a real case fold is found does it allocate, then
+bulk-copy unmodified spans and re-encode folded characters in between.
 
-| Workload (input size)          | `fold_into_bytes` | `str::to_lowercase` | `chars().flat_map(to_lowercase)` |
-|--------------------------------|-------------------:|---------------------:|---------------------------------:|
-| Pure ASCII (5 700 B)           | **41.2 GiB/s**     |        27.0 GiB/s    |                       380 MiB/s  |
-| Mixed BMP (Latin/Greek/Cyrillic, 8 800 B, ~33% multibyte chars by count) | **577 MiB/s** | 294 MiB/s | 207 MiB/s |
-| Length-changing folds (1 700 B, mixed with ASCII)        | **1 012 MiB/s**    |        496 MiB/s     |                       270 MiB/s  |
+Throughput on an Apple M-series machine (criterion medians), against the SIMD
+`simd-normalizer` crate and the standard library:
 
-Per input byte the mixed-BMP workload is slower than the length-changing
-one because it contains ~3× more multibyte characters per byte (each
-multibyte char takes a full UTF-8 decode + table lookup + encode, while
-ASCII bytes after the first non-ASCII byte are skipped at memory speed).
-Measured per multibyte character actually folded, the mixed-BMP throughput
-(~199 M chars/s) is *higher* than the length-changing one (~125 M chars/s).
+| Workload (input size) | `fold_into_bytes` | `simd_normalizer::casefold` | `str::to_lowercase` | `chars().flat_map(to_lowercase)` | `str::to_ascii_lowercase`† |
+|---|--:|--:|--:|--:|--:|
+| Pure ASCII (5 700 B)                          | **41.5 GiB/s** |   1.18 GiB/s |   26.8 GiB/s |  380 MiB/s | 23.3 GiB/s |
+| CJK, no folds (8 100 B)                        | **2.81 GiB/s** |   1.99 GiB/s |  478 MiB/s   |  376 MiB/s | 25.2 GiB/s |
+| Symbols / Myanmar, no folds (9 000 B)         | **3.05 GiB/s** |   1.54 GiB/s |  495 MiB/s   |  343 MiB/s | 23.8 GiB/s |
+| Mixed BMP, all folding (8 800 B)              |   559 MiB/s    | **876 MiB/s**|  289 MiB/s   |  206 MiB/s | 23.3 GiB/s |
+| Length-changing folds (1 700 B, mixed ASCII)  | **847 MiB/s**  |  715 MiB/s   |  492 MiB/s   |  271 MiB/s | 18.4 GiB/s |
+
+† `str::to_ascii_lowercase` is **not** a correct case-folder for non-ASCII —
+it leaves every multibyte sequence untouched. It is shown only as the
+"memcpy + ASCII-lowercase" speed floor. The two `to_lowercase` variants
+perform Unicode *lowercasing*, which is not identical to case folding (they
+diverge on e.g. final-sigma, `İ`, `ß`); this is an equal-workload throughput
+comparison, not an output-equality one.
+
+`fold_into_bytes` leads every workload except all-folding mixed-BMP text,
+where `simd-normalizer`'s wide-lane SIMD beats our scalar decode-and-fold.
+The big gaps on the **no-fold** rows (CJK 2.8 GiB/s, symbols 3.0 GiB/s —
+~6× `str::to_lowercase`) come from the zero-copy path: the tail scan probes
+`PAGE_BITMAP` straight from the first one or two UTF-8 bytes, finds nothing
+folds, and returns the input buffer as-is — no second allocation, no byte
+copied. Those rows still sit ~8× below the `to_ascii_lowercase` floor; the
+residual is the scalar per-character page scan, which only SIMD could close.
 
 Reproduce with:
 

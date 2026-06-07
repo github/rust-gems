@@ -37,7 +37,6 @@ pub fn reference_map() -> FoldHashMap {
         let target = u32::from_str_radix(target_str, 16).expect("mapping is hex");
         out.insert(cp, target);
     }
-    }
     out
 }
 
