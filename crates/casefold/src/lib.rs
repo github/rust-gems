@@ -272,11 +272,6 @@ pub fn utf8_len(lead: u8) -> usize {
     ((UTF8_LEN_BY_LEAD >> (4 * (lead >> 4))) & 0xF) as usize
 }
 
-/// Number of distinct code points with a simple fold.
-pub const fn num_fold_entries() -> u32 {
-    NUM_FOLD_ENTRIES
-}
-
 /// Total compressed size of the embedded table, in bytes. Used by the
 /// size-budget test.
 #[cfg(test)]
@@ -389,7 +384,7 @@ mod tests {
         // The parallel BYTE_DELTA table (one u32 per run) roughly doubles the
         // run storage in exchange for a decode/encode-free fold path.
         let sz = table_size_bytes();
-        eprintln!("table size: {sz} bytes for {} entries", num_fold_entries());
+        eprintln!("table size: {sz} bytes for {NUM_FOLD_ENTRIES} entries");
         assert!(sz < 2400, "table size {sz} exceeds 2400 B budget");
     }
 
