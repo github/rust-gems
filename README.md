@@ -9,6 +9,7 @@ A collection of useful algorithms written in Rust. Currently contains:
 - [`hash-sorted-map`](crates/hash-sorted-map): a hash map whose groups are ordered by hash prefix, enabling efficient sorted-order iteration and linear-time merging.
 - [`sparse-ngrams`](crates/sparse-ngrams): fast sparse n-gram extraction from byte slices. Selects variable-length n-grams (2–8 bytes) deterministically using bigram frequency priorities, suitable for substring search indexes.
 - [`string-offsets`](crates/string-offsets): converts string positions between bytes, chars, UTF-16 code units, and line numbers. Useful when sending string indices across language boundaries.
+- [`casefold`](crates/casefold): a compact (~1.7 KB) Unicode simple case-folding table, plus a decode-free bulk `fold_into_bytes` that folds UTF-8 with little-endian byte arithmetic.
 
 ## Background
 
