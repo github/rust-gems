@@ -2,7 +2,7 @@
 //! baseline across a few representative workloads.
 
 use casefold::simple_fold;
-use casefold_benchmarks::{hashmap_fold, reference_map};
+use casefold_benchmarks::{encode_utf8_key, hashmap_fold, hashmap_fold_utf8, reference_map, reference_map_utf8};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
@@ -54,6 +54,8 @@ fn workload_only_folds() -> Vec<char> {
 
 fn bench_workload(c: &mut Criterion, name: &str, chars: &[char]) {
     let map = reference_map();
+    let map_utf8 = reference_map_utf8();
+    let words: Vec<u32> = chars.iter().map(|&ch| encode_utf8_key(ch)).collect();
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Elements(chars.len() as u64));
 
@@ -72,6 +74,16 @@ fn bench_workload(c: &mut Criterion, name: &str, chars: &[char]) {
             let mut acc = 0u32;
             for &ch in chars {
                 acc = acc.wrapping_add(hashmap_fold(&map, black_box(ch)) as u32);
+            }
+            acc
+        });
+    });
+
+    group.bench_function(BenchmarkId::new("HashMap (UTF-8 u32)", chars.len()), |b| {
+        b.iter(|| {
+            let mut acc = 0u32;
+            for &word in &words {
+                acc = acc.wrapping_add(hashmap_fold_utf8(&map_utf8, black_box(word)));
             }
             acc
         });

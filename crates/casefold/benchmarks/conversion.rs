@@ -7,7 +7,8 @@
 //! cases (e.g. `Σ` final-sigma context, `İ` → `i\u{0307}`). This benchmark is
 //! about throughput on equivalent workloads, not output equality.
 
-use casefold::fold_into_bytes;
+use casefold::{fold_into_bytes, utf8_len};
+use casefold_benchmarks::{hashmap_fold_utf8, reference_map_utf8, FoldHashMap};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
 
@@ -40,6 +41,55 @@ fn to_ascii_lowercase_into_bytes(s: String) -> Vec<u8> {
 fn simd_normalizer_casefold_into_bytes(s: String) -> Vec<u8> {
     let folded = simd_normalizer::casefold(&s, simd_normalizer::CaseFoldMode::Standard);
     folded.into_owned().into_bytes()
+}
+
+/// Loads up to 4 bytes starting at `at` as a little-endian `u32`, zero-padding
+/// when fewer than 4 bytes remain so the tail of the buffer never reads out of
+/// bounds.
+#[inline]
+fn read_u32_le(bytes: &[u8], at: usize) -> u32 {
+    let n = (bytes.len() - at).min(4);
+    let mut word = 0u32;
+    for j in 0..n {
+        word |= (bytes[at + j] as u32) << (8 * j);
+    }
+    word
+}
+
+/// HashMap-based case fold operating directly on the raw UTF-8 bytes.
+///
+/// For each character it loads the next 4 bytes as a little-endian `u32`,
+/// then shifts left by `4 - utf8_len` bytes so the bytes of the *following*
+/// character (which the over-read pulled in) fall off the top and only the
+/// current character's bytes remain — a left-aligned key, no masking needed.
+/// [`hashmap_fold_utf8`] returns the fold in writable low-byte order, so the
+/// full 4-byte word is stored and the cursor advances by just the folded
+/// length.
+fn hashmap_fold_into_bytes(map: &FoldHashMap, s: String) -> Vec<u8> {
+    let bytes = s.into_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len() + 4);
+    let mut read = 0usize;
+    while read < bytes.len() {
+        let word = read_u32_le(&bytes, read);
+        let len = utf8_len((word & 0xFF) as u8);
+        // Left-align: shift the over-read trailing bytes out of the word.
+        let key = word << (8 * (4 - len) as u32);
+        let folded = hashmap_fold_utf8(map, key);
+        let dest_len = utf8_len((folded & 0xFF) as u8);
+        out.reserve(4);
+        let l = out.len();
+        // SAFETY: `reserve(4)` guarantees ≥4 spare bytes at offset `l`; we store
+        // 4 bytes there and expose only `dest_len` (≤ 4) of them.
+        unsafe {
+            out.as_mut_ptr()
+                .add(l)
+                .cast::<u32>()
+                .write_unaligned(folded.to_le());
+            out.set_len(l + dest_len);
+        }
+        read += len;
+    }
+    out
 }
 
 fn ascii_input() -> String {
@@ -92,6 +142,18 @@ fn bench_conversion(c: &mut Criterion, name: &str, input: &str) {
             criterion::BatchSize::SmallInput,
         );
     });
+
+    let fold_map = reference_map_utf8();
+    group.bench_function(
+        BenchmarkId::new("HashMap::fold_into_bytes (UTF-8 u32)", input.len()),
+        |b| {
+            b.iter_batched(
+                || input.to_string(),
+                |s| hashmap_fold_into_bytes(&fold_map, black_box(s)),
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
 
     group.bench_function(BenchmarkId::new("str::to_lowercase", input.len()), |b| {
         b.iter_batched(

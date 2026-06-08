@@ -33,10 +33,9 @@
 //!    `[start, end]` would straddle a 64-cp boundary is split at the boundary
 //!    during the build, so every run lives in exactly one page (which is what
 //!    makes "empty bit ⇒ no fold" sound). Each run is then a single packed
-//!    `u32` in `RUN_DATA` holding `end_low` (6 b), `stride - 1` (1 b),
-//!    `length` (7 b), and a signed `delta` (18 b). One indexed load both
-//!    drives the slot scan and decodes the run on a hit — no parallel arrays,
-//!    no escape table.
+//!    `u16` in `RUN_DATA` holding `end_low` (6 b), `stride - 1` (1 b) and
+//!    `length - 1` (7 b); the fold itself is a little-endian byte delta stored
+//!    in the parallel `BYTE_DELTA` table (see idea 5).
 //! 4. **Page-precision byte-level reject.** The bulk [`fold_into_bytes`] path
 //!    probes `PAGE_BITMAP` straight from the first one or two UTF-8 bytes —
 //!    `cp >> 6` (the page index) is fully determined by `b0` (2-byte) or
@@ -46,6 +45,13 @@
 //!    (CJK, Hangul, Kana, Arabic, Hebrew, Indic) *and* the empty 64-cp pages
 //!    inside otherwise-foldable blocks are skipped at memory speed. No extra
 //!    table: it reuses the same `PAGE_BITMAP` the per-`char` lookup uses.
+//! 5. **Little-endian byte-delta fold.** On a little-endian machine a folded
+//!    character is the source character's UTF-8 bytes, read as a `u32`, plus a
+//!    per-run constant. `BYTE_DELTA[i]` stores that constant (32 b, since the
+//!    low code-point bits land in the high word byte), so folding is a masked
+//!    load + `wrapping_add` + a single 4-byte store — no decode, no encode, and
+//!    it handles length-changing folds (`K`→`k`, `Ⱥ`→`ⱥ`) by writing fewer or
+//!    more bytes than were read.
 //!
 //! # Example
 //!
@@ -102,24 +108,47 @@ pub fn simple_fold_non_ascii(c: char) -> char {
     if cp > LAST_COVERED {
         return c;
     }
-    let (packed, end) = match successor(cp) {
+    let (idx, end) = match successor(cp) {
         Some(x) => x,
         None => return c,
     };
-    let length = (packed >> 7) & 0x7f;
-    let stride = ((packed >> 6) & 1) + 1;
-    let start = end - (length - 1) * stride;
-    if cp < start {
+    let packed = RUN_DATA[idx] as u32;
+    let len_m1 = (packed >> 7) & 0x7f;
+    let stride_bit = (packed >> 6) & 1;
+    // `start = end - (length - 1) * stride`, computed with a shift since
+    // `stride` is `1 << stride_bit`.
+    let start = end - (len_m1 << stride_bit);
+    if cp < start || ((cp - start) & stride_bit) != 0 {
         return c;
     }
-    let off = cp - start;
-    if stride == 2 && (off & 1) != 0 {
-        return c;
+    // Fold with the run's little-endian byte delta: encode `cp`, add the delta,
+    // decode the result. The same `BYTE_DELTA` table serves the bulk byte path.
+    let mut buf = [0u8; 4];
+    c.encode_utf8(&mut buf);
+    let folded = u32::from_le_bytes(buf).wrapping_add(BYTE_DELTA[idx]);
+    char::from_u32(decode_utf8_le(folded)).unwrap_or(c)
+}
+
+/// Decodes the little-endian UTF-8 byte word `word` (low bytes hold the
+/// character, length implied by the lead byte) back into a code point.
+#[inline]
+fn decode_utf8_le(word: u32) -> u32 {
+    let b = word.to_le_bytes();
+    match utf8_len(b[0]) {
+        1 => b[0] as u32,
+        2 => (((b[0] & 0x1F) as u32) << 6) | (b[1] & 0x3F) as u32,
+        3 => {
+            (((b[0] & 0x0F) as u32) << 12)
+                | (((b[1] & 0x3F) as u32) << 6)
+                | (b[2] & 0x3F) as u32
+        }
+        _ => {
+            (((b[0] & 0x07) as u32) << 18)
+                | (((b[1] & 0x3F) as u32) << 12)
+                | (((b[2] & 0x3F) as u32) << 6)
+                | (b[3] & 0x3F) as u32
+        }
     }
-    // 18-bit signed delta: sign-extend by shifting an i32 right by 14.
-    let delta = (packed as i32) >> 14;
-    let folded = (cp as i64 + delta as i64) as u32;
-    char::from_u32(folded).unwrap_or(c)
 }
 
 /// Consumes `s` and returns its simple-fold form as a `Vec<u8>`. The input's
@@ -186,13 +215,16 @@ pub fn fold_into_bytes(s: String) -> Vec<u8> {
 /// [`simple_fold_non_ascii`] is inlined here without repeating its page test.
 fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::new();
+    let src = bytes.as_ptr();
+    // Raw write cursor into `out`'s buffer (valid once `building` is set). We
+    // bypass the Vec push/reserve API: the buffer is reserved once for the
+    // worst case, so every copy/store below is unchecked.
+    let mut dst: *mut u8 = core::ptr::null_mut();
     // `flushed` marks the start of the contiguous run of `bytes` that is
-    // already correct but not yet copied into `out`. It only becomes
-    // meaningful once `building` flips true at the first folding character.
+    // already correct but not yet copied out.
     let mut flushed = 0usize;
     let mut building = false;
     let mut read = start;
-    let mut buf = [0u8; 4];
     while read < bytes.len() {
         // ASCII (already lowercased by pass 1) — unchanged, keep scanning.
         let lead = bytes[read];
@@ -200,13 +232,7 @@ fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
             read += 1;
             continue;
         }
-        // Page-precision reject probe from the first 1–2 bytes (see the module
-        // docs). For 2-/3-byte sequences the PAGE_BITMAP index `cp >> 6` is
-        // fully determined by `b0` (and `b1`); the final continuation byte
-        // only carries `cp & 0x3F`. A clear page bit means nothing in this
-        // 64-cp page folds, so the whole character is unchanged — keep
-        // scanning without decoding it. 4-byte leads also read `b2`; pages
-        // beyond the bitmap are treated as empty.
+        // Page-precision reject probe (see the module docs).
         let (page, c_len) = if lead < 0xE0 {
             ((lead & 0x1F) as u32, 2usize)
         } else if lead < 0xF0 {
@@ -224,54 +250,69 @@ fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
             read += c_len;
             continue;
         }
-        // The page bit is set, so this 64-cp page holds at least one fold run.
-        // We already know `page`; the rest of `cp` is just the low 6 bits of
-        // the final byte (`cp & 0x3F`), reachable by one indexed read at the
-        // known char length — no full UTF-8 decode. Then run the within-page
-        // search inline, skipping the page-bitmap test `simple_fold_non_ascii`
-        // would otherwise repeat.
         let low_v = (bytes[read + c_len - 1] & 0x3F) as u32;
         let cp = (page << PAGE_BITS) | low_v;
         let dense = popcount_up_to(page) as usize;
-        let slice = &RUN_DATA[PAGE_OFFSET[dense] as usize..PAGE_OFFSET[dense + 1] as usize];
+        let lo = PAGE_OFFSET[dense] as usize;
+        let slice = &RUN_DATA[lo..PAGE_OFFSET[dense + 1] as usize];
         let mut off = 0;
-        while off < slice.len() && (slice[off] & PAGE_MASK) < low_v {
+        while off < slice.len() && (slice[off] as u32 & PAGE_MASK) < low_v {
             off += 1;
         }
-        // Decode the candidate run (if any) and apply its delta when `cp`
-        // actually lands inside it; otherwise the character is unchanged.
-        let folded = if off < slice.len() {
-            let packed = slice[off];
-            let length = (packed >> 7) & 0x7F;
-            let stride = ((packed >> 6) & 1) + 1;
+        let idx = if off < slice.len() {
+            let packed = slice[off] as u32;
+            let len_m1 = (packed >> 7) & 0x7F;
+            let stride_bit = (packed >> 6) & 1;
             let end = (page << PAGE_BITS) | (packed & PAGE_MASK);
-            let start = end - (length - 1) * stride;
-            if cp < start || (stride == 2 && ((cp - start) & 1) != 0) {
-                None
-            } else {
-                let delta = (packed as i32) >> 14;
-                char::from_u32((cp as i64 + delta as i64) as u32)
+            let run_start = end - (len_m1 << stride_bit);
+            if cp < run_start || ((cp - run_start) & stride_bit) != 0 {
+                read += c_len;
+                continue;
             }
+            lo + off
         } else {
-            None
-        };
-        let Some(fc) = folded else {
-            // No run covers `cp` — unchanged, keep scanning without copying.
             read += c_len;
             continue;
         };
-        // A real change (a covered `cp` always folds to `cp + delta != cp`).
-        // Lazily switch to building on the very first one, then flush the
-        // pending unmodified span [flushed, read) in one bulk copy before
-        // emitting the folded bytes.
+        // Load the character's bytes as a little-endian u32, mask off the lanes
+        // past it, add the run's constant byte delta. Over-reading 4 bytes is
+        // safe except within ≤3 bytes of the buffer end; the variable-length
+        // fallback there is far slower (a `memcpy` call per fold), so the fast
+        // path is worth the branch.
+        let raw = if read + 4 <= bytes.len() {
+            u32::from_le_bytes(bytes[read..read + 4].try_into().unwrap())
+        } else {
+            let mut w = [0u8; 4];
+            w[..c_len].copy_from_slice(&bytes[read..read + c_len]);
+            u32::from_le_bytes(w)
+        };
+        let word = raw & (u32::MAX >> ((4 - c_len) * 8));
+        let folded = word.wrapping_add(BYTE_DELTA[idx]);
+        let dest_len = utf8_len((folded & 0xFF) as u8);
         if !building {
-            out.reserve(bytes.len() + 4);
+            // Reserve once for the worst case so the writes below never need a
+            // per-store capacity check. Output is at most 1.5× the input: the
+            // only folds that grow are U+023A/U+023E (2→3 bytes), so every 2
+            // input bytes yield ≤3 output bytes; `+ 4` covers the 4-byte
+            // over-store of the final character.
+            out = Vec::with_capacity(bytes.len() + bytes.len() / 2 + 4);
+            dst = out.as_mut_ptr();
             building = true;
         }
-        if read > flushed {
-            out.extend_from_slice(&bytes[flushed..read]);
+        // SAFETY: the buffer is reserved for the worst-case 1.5× output plus 4
+        // bytes of over-store headroom, so `dst` (the running output length)
+        // plus the 4-byte store stays in bounds for every iteration. `src` and
+        // `dst` are distinct allocations.
+        unsafe {
+            let run = read - flushed;
+            if run != 0 {
+                core::ptr::copy_nonoverlapping(src.add(flushed), dst, run);
+                dst = dst.add(run);
+            }
+            // Store a full 4-byte word, advance only by the real folded length.
+            dst.cast::<u32>().write_unaligned(folded.to_le());
+            dst = dst.add(dest_len);
         }
-        out.extend_from_slice(fc.encode_utf8(&mut buf).as_bytes());
         read += c_len;
         flushed = read;
     }
@@ -279,8 +320,28 @@ fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
         // Nothing folded — return the original buffer with no extra copy.
         return bytes;
     }
-    out.extend_from_slice(&bytes[flushed..]);
+    // SAFETY: the trailing unmodified run fits in the reserved buffer; `dst`
+    // minus the base pointer is the total number of bytes written.
+    unsafe {
+        let tail = bytes.len() - flushed;
+        core::ptr::copy_nonoverlapping(src.add(flushed), dst, tail);
+        dst = dst.add(tail);
+        out.set_len(dst as usize - out.as_ptr() as usize);
+    }
     out
+}
+
+/// Number of bytes in the UTF-8 sequence whose lead byte is `lead`.
+///
+/// The length only depends on the top 4 bits of the lead byte, so the 16
+/// possible lengths are packed one-nibble-each into a `u64` lookup constant
+/// (`0x0..7` ASCII → 1; `0x8..0xB` continuation → 1, never a valid lead;
+/// `0xC/0xD` → 2; `0xE` → 3; `0xF` → 4). The length is then a single shift and
+/// mask rather than a comparison chain.
+#[inline]
+pub fn utf8_len(lead: u8) -> usize {
+    const UTF8_LEN_BY_LEAD: u64 = 0x4322_1111_1111_1111;
+    ((UTF8_LEN_BY_LEAD >> (4 * (lead >> 4))) & 0xF) as usize
 }
 
 /// Number of distinct code points with a simple fold.
@@ -292,7 +353,11 @@ pub const fn num_fold_entries() -> u32 {
 /// size-budget test.
 #[cfg(test)]
 const fn table_size_bytes() -> usize {
-    PAGE_BITMAP.len() * 8 + POPCNT_SAMPLES.len() + PAGE_OFFSET.len() + RUN_DATA.len() * 4
+    PAGE_BITMAP.len() * 8
+        + POPCNT_SAMPLES.len()
+        + PAGE_OFFSET.len()
+        + RUN_DATA.len() * 2
+        + BYTE_DELTA.len() * 4
 }
 
 // ---- Paged bitmap lookup ------------------------------------------------
@@ -307,11 +372,10 @@ const fn table_size_bytes() -> usize {
 // masked popcount. `PAGE_OFFSET[j] .. PAGE_OFFSET[j+1]` is the slice of
 // `RUN_DATA` belonging to the `j`-th populated page, sorted by end-low.
 //
-// Each `RUN_DATA[i]` is a packed u32:
+// Each `RUN_DATA[i]` is a packed u16 (the fold delta lives in `BYTE_DELTA[i]`):
 //   bits  0..6   end & PAGE_MASK   (used by the within-page linear scan)
 //   bit   6      stride - 1
-//   bits  7..14  length
-//   bits 14..32  delta (signed, sign-extended via `as i32 >> 14`)
+//   bits  7..14  length - 1
 
 /// Number of populated pages strictly before `page`.
 #[inline]
@@ -324,12 +388,12 @@ fn popcount_up_to(page: u32) -> u32 {
 }
 
 /// Smallest run with `end >= cp` *within `cp`'s own page*, or `None` if the
-/// page has no intervals or none of its ends is `>= cp`. Returns the packed
-/// `RUN_DATA` entry plus the run's full inclusive `end` code point. Because
-/// intervals are split at page boundaries, this is also the only possible run
-/// that could contain `cp` — no cross-page scan is ever needed.
+/// page has no intervals or none of its ends is `>= cp`. Returns the absolute
+/// `RUN_DATA`/`BYTE_DELTA` index of the run plus its full inclusive `end` code
+/// point. Because intervals are split at page boundaries, this is also the only
+/// possible run that could contain `cp` — no cross-page scan is ever needed.
 #[inline]
-fn successor(cp: u32) -> Option<(u32, u32)> {
+fn successor(cp: u32) -> Option<(usize, u32)> {
     let page = cp >> PAGE_BITS;
     let low_v = cp & PAGE_MASK;
 
@@ -347,10 +411,10 @@ fn successor(cp: u32) -> Option<(u32, u32)> {
     // Within-slot linear scan: intervals share a common high prefix, so the
     // right one is the first end-low (bits 0..6 of the packed run) that is
     // ≥ `low_v`. Slots hold at most 30 entries and ~3.8 on average; the scan
-    // is branch-predictable and reads sequential u32s.
+    // is branch-predictable and reads sequential u16s.
     let slice = &RUN_DATA[lo..hi];
     let mut off = 0;
-    while off < slice.len() && (slice[off] & PAGE_MASK) < low_v {
+    while off < slice.len() && (slice[off] as u32 & PAGE_MASK) < low_v {
         off += 1;
     }
     if off >= slice.len() {
@@ -358,9 +422,8 @@ fn successor(cp: u32) -> Option<(u32, u32)> {
         // span slots, cp is past every interval and so doesn't fold.
         return None;
     }
-    let packed = slice[off];
-    let end = (page << PAGE_BITS) | (packed & PAGE_MASK);
-    Some((packed, end))
+    let end = (page << PAGE_BITS) | (slice[off] as u32 & PAGE_MASK);
+    Some((lo + off, end))
 }
 
 #[cfg(test)]
@@ -428,10 +491,11 @@ mod tests {
 
     #[test]
     fn table_is_compact() {
-        // Should be well under 1.4 KB.
+        // The parallel BYTE_DELTA table (one u32 per run) roughly doubles the
+        // run storage in exchange for a decode/encode-free fold path.
         let sz = table_size_bytes();
         eprintln!("table size: {sz} bytes for {} entries", num_fold_entries());
-        assert!(sz < 1300, "table size {sz} exceeds 1300 B budget");
+        assert!(sz < 2400, "table size {sz} exceeds 2400 B budget");
     }
 
     #[test]

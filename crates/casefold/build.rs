@@ -26,6 +26,7 @@ fn main() {
     let folds = parse_folds(&fs::read_to_string(DATA).expect("read CaseFolding.txt"));
     let runs = build_runs(&folds);
     let runs = split_runs_at_page_boundary(&runs);
+    let runs = split_runs_at_byte_delta(&runs);
     let out = emit_tables(&folds, &runs);
 
     let out_path: PathBuf = env::var_os("OUT_DIR").expect("OUT_DIR is set during build").into();
@@ -154,6 +155,63 @@ fn split_runs_at_page_boundary(runs: &[Run]) -> Vec<Run> {
     out
 }
 
+/// Little-endian `u32` value of the UTF-8 encoding of `cp` (1–4 bytes, the
+/// unused high bytes left zero). This is the number a little-endian load of
+/// the character's bytes produces, and the basis for the raw byte-delta fold.
+fn utf8_le(cp: u32) -> u32 {
+    if cp < 0x80 {
+        cp
+    } else if cp < 0x800 {
+        (0xC0 | (cp >> 6)) | ((0x80 | (cp & 0x3F)) << 8)
+    } else if cp < 0x10000 {
+        (0xE0 | (cp >> 12)) | ((0x80 | ((cp >> 6) & 0x3F)) << 8) | ((0x80 | (cp & 0x3F)) << 16)
+    } else {
+        (0xF0 | (cp >> 18))
+            | ((0x80 | ((cp >> 12) & 0x3F)) << 8)
+            | ((0x80 | ((cp >> 6) & 0x3F)) << 16)
+            | ((0x80 | (cp & 0x3F)) << 24)
+    }
+}
+
+/// The constant added to a character's little-endian byte word to fold it:
+/// `utf8_le(cp + delta) - utf8_le(cp)`. Folding then becomes a masked load,
+/// one `wrapping_add`, and a write of the result's bytes — no decode/encode.
+fn byte_delta(cp: u32, delta: i32) -> u32 {
+    let folded = (cp as i64 + delta as i64) as u32;
+    utf8_le(folded).wrapping_sub(utf8_le(cp))
+}
+
+/// Split each (already page-split) run wherever the byte-delta changes between
+/// consecutive elements, so every emitted run has a single constant byte-delta
+/// (stored in `BYTE_DELTA`). This happens when a fold's destination crosses a
+/// 64-cp boundary (the low-6-bit field wraps) or changes UTF-8 length; only a
+/// handful of runs split. Codepoint delta, stride and per-piece length are
+/// preserved, so the per-`char` lookup is unaffected.
+fn split_runs_at_byte_delta(runs: &[Run]) -> Vec<Run> {
+    let mut out = Vec::new();
+    for r in runs {
+        let stride = r.stride as u32;
+        let length = r.length as u32;
+        let mut i = 0u32;
+        while i < length {
+            let sub_start = r.start + i * stride;
+            let bd = byte_delta(sub_start, r.delta);
+            let mut j = i + 1;
+            while j < length && byte_delta(r.start + j * stride, r.delta) == bd {
+                j += 1;
+            }
+            out.push(Run {
+                start: sub_start,
+                stride: r.stride,
+                length: (j - i) as u8,
+                delta: r.delta,
+            });
+            i = j;
+        }
+    }
+    out
+}
+
 fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
     let n = runs.len() as u32;
 
@@ -205,51 +263,57 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
     assert_eq!(cumul as usize, num_populated_pages);
     assert!(cumul <= 255, "POPCNT_SAMPLES must fit in u8");
 
-    // Per-run packed u32 layout (one entry per run, parallel to PAGE_OFFSET
-    // which slices RUN_DATA into per-page groups):
+    // Per-run packed u16 layout (one entry per run, parallel to PAGE_OFFSET
+    // which slices RUN_DATA into per-page groups, and to BYTE_DELTA which holds
+    // the actual fold delta):
     //
     //   bits  0..6   end_low = end & PAGE_MASK                 (6 bits)
     //   bit   6      stride - 1                                (1 bit, 0 or 1)
-    //   bits  7..14  length                                    (7 bits, 1..=127)
-    //   bits 14..32  delta, sign-extended                      (18 bits, ±131072)
+    //   bits  7..14  length - 1                                (7 bits, 0..=126)
     //
-    // 18-bit signed delta range easily covers the largest Unicode simple-fold
-    // delta (max |δ| in the data is 42561). The single-array layout lets the
-    // within-page linear scan read the next entry's `end_low` with the same
-    // indexed load that decodes the run on a hit — one 64-byte cache line
-    // covers 16 packed runs.
-    let mut run_data = Vec::<u32>::with_capacity(runs.len());
+    // The codepoint delta is *not* stored here — both fold paths apply the
+    // little-endian `BYTE_DELTA` instead — so a run packs into 14 bits (a u16).
+    // `length - 1` and `stride - 1` are pre-decremented so the within-page
+    // membership test computes `start = end - ((length-1) << (stride-1))` with
+    // a shift instead of a multiply. The single-array layout lets the scan read
+    // the next entry's `end_low` from the same load that decodes the run on a
+    // hit — one 64-byte cache line covers 32 packed runs.
+    let mut run_data = Vec::<u16>::with_capacity(runs.len());
     let mut max_abs_delta: i32 = 0;
-    for (i, r) in runs.iter().enumerate() {
+    for r in runs.iter() {
         assert!(r.length >= 1 && r.length <= 127);
         assert!(r.stride == 1 || r.stride == 2);
-        let end_low = ends[i] & PAGE_MASK;
-        let stride_bit = (r.stride as u32) - 1;
-        let length = r.length as u32;
-        assert!(
-            (-131072..=131071).contains(&r.delta),
-            "delta {} for run {} does not fit in 18 signed bits",
-            r.delta,
-            i,
-        );
+        let end_low = (r.start + (r.length as u32 - 1) * (r.stride as u32)) & PAGE_MASK;
+        let stride_bit = (r.stride as u16) - 1;
+        let length_m1 = (r.length as u16) - 1;
         max_abs_delta = max_abs_delta.max(r.delta.abs());
-        let delta_field = (r.delta as u32) & 0x3FFFF; // low 18 bits
-        let packed = end_low | (stride_bit << 6) | (length << 7) | (delta_field << 14);
+        let packed = (end_low as u16) | (stride_bit << 6) | (length_m1 << 7);
         run_data.push(packed);
     }
 
+    // Parallel little-endian byte deltas, one per run. Each run was split so
+    // its byte-delta is constant, so we read it off the run's start. The byte
+    // path folds with `from_le_bytes(masked) + BYTE_DELTA[idx]` — no decode.
+    let byte_deltas: Vec<u32> = runs.iter().map(|r| byte_delta(r.start, r.delta)).collect();
+    let max_abs_byte_delta = byte_deltas
+        .iter()
+        .map(|&b| (b as i32).unsigned_abs())
+        .max()
+        .unwrap_or(0);
+
     // Sanity: size accounting (printed as build warnings for visibility).
     let index_bytes = page_bitmap.len() * 8 + popcnt_samples.len() + page_offset.len();
-    let total = index_bytes + run_data.len() * 4;
+    let total = index_bytes + run_data.len() * 2 + byte_deltas.len() * 4;
     if env::var_os("CASEFOLD_BUILD_INFO").is_some() {
         println!(
-            "cargo:warning=casefold table: {} fold entries, {} runs, {} populated pages, {} bytes total ({:.2} bits/entry), max |delta| = {}",
+            "cargo:warning=casefold table: {} fold entries, {} runs, {} populated pages, {} bytes total ({:.2} bits/entry), max |delta| = {}, max |byte_delta| = {}",
             folds.len(),
             n,
             num_populated_pages,
             total,
             total as f64 * 8.0 / folds.len() as f64,
             max_abs_delta,
+            max_abs_byte_delta,
         );
     }
 
@@ -269,9 +333,25 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
     emit_u64_array(&mut s, "PAGE_BITMAP", &page_bitmap);
     emit_u8_array(&mut s, "POPCNT_SAMPLES", &popcnt_samples);
     emit_u8_array(&mut s, "PAGE_OFFSET", &page_offset);
-    emit_u32_array(&mut s, "RUN_DATA", &run_data);
+    emit_u16_array(&mut s, "RUN_DATA", &run_data);
+    emit_u32_array(&mut s, "BYTE_DELTA", &byte_deltas);
 
     s
+}
+
+fn emit_u16_array(s: &mut String, name: &str, data: &[u16]) {
+    s.push_str(&format!(
+        "pub(crate) static {name}: [u16; {}] = [\n",
+        data.len()
+    ));
+    for chunk in data.chunks(12) {
+        s.push_str("    ");
+        for v in chunk {
+            s.push_str(&format!("0x{:04x}, ", v));
+        }
+        s.push('\n');
+    }
+    s.push_str("];\n\n");
 }
 
 fn emit_u64_array(s: &mut String, name: &str, data: &[u64]) {
