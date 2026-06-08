@@ -167,7 +167,10 @@ fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
         let (page, c_len) = if lead < 0xE0 {
             ((lead & 0x1F) as u32, 2usize)
         } else if lead < 0xF0 {
-            ((((lead & 0x0F) as u32) << 6) | (bytes[read + 1] & 0x3F) as u32, 3)
+            (
+                (((lead & 0x0F) as u32) << 6) | (bytes[read + 1] & 0x3F) as u32,
+                3,
+            )
         } else {
             (
                 (((lead & 0x07) as u32) << 12)
@@ -361,7 +364,8 @@ mod tests {
             if status != "C" && status != "S" {
                 continue;
             }
-            let target = u32::from_str_radix(mapping.split_whitespace().next().unwrap(), 16).unwrap();
+            let target =
+                u32::from_str_radix(mapping.split_whitespace().next().unwrap(), 16).unwrap();
             out.insert(cp, target);
         }
         out
@@ -417,10 +421,7 @@ mod tests {
             "mixed größe text".as_bytes(),
         );
         // ASCII prefix, then a *shrinking* fold inside the tail.
-        assert_eq!(
-            fold_into_bytes("LORD \u{212A}elvin".into()),
-            b"lord kelvin",
-        );
+        assert_eq!(fold_into_bytes("LORD \u{212A}elvin".into()), b"lord kelvin",);
         // ASCII prefix, then a *growing* fold.
         assert_eq!(
             fold_into_bytes("abc\u{023A}".into()),
@@ -477,15 +478,9 @@ mod tests {
         // U+023A → U+2C65 and U+023E → U+2C66, both 2 B → 3 B.
 
         // U+023A 'Ⱥ' is 2 bytes, folds to U+2C65 'ⱥ' = 3 bytes.
-        assert_eq!(
-            fold_into_bytes("\u{023A}".into()),
-            "\u{2C65}".as_bytes()
-        );
+        assert_eq!(fold_into_bytes("\u{023A}".into()), "\u{2C65}".as_bytes());
         // U+023E 'Ⱦ' is 2 bytes, folds to U+2C66 'ⱦ' = 3 bytes.
-        assert_eq!(
-            fold_into_bytes("\u{023E}".into()),
-            "\u{2C66}".as_bytes()
-        );
+        assert_eq!(fold_into_bytes("\u{023E}".into()), "\u{2C66}".as_bytes());
 
         // Each one mid-string, with mixed length-preserving context on both
         // sides so that the bail-out path also copies a prefix that already

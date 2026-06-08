@@ -24,7 +24,10 @@ fn to_lowercase_into_bytes(s: String) -> Vec<u8> {
 /// optimizations are (not) being applied.
 #[inline]
 fn chars_to_lowercase_into_bytes(s: String) -> Vec<u8> {
-    s.chars().flat_map(|c| c.to_lowercase()).collect::<String>().into_bytes()
+    s.chars()
+        .flat_map(|c| c.to_lowercase())
+        .collect::<String>()
+        .into_bytes()
 }
 
 /// `str::to_ascii_lowercase` baseline: byte-only, fast but ASCII-only
@@ -136,13 +139,16 @@ fn bench_conversion(c: &mut Criterion, name: &str, input: &str) {
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes(input.len() as u64));
 
-    group.bench_function(BenchmarkId::new("Casefold::simple_fold", input.len()), |b| {
-        b.iter_batched(
-            || input.to_string(),
-            |s| simple_fold(black_box(s)),
-            criterion::BatchSize::SmallInput,
-        );
-    });
+    group.bench_function(
+        BenchmarkId::new("Casefold::simple_fold", input.len()),
+        |b| {
+            b.iter_batched(
+                || input.to_string(),
+                |s| simple_fold(black_box(s)),
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
 
     let fold_map = reference_map_utf8();
     group.bench_function(

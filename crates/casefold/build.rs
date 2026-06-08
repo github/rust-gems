@@ -29,7 +29,9 @@ fn main() {
     let runs = split_runs_at_byte_delta(&runs);
     let out = emit_tables(&folds, &runs);
 
-    let out_path: PathBuf = env::var_os("OUT_DIR").expect("OUT_DIR is set during build").into();
+    let out_path: PathBuf = env::var_os("OUT_DIR")
+        .expect("OUT_DIR is set during build")
+        .into();
     fs::write(out_path.join("table.rs"), out).expect("write table.rs");
 }
 
@@ -307,8 +309,7 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
 
     // Sanity: size accounting (printed as build warnings for visibility).
     let index_bytes = page_bitmap.len() * 8 + popcnt_samples.len() + page_offset.len();
-    let total =
-        index_bytes + run_end_low.len() + run_start_stride.len() + byte_deltas.len() * 4;
+    let total = index_bytes + run_end_low.len() + run_start_stride.len() + byte_deltas.len() * 4;
     if env::var_os("CASEFOLD_BUILD_INFO").is_some() {
         println!(
             "cargo:warning=casefold table: {} fold entries, {} runs, {} populated pages, {} bytes total ({:.2} bits/entry), max |delta| = {}, max |byte_delta| = {}",
