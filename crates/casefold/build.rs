@@ -223,7 +223,7 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
         .iter()
         .map(|r| r.start + (r.length as u32 - 1) * (r.stride as u32))
         .collect();
-    let last_covered = *ends.last().unwrap();
+    let last_covered = *ends.last().expect("at least one run is required");
 
     // Pages are 64-cp blocks. After `split_runs_at_page_boundary` every run
     // lives in a single page, so the low 6 bits of `end` uniquely identify
