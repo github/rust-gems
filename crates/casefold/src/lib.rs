@@ -127,7 +127,10 @@ fn fold_into_bytes(s: String) -> Vec<u8> {
     // `position`/memchr) and hand off to the UTF-8 path from there — the
     // ASCII prefix is already lowercased and folding is idempotent on
     // lower-case ASCII, so skipping it is purely an optimization.
-    let first_non_ascii = bytes.iter().position(|&b| b & 0x80 != 0).unwrap();
+    let first_non_ascii = bytes
+        .iter()
+        .position(|&b| b & 0x80 != 0)
+        .expect("a non-ASCII byte exists (the high-bit accumulator was set)");
     fold_non_ascii_tail(bytes, first_non_ascii)
 }
 
@@ -211,7 +214,7 @@ fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
         // fallback there is far slower (a `memcpy` call per fold), so the fast
         // path is worth the branch.
         let raw = if read + 4 <= bytes.len() {
-            u32::from_le_bytes(bytes[read..read + 4].try_into().unwrap())
+            u32::from_le_bytes(bytes[read..read + 4].try_into().expect("4-byte slice"))
         } else {
             let mut w = [0u8; 4];
             w[..c_len].copy_from_slice(&bytes[read..read + c_len]);
@@ -329,8 +332,10 @@ fn scan_end_low(lo: usize, n: usize, low_v: u8) -> usize {
     let bcast = (low_v as u64).wrapping_mul(ONES);
     let mut base = 0;
     while base < n {
-        // `RUN_END_LOW` is padded by 8 bytes so this read is always in bounds.
-        let chunk = u64::from_le_bytes(RUN_END_LOW[lo + base..lo + base + 8].try_into().unwrap());
+        // `RUN_END_LOW` is padded by 8 bytes (build.rs) so this read is always
+        // in bounds; the slice length is statically 8.
+        let chunk =
+            u64::from_le_bytes(RUN_END_LOW[lo + base..lo + base + 8].try_into().expect("8-byte slice"));
         // `(b | 0x80) - low_v` keeps its high bit iff `b >= low_v` (no
         // cross-lane borrow). The first set lane is the first run `>= low_v`.
         let ge = (chunk | HIGH).wrapping_sub(bcast) & HIGH;
@@ -353,19 +358,23 @@ mod tests {
         let text = fs::read_to_string("data/CaseFolding.txt").expect("CaseFolding.txt");
         let mut out = HashMap::new();
         for raw in text.lines() {
-            let line = raw.split('#').next().unwrap().trim();
+            let line = raw.split('#').next().expect("split yields at least one item").trim();
             if line.is_empty() {
                 continue;
             }
             let mut parts = line.split(';').map(|s| s.trim());
-            let cp = u32::from_str_radix(parts.next().unwrap(), 16).unwrap();
-            let status = parts.next().unwrap();
-            let mapping = parts.next().unwrap();
+            let cp = u32::from_str_radix(parts.next().expect("code point field"), 16)
+                .expect("code point is hex");
+            let status = parts.next().expect("status field");
+            let mapping = parts.next().expect("mapping field");
             if status != "C" && status != "S" {
                 continue;
             }
-            let target =
-                u32::from_str_radix(mapping.split_whitespace().next().unwrap(), 16).unwrap();
+            let target = u32::from_str_radix(
+                mapping.split_whitespace().next().expect("mapping has a target"),
+                16,
+            )
+            .expect("mapping is hex");
             out.insert(cp, target);
         }
         out
@@ -378,7 +387,7 @@ mod tests {
         for c in s.chars() {
             let cp = c as u32;
             let folded = r.get(&cp).copied().unwrap_or(cp);
-            out.push(char::from_u32(folded).unwrap());
+            out.push(char::from_u32(folded).expect("reference fold is a valid char"));
         }
         out.into_bytes()
     }
@@ -522,7 +531,7 @@ mod tests {
             if (0xD800..0xE000).contains(&cp) {
                 continue; // surrogates aren't valid chars
             }
-            input.push(char::from_u32(cp).unwrap());
+            input.push(char::from_u32(cp).expect("cp is a valid non-surrogate char"));
         }
         let expected = fold_oracle(&r, &input);
         assert_eq!(fold_into_bytes(input), expected);
