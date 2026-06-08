@@ -1,11 +1,17 @@
-//! Benchmarks for `casefold::fold_into_bytes`, comparing it against the
-//! straightforward `str::to_lowercase` baseline (and the per-char
-//! `c.to_lowercase()` flat-map variant) on several representative inputs.
+//! Benchmarks for `casefold::simple_fold`, comparing it against several
+//! baselines on representative inputs. Each input is run through six variants:
+//!
+//! - `casefold::simple_fold` — the implementation under test.
+//! - `HashMap::fold_into_bytes` — a HashMap-based case fold over raw UTF-8.
+//! - `str::to_lowercase` — straightforward Unicode lowercasing baseline.
+//! - `chars().flat_map(to_lowercase)` — the per-char flat-map variant.
+//! - `str::to_ascii_lowercase` — byte-only, ASCII-only baseline.
+//! - `simd_normalizer::casefold` — another correct case-folder.
 //!
 //! Note: `to_lowercase` performs Unicode *lowercasing*, not case folding —
 //! the two agree on ASCII and on most BMP letters but diverge in a handful of
-//! cases (e.g. `Σ` final-sigma context, `İ` → `i\u{0307}`). This benchmark is
-//! about throughput on equivalent workloads, not output equality.
+//! cases (e.g. `Σ` final-sigma context, `İ` → `i\u{0307}`). These benchmarks
+//! are about throughput on equivalent workloads, not output equality.
 
 use casefold::{simple_fold, utf8_len};
 use casefold_benchmarks::{hashmap_fold_utf8, reference_map_utf8, FoldHashMap};

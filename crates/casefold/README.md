@@ -32,7 +32,7 @@ Unicode 16.0 defines 1484 simple-fold mappings. Common ways to store them:
 | Representation                                        | Size        |
 |-------------------------------------------------------|-------------|
 | Naïve `[(u32, u32); 1484]`                            | ~11.6 KB    |
-| `regex-syntax::unicode_tables::case_folding_simple`   | ~67 KB src  |
+| `regex-syntax::unicode_tables::case_folding_simple`   | ~70 KB      |
 | Go `unicode.SimpleFold` (orbit + ASCII + ranges)      | ~7.3 KB     |
 | **This crate (paged bitmap + packed runs)**           | **1776 B**  |
 
