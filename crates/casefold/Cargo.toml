@@ -1,0 +1,14 @@
+[package]
+name = "casefold"
+authors = ["The blackbird team <support@github.com>"]
+version = "0.1.0"
+edition = "2021"
+description = "Compact Unicode simple case-folding via a paged bitmap + run-length encoding (≈1 KB table)."
+repository = "https://github.com/github/rust-gems"
+license = "MIT"
+keywords = ["unicode", "casefold", "case-folding", "compact", "bitmap"]
+categories = ["text-processing", "internationalization", "compression"]
+
+[dependencies]
+
+[build-dependencies]

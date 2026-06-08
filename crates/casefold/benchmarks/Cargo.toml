@@ -1,0 +1,20 @@
+[package]
+name = "casefold-benchmarks"
+edition = "2021"
+
+[lib]
+path = "lib.rs"
+test = false
+
+[[bench]]
+name = "conversion"
+path = "conversion.rs"
+harness = false
+test = false
+
+[dependencies]
+casefold = { path = ".." }
+criterion = "0.8"
+foldhash = "0.1"
+rand = "0.10"
+simd-normalizer = "0.1"
