@@ -39,7 +39,7 @@
 //!    hit). The membership test compares `cp & 0x3F` directly — no code-point
 //!    reconstruction. The fold itself is a little-endian byte delta stored in
 //!    the parallel `BYTE_DELTA` table (see idea 5).
-//! 4. **Page-precision byte-level reject.** The bulk [`fold_into_bytes`] path
+//! 4. **Page-precision byte-level reject.** The bulk [`simple_fold`] path
 //!    probes `PAGE_BITMAP` straight from the first one or two UTF-8 bytes —
 //!    `cp >> 6` (the page index) is fully determined by `b0` (2-byte) or
 //!    `b0,b1` (3-byte); only the final continuation byte holds the within-page
@@ -59,9 +59,9 @@
 //! # Example
 //!
 //! ```
-//! use casefold::fold_into_bytes;
-//! assert_eq!(fold_into_bytes("Hello, WORLD!".to_string()), b"hello, world!");
-//! assert_eq!(fold_into_bytes("ÜBER".to_string()), "über".as_bytes());
+//! use casefold::simple_fold;
+//! assert_eq!(simple_fold("Hello, WORLD!".to_string()), "hello, world!");
+//! assert_eq!(simple_fold("ÜBER".to_string()), "über");
 //! ```
 
 #![deny(missing_docs)]
@@ -72,8 +72,8 @@ mod table {
 
 use table::*;
 
-/// Consumes `s` and returns its simple-fold form as a `Vec<u8>`. The input's
-/// heap buffer is handed back untouched whenever folding changes no bytes —
+/// Consumes `s` and returns its simple case-folded form as a `String`. The
+/// input's heap buffer is reused untouched whenever folding changes no bytes —
 /// that covers pure-ASCII / already-lowercase input (folded in place) *and*
 /// any input whose multibyte characters never fold (CJK, Hangul, Kana,
 /// Arabic, Hebrew, Indic, symbols, …). A fresh buffer is allocated only once
@@ -83,19 +83,30 @@ use table::*;
 /// Folds may shrink (e.g. U+212A KELVIN SIGN is 3 bytes but folds to `k` =
 /// 1 byte) or grow (e.g. U+023A `Ⱥ` is 2 bytes but folds to U+2C65 `ⱥ` =
 /// 3 bytes), so in-place rewriting isn't possible in general — but inputs that
-/// don't fold at all skip the second buffer entirely. The returned bytes are
-/// always valid UTF-8.
+/// don't fold at all skip the second buffer entirely.
+///
+/// Only **simple** (1-to-1) folds are applied; multi-character folds such as
+/// `ß` → `ss` and Turkic locale folds are left unchanged.
 ///
 /// # Example
 ///
 /// ```
-/// use casefold::fold_into_bytes;
-/// assert_eq!(fold_into_bytes("Hello, WORLD!".to_string()), b"hello, world!");
-/// assert_eq!(fold_into_bytes("ÜBER".to_string()), "über".as_bytes());
+/// use casefold::simple_fold;
+/// assert_eq!(simple_fold("Hello, WORLD!".to_string()), "hello, world!");
+/// assert_eq!(simple_fold("ÜBER".to_string()), "über");
 /// // Length-changing fold (U+212A KELVIN SIGN → U+006B, 3 bytes → 1 byte):
-/// assert_eq!(fold_into_bytes("\u{212A}elvin".to_string()), b"kelvin");
+/// assert_eq!(simple_fold("\u{212A}elvin".to_string()), "kelvin");
 /// ```
-pub fn fold_into_bytes(s: String) -> Vec<u8> {
+pub fn simple_fold(s: String) -> String {
+    // SAFETY: `fold_into_bytes` only lowercases ASCII bytes in place and
+    // re-encodes whole characters through the fold table, so its output is
+    // always valid UTF-8 (see the exhaustive round-trip test).
+    unsafe { String::from_utf8_unchecked(fold_into_bytes(s)) }
+}
+
+/// Byte-level core of [`simple_fold`]. Returns the fold as a `Vec<u8>` that is
+/// always valid UTF-8; see [`simple_fold`] for the allocation behavior.
+fn fold_into_bytes(s: String) -> Vec<u8> {
     let mut bytes = s.into_bytes();
     // Tier 1 — full straight-through pass: lowercase every ASCII A..Z byte
     // in place (a no-op on any non-ASCII byte, since `b.wrapping_sub(b'A')`
@@ -387,6 +398,18 @@ mod tests {
         assert_eq!(fold_into_bytes(String::new()), b"");
         assert_eq!(fold_into_bytes("Hello, WORLD!".into()), b"hello, world!");
         assert_eq!(fold_into_bytes("abc 123 XYZ".into()), b"abc 123 xyz");
+    }
+
+    #[test]
+    fn simple_fold_returns_string() {
+        // Public `String` wrapper: ASCII, length-preserving, shrinking and
+        // growing folds all yield valid UTF-8.
+        assert_eq!(simple_fold("Hello, WORLD!".to_string()), "hello, world!");
+        assert_eq!(simple_fold("ÜBER Größe".to_string()), "über größe");
+        assert_eq!(simple_fold("\u{212A}elvin".to_string()), "kelvin");
+        assert_eq!(simple_fold("abc\u{023A}".to_string()), "abc\u{2C65}");
+        // Non-folding multibyte content is returned unchanged.
+        assert_eq!(simple_fold("漢字 שלום".to_string()), "漢字 שלום");
     }
 
     #[test]

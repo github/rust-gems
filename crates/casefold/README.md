@@ -2,26 +2,26 @@
 
 A compact Unicode simple case-folding table for Rust.
 
-`fold_into_bytes(s: String) -> Vec<u8>` maps a string to its lower-case fold
+`simple_fold(s: String) -> String` maps a string to its lower-case fold
 form, as defined by the Unicode [CaseFolding.txt][cf] data file restricted to
 the **simple** (1-to-1) folds (statuses `C` and `S`). Full multi-character
 folds (`F`, e.g. `ß` → `ss`) and Turkic locale folds (`T`) are not supported.
 
 [cf]: https://www.unicode.org/Public/UCD/latest/ucd/CaseFolding.txt
 
-`fold_into_bytes` consumes a `String` and returns a `Vec<u8>`. ASCII is
-lowercased in place via the string's existing heap allocation (a single
-auto-vectorized pass over the bytes), and the multibyte tail is scanned for the
-first character that actually folds; if none does, the original allocation is
-returned untouched — so text whose multibyte content never folds (CJK, Kana,
-Arabic, Hebrew, …) pays nothing. A fresh buffer is allocated only once a real
-fold is found, since simple folds can change UTF-8 length (e.g. U+212A KELVIN
-SIGN → `k`, or U+023A Ⱥ → U+2C65 ⱥ).
+`simple_fold` consumes a `String` and returns a `String` (the fold is always
+valid UTF-8). ASCII is lowercased in place via the string's existing heap
+allocation (a single auto-vectorized pass over the bytes), and the multibyte
+tail is scanned for the first character that actually folds; if none does, the
+original allocation is returned untouched — so text whose multibyte content
+never folds (CJK, Kana, Arabic, Hebrew, …) pays nothing. A fresh buffer is
+allocated only once a real fold is found, since simple folds can change UTF-8
+length (e.g. U+212A KELVIN SIGN → `k`, or U+023A Ⱥ → U+2C65 ⱥ).
 
 ```rust
-use casefold::fold_into_bytes;
-assert_eq!(fold_into_bytes("Hello, WORLD!".to_string()), b"hello, world!");
-assert_eq!(fold_into_bytes("ÜBER".to_string()), "über".as_bytes());
+use casefold::simple_fold;
+assert_eq!(simple_fold("Hello, WORLD!".to_string()), "hello, world!");
+assert_eq!(simple_fold("ÜBER".to_string()), "über");
 ```
 
 ## Why does this crate exist?
@@ -71,7 +71,7 @@ query, and let the bulk byte path fold without ever decoding a character:
 4. **The bulk path rejects whole characters from their first bytes.** For a
    2-/3-byte UTF-8 sequence the page index `cp >> 6` is fully determined by
    the first one or two bytes — only the final continuation byte carries the
-   within-page offset `cp & 0x3F`. So `fold_into_bytes` probes `PAGE_BITMAP`
+   within-page offset `cp & 0x3F`. So `simple_fold` probes `PAGE_BITMAP`
    straight from `b0` (and `b1`); a clear page bit copies the character
    verbatim without assembling `cp` or scanning a run. This skips fold-free
    scripts (CJK, Hangul, Kana, Arabic, Hebrew, Indic) *and* the empty 64-cp
@@ -107,7 +107,7 @@ The data file is parsed at build time by `build.rs`, which emits the packed
 
 ### Lookup algorithm
 
-`fold_into_bytes` folds one multibyte character at byte offset `read` like so
+`simple_fold` folds one multibyte character at byte offset `read` like so
 (ASCII is already lowercased by the in-place tier-1 pass, so it never reaches
 here):
 
@@ -155,7 +155,7 @@ Every access touches the bitmap (248 B), the popcount samples (32 B),
 
 ## Performance
 
-`fold_into_bytes(s: String) -> Vec<u8>` consumes the input `String` and
+`simple_fold(s: String) -> String` consumes the input `String` and
 auto-vectorizes a single in-place pass that lowercases ASCII and detects
 whether any multibyte sequence is present. It then scans the multibyte tail
 and **hands back the original allocation untouched unless a character actually
@@ -173,7 +173,7 @@ Throughput on an Apple M-series machine (criterion medians), against the SIMD
 `simd-normalizer` crate, the same byte path backed by a `HashMap` instead of
 the table, and the standard library:
 
-| Workload (input size) | `fold_into_bytes` | `simd_normalizer` | HashMap (byte path) | `str::to_lowercase` | `chars().flat_map` | `to_ascii_lowercase`† |
+| Workload (input size) | `simple_fold` | `simd_normalizer` | HashMap (byte path) | `str::to_lowercase` | `chars().flat_map` | `to_ascii_lowercase`† |
 |---|--:|--:|--:|--:|--:|--:|
 | Pure ASCII (5 700 B)                   | **40.8 GiB/s** |   1.21 GiB/s |  213 MiB/s | 26.1 GiB/s | 383 MiB/s | 21.2 GiB/s |
 | CJK, no folds (8 100 B)                | **2.95 GiB/s** |   1.97 GiB/s |  558 MiB/s | 473 MiB/s  | 369 MiB/s | 22.9 GiB/s |
@@ -188,7 +188,7 @@ perform Unicode *lowercasing*, which is not identical to case folding (they
 diverge on e.g. final-sigma, `İ`, `ß`); this is an equal-workload throughput
 comparison, not an output-equality one.
 
-`fold_into_bytes` leads every workload except all-folding mixed-BMP text,
+`simple_fold` leads every workload except all-folding mixed-BMP text,
 where `simd-normalizer`'s wide-lane SIMD still edges ahead (922 vs 869 MiB/s) —
 though the chunked SWAR run-scan closed most of that gap. Two things stand out:
 

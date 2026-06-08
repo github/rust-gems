@@ -7,7 +7,7 @@
 //! cases (e.g. `Σ` final-sigma context, `İ` → `i\u{0307}`). This benchmark is
 //! about throughput on equivalent workloads, not output equality.
 
-use casefold::{fold_into_bytes, utf8_len};
+use casefold::{simple_fold, utf8_len};
 use casefold_benchmarks::{hashmap_fold_utf8, reference_map_utf8, FoldHashMap};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
@@ -135,10 +135,10 @@ fn bench_conversion(c: &mut Criterion, name: &str, input: &str) {
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes(input.len() as u64));
 
-    group.bench_function(BenchmarkId::new("Casefold::fold_into_bytes", input.len()), |b| {
+    group.bench_function(BenchmarkId::new("Casefold::simple_fold", input.len()), |b| {
         b.iter_batched(
             || input.to_string(),
-            |s| fold_into_bytes(black_box(s)),
+            |s| simple_fold(black_box(s)),
             criterion::BatchSize::SmallInput,
         );
     });
