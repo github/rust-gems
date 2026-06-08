@@ -27,15 +27,18 @@
 //!    load whether `cp`'s page contains any fold run at all. An unset bit is
 //!    a definitive "no fold" — no cross-page search is ever required. Within
 //!    a populated page, a short branch-predictable linear scan over the
-//!    page's slice of `RUN_DATA` (located via `PAGE_OFFSET`) finds the
+//!    page's slice of `RUN_END_LOW` (located via `PAGE_OFFSET`) finds the
 //!    candidate run.
-//! 3. **Per-page run splitting and packed run records.** Any run whose
+//! 3. **Per-page run splitting and split byte records.** Any run whose
 //!    `[start, end]` would straddle a 64-cp boundary is split at the boundary
 //!    during the build, so every run lives in exactly one page (which is what
-//!    makes "empty bit ⇒ no fold" sound). Each run is then a single packed
-//!    `u16` in `RUN_DATA` holding `end_low` (6 b), `stride - 1` (1 b) and
-//!    `length - 1` (7 b); the fold itself is a little-endian byte delta stored
-//!    in the parallel `BYTE_DELTA` table (see idea 5).
+//!    makes "empty bit ⇒ no fold" sound). Because both ends then fit in 6
+//!    bits, a run needs only two bytes: `RUN_END_LOW[i]` (the clean scan key,
+//!    compared byte-to-byte against `cp & 0x3F` with no masking) and
+//!    `RUN_START_STRIDE[i]` (`start_low | (stride−1) << 6`, read only on a
+//!    hit). The membership test compares `cp & 0x3F` directly — no code-point
+//!    reconstruction. The fold itself is a little-endian byte delta stored in
+//!    the parallel `BYTE_DELTA` table (see idea 5).
 //! 4. **Page-precision byte-level reject.** The bulk [`fold_into_bytes`] path
 //!    probes `PAGE_BITMAP` straight from the first one or two UTF-8 bytes —
 //!    `cp >> 6` (the page index) is fully determined by `b0` (2-byte) or
@@ -108,17 +111,18 @@ pub fn simple_fold_non_ascii(c: char) -> char {
     if cp > LAST_COVERED {
         return c;
     }
-    let (idx, end) = match successor(cp) {
+    let idx = match successor(cp) {
         Some(x) => x,
         None => return c,
     };
-    let packed = RUN_DATA[idx] as u32;
-    let len_m1 = (packed >> 7) & 0x7f;
-    let stride_bit = (packed >> 6) & 1;
-    // `start = end - (length - 1) * stride`, computed with a shift since
-    // `stride` is `1 << stride_bit`.
-    let start = end - (len_m1 << stride_bit);
-    if cp < start || ((cp - start) & stride_bit) != 0 {
+    let ss = RUN_START_STRIDE[idx];
+    let start_low = ss & 0x3F;
+    let stride_bit = ss >> 6;
+    // The scan guarantees `cp & 0x3F <= end_low`; the run covers `cp` iff its
+    // low 6 bits are `>= start_low` (and, for stride 2, an even offset). No
+    // code-point reconstruction needed.
+    let low_v = (cp & PAGE_MASK) as u8;
+    if low_v < start_low || ((low_v - start_low) & stride_bit) != 0 {
         return c;
     }
     // Fold with the run's little-endian byte delta: encode `cp`, add the delta,
@@ -250,22 +254,22 @@ fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
             read += c_len;
             continue;
         }
-        let low_v = (bytes[read + c_len - 1] & 0x3F) as u32;
-        let cp = (page << PAGE_BITS) | low_v;
+        let low_v = bytes[read + c_len - 1] & 0x3F;
         let dense = popcount_up_to(page) as usize;
         let lo = PAGE_OFFSET[dense] as usize;
-        let slice = &RUN_DATA[lo..PAGE_OFFSET[dense + 1] as usize];
+        let slice = &RUN_END_LOW[lo..PAGE_OFFSET[dense + 1] as usize];
         let mut off = 0;
-        while off < slice.len() && (slice[off] as u32 & PAGE_MASK) < low_v {
+        while off < slice.len() && slice[off] < low_v {
             off += 1;
         }
         let idx = if off < slice.len() {
-            let packed = slice[off] as u32;
-            let len_m1 = (packed >> 7) & 0x7F;
-            let stride_bit = (packed >> 6) & 1;
-            let end = (page << PAGE_BITS) | (packed & PAGE_MASK);
-            let run_start = end - (len_m1 << stride_bit);
-            if cp < run_start || ((cp - run_start) & stride_bit) != 0 {
+            // The scan guarantees `low_v <= end_low`; the run covers `low_v`
+            // iff `low_v >= start_low` (and, for stride 2, the offset is even).
+            // No code-point reconstruction — `low_v` is compared directly.
+            let ss = RUN_START_STRIDE[lo + off];
+            let start_low = ss & 0x3F;
+            let stride_bit = ss >> 6;
+            if low_v < start_low || ((low_v - start_low) & stride_bit) != 0 {
                 read += c_len;
                 continue;
             }
@@ -356,7 +360,8 @@ const fn table_size_bytes() -> usize {
     PAGE_BITMAP.len() * 8
         + POPCNT_SAMPLES.len()
         + PAGE_OFFSET.len()
-        + RUN_DATA.len() * 2
+        + RUN_END_LOW.len()
+        + RUN_START_STRIDE.len()
         + BYTE_DELTA.len() * 4
 }
 
@@ -369,13 +374,15 @@ const fn table_size_bytes() -> usize {
 // page means definitively no fold — there is *no* need to look at any other
 // page. `POPCNT_SAMPLES[i]` holds the cumulative popcount of
 // `PAGE_BITMAP[0..i]`, so the dense index of any page is one load plus one
-// masked popcount. `PAGE_OFFSET[j] .. PAGE_OFFSET[j+1]` is the slice of
-// `RUN_DATA` belonging to the `j`-th populated page, sorted by end-low.
+// `PAGE_OFFSET[j] .. PAGE_OFFSET[j+1]` is the slice of `RUN_END_LOW` /
+// `RUN_START_STRIDE` / `BYTE_DELTA` belonging to the `j`-th populated page,
+// sorted by end-low.
 //
-// Each `RUN_DATA[i]` is a packed u16 (the fold delta lives in `BYTE_DELTA[i]`):
-//   bits  0..6   end & PAGE_MASK   (used by the within-page linear scan)
-//   bit   6      stride - 1
-//   bits  7..14  length - 1
+// The run record is split across two byte arrays so the hot scan reads clean
+// keys with no masking:
+//   RUN_END_LOW[i]      = end   & PAGE_MASK   (the within-page scan key)
+//   RUN_START_STRIDE[i] = (start & PAGE_MASK) | ((stride - 1) << 6)
+//                                              (membership, vs `cp & 0x3F`)
 
 /// Number of populated pages strictly before `page`.
 #[inline]
@@ -389,13 +396,14 @@ fn popcount_up_to(page: u32) -> u32 {
 
 /// Smallest run with `end >= cp` *within `cp`'s own page*, or `None` if the
 /// page has no intervals or none of its ends is `>= cp`. Returns the absolute
-/// `RUN_DATA`/`BYTE_DELTA` index of the run plus its full inclusive `end` code
-/// point. Because intervals are split at page boundaries, this is also the only
-/// possible run that could contain `cp` — no cross-page scan is ever needed.
+/// `RUN_END_LOW`/`RUN_START_STRIDE`/`BYTE_DELTA` index of the run. Because runs are split at
+/// page boundaries, this is also the only possible run that could contain `cp`
+/// — no cross-page scan is ever needed. The caller checks `cp & 0x3F` against
+/// the run's `start_low` to confirm membership.
 #[inline]
-fn successor(cp: u32) -> Option<(usize, u32)> {
+fn successor(cp: u32) -> Option<usize> {
     let page = cp >> PAGE_BITS;
-    let low_v = cp & PAGE_MASK;
+    let low_v = (cp & PAGE_MASK) as u8;
 
     let word_idx = (page / 64) as usize;
     let bit_in_word = page % 64;
@@ -408,13 +416,13 @@ fn successor(cp: u32) -> Option<(usize, u32)> {
     let lo = PAGE_OFFSET[dense_idx] as usize;
     let hi = PAGE_OFFSET[dense_idx + 1] as usize;
 
-    // Within-slot linear scan: intervals share a common high prefix, so the
-    // right one is the first end-low (bits 0..6 of the packed run) that is
-    // ≥ `low_v`. Slots hold at most 30 entries and ~3.8 on average; the scan
-    // is branch-predictable and reads sequential u16s.
-    let slice = &RUN_DATA[lo..hi];
+    // Within-slot linear scan over clean `end_low` bytes: the right run is the
+    // first whose `end_low` is ≥ `low_v` — a direct byte comparison, no mask.
+    // Slots hold at most 30 entries and ~3.8 on average; the scan is
+    // branch-predictable and reads sequential u8s.
+    let slice = &RUN_END_LOW[lo..hi];
     let mut off = 0;
-    while off < slice.len() && (slice[off] as u32 & PAGE_MASK) < low_v {
+    while off < slice.len() && slice[off] < low_v {
         off += 1;
     }
     if off >= slice.len() {
@@ -422,8 +430,7 @@ fn successor(cp: u32) -> Option<(usize, u32)> {
         // span slots, cp is past every interval and so doesn't fold.
         return None;
     }
-    let end = (page << PAGE_BITS) | (slice[off] as u32 & PAGE_MASK);
-    Some((lo + off, end))
+    Some(lo + off)
 }
 
 #[cfg(test)]

@@ -124,7 +124,7 @@ fn build_runs(folds: &[Fold]) -> Vec<Run> {
 /// Split each run at page boundaries (64 cps) so its full `[start, end]`
 /// range lives in a single page. After this transform the low 6 bits of `end`
 /// are a unique-within-page identifier — which is what `PAGE_BITMAP`,
-/// `PAGE_OFFSET` and the low bits of `RUN_DATA` rely on.
+/// `PAGE_OFFSET` and `RUN_END_LOW` rely on.
 ///
 /// Only stride-2 runs that happen to straddle a page boundary actually get
 /// split (and only a handful in the real Unicode data). The split preserves
@@ -225,7 +225,7 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
 
     // Pages are 64-cp blocks. After `split_runs_at_page_boundary` every run
     // lives in a single page, so the low 6 bits of `end` uniquely identify
-    // a run within its page (stored in the low bits of RUN_DATA below).
+    // a run within its page (stored as `RUN_END_LOW` below).
     let num_pages = (last_covered >> PAGE_BITS) as usize + 1;
     let num_bitmap_words = num_pages.div_ceil(64);
     let mut page_bitmap = vec![0u64; num_bitmap_words];
@@ -263,32 +263,31 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
     assert_eq!(cumul as usize, num_populated_pages);
     assert!(cumul <= 255, "POPCNT_SAMPLES must fit in u8");
 
-    // Per-run packed u16 layout (one entry per run, parallel to PAGE_OFFSET
-    // which slices RUN_DATA into per-page groups, and to BYTE_DELTA which holds
-    // the actual fold delta):
+    // Per-run records, split into two byte arrays so the hot within-page scan
+    // touches only clean `end_low` bytes (no masking, denser cache lines):
     //
-    //   bits  0..6   end_low = end & PAGE_MASK                 (6 bits)
-    //   bit   6      stride - 1                                (1 bit, 0 or 1)
-    //   bits  7..14  length - 1                                (7 bits, 0..=126)
+    //   RUN_END_LOW[i]      = end   & PAGE_MASK            (0..=63, the scan key)
+    //   RUN_START_STRIDE[i] = (start & PAGE_MASK)          (bits 0..6)
+    //                       | ((stride - 1) << 6)          (bit 6)
     //
-    // The codepoint delta is *not* stored here — both fold paths apply the
-    // little-endian `BYTE_DELTA` instead — so a run packs into 14 bits (a u16).
-    // `length - 1` and `stride - 1` are pre-decremented so the within-page
-    // membership test computes `start = end - ((length-1) << (stride-1))` with
-    // a shift instead of a multiply. The single-array layout lets the scan read
-    // the next entry's `end_low` from the same load that decodes the run on a
-    // hit — one 64-byte cache line covers 32 packed runs.
-    let mut run_data = Vec::<u16>::with_capacity(runs.len());
+    // Every run is split to live inside one 64-cp page, so both ends fit in 6
+    // bits and the membership test works directly on `cp & 0x3F` (`low_v`): the
+    // scan finds the first run with `end_low >= low_v` by comparing raw bytes,
+    // and a run then covers `low_v` iff `low_v >= start_low` (and, for stride 2,
+    // `(low_v - start_low)` is even). The codepoint delta is *not* stored here —
+    // both fold paths apply `BYTE_DELTA` instead.
+    let mut run_end_low = Vec::<u8>::with_capacity(runs.len());
+    let mut run_start_stride = Vec::<u8>::with_capacity(runs.len());
     let mut max_abs_delta: i32 = 0;
     for r in runs.iter() {
         assert!(r.length >= 1 && r.length <= 127);
         assert!(r.stride == 1 || r.stride == 2);
-        let end_low = (r.start + (r.length as u32 - 1) * (r.stride as u32)) & PAGE_MASK;
-        let stride_bit = (r.stride as u16) - 1;
-        let length_m1 = (r.length as u16) - 1;
+        let start_low = (r.start & PAGE_MASK) as u8;
+        let end_low = ((r.start + (r.length as u32 - 1) * (r.stride as u32)) & PAGE_MASK) as u8;
+        let stride_bit = r.stride - 1;
         max_abs_delta = max_abs_delta.max(r.delta.abs());
-        let packed = (end_low as u16) | (stride_bit << 6) | (length_m1 << 7);
-        run_data.push(packed);
+        run_end_low.push(end_low);
+        run_start_stride.push(start_low | (stride_bit << 6));
     }
 
     // Parallel little-endian byte deltas, one per run. Each run was split so
@@ -303,7 +302,8 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
 
     // Sanity: size accounting (printed as build warnings for visibility).
     let index_bytes = page_bitmap.len() * 8 + popcnt_samples.len() + page_offset.len();
-    let total = index_bytes + run_data.len() * 2 + byte_deltas.len() * 4;
+    let total =
+        index_bytes + run_end_low.len() + run_start_stride.len() + byte_deltas.len() * 4;
     if env::var_os("CASEFOLD_BUILD_INFO").is_some() {
         println!(
             "cargo:warning=casefold table: {} fold entries, {} runs, {} populated pages, {} bytes total ({:.2} bits/entry), max |delta| = {}, max |byte_delta| = {}",
@@ -333,25 +333,11 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
     emit_u64_array(&mut s, "PAGE_BITMAP", &page_bitmap);
     emit_u8_array(&mut s, "POPCNT_SAMPLES", &popcnt_samples);
     emit_u8_array(&mut s, "PAGE_OFFSET", &page_offset);
-    emit_u16_array(&mut s, "RUN_DATA", &run_data);
+    emit_u8_array(&mut s, "RUN_END_LOW", &run_end_low);
+    emit_u8_array(&mut s, "RUN_START_STRIDE", &run_start_stride);
     emit_u32_array(&mut s, "BYTE_DELTA", &byte_deltas);
 
     s
-}
-
-fn emit_u16_array(s: &mut String, name: &str, data: &[u16]) {
-    s.push_str(&format!(
-        "pub(crate) static {name}: [u16; {}] = [\n",
-        data.len()
-    ));
-    for chunk in data.chunks(12) {
-        s.push_str("    ");
-        for v in chunk {
-            s.push_str(&format!("0x{:04x}, ", v));
-        }
-        s.push('\n');
-    }
-    s.push_str("];\n\n");
 }
 
 fn emit_u64_array(s: &mut String, name: &str, data: &[u64]) {

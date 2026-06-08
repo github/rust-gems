@@ -66,13 +66,15 @@ query, and let the bulk byte path fold without ever decoding a character:
    and because every run lives entirely inside one page, an unset bit is a
    *definitive* "no fold". No cross-page successor scan is ever required.
 
-3. **A run record fits in 16 bits.** Each run is packed into a single `u16` of
-   `RUN_DATA`: `end_low` (6 b) | `stride − 1` (1 b) | `length − 1` (7 b). The
-   fold itself is *not* stored here — it lives in the parallel `BYTE_DELTA`
-   table (idea 5) — so the run record only has to drive the within-page scan
-   and membership test. Pre-decrementing `length` and `stride` lets the
-   membership test compute `start = end − ((length−1) << (stride−1))` with a
-   shift instead of a multiply.
+3. **A run is two clean bytes.** Because every run is split to stay inside one
+   64-cp page, *both* ends fit in 6 bits, and the record splits across two byte
+   arrays: `RUN_END_LOW[i]` (`end & 0x3F`) and `RUN_START_STRIDE[i]`
+   (`start & 0x3F | (stride−1) << 6`). The hot within-page scan compares
+   `RUN_END_LOW` **byte-to-byte against `cp & 0x3F`** — no mask, no shift, and a
+   dense `u8` array — and reads `RUN_START_STRIDE` only on a hit to confirm
+   `cp & 0x3F >= start_low`. No code-point reconstruction anywhere. The fold
+   itself is *not* stored here — it lives in the parallel `BYTE_DELTA` table
+   (idea 5).
 
 4. **The bulk path rejects whole characters from their first bytes.** For a
    2-/3-byte UTF-8 sequence the page index `cp >> 6` is fully determined by
@@ -102,7 +104,8 @@ query, and let the bulk byte path fold without ever decoding a character:
 | `PAGE_BITMAP[31]: u64` (1 bit per 64-cp page)   |   248 |
 | `POPCNT_SAMPLES[32]: u8` (cumulative popcount)  |    32 |
 | `PAGE_OFFSET[60]: u8` (per populated page)      |    60 |
-| `RUN_DATA[238]: u16` (packed end_low/stride/length) | 476 |
+| `RUN_END_LOW[238]: u8` (clean scan key, `end & 0x3F`)     | 238 |
+| `RUN_START_STRIDE[238]: u8` (`start & 0x3F` \| stride bit) | 238 |
 | `BYTE_DELTA[238]: u32` (little-endian fold delta per run) | 952 |
 | **Total**                                       | **1768** |
 
@@ -117,20 +120,24 @@ simple_fold(c):
     cp = c as u32
     if cp < 0x80: return ASCII-fast-path                # O(1)
     if cp > LAST_COVERED: return c                      # O(1) guard
-    (idx, end) = successor(cp)?                         # one bitmap test
-    packed   = RUN_DATA[idx]                            #   + ≤30-entry scan
-    len_m1   = (packed >> 7) & 0x7F
-    stride_b = (packed >> 6) & 1
-    start    = end - (len_m1 << stride_b)               # shift, not multiply
-    if cp < start: return c                             # in a gap between runs
-    if (cp - start) & stride_b != 0: return c           # in a stride-2 gap
+    idx      = successor(cp)?                           # one bitmap test
+    ss       = RUN_START_STRIDE[idx]                    #   + ≤30-byte scan
+    start_lo = ss & 0x3F
+    stride_b = ss >> 6
+    low      = cp & 0x3F                                # within-page offset
+    if low < start_lo: return c                         # in a gap between runs
+    if (low - start_lo) & stride_b != 0: return c       # in a stride-2 gap
     word   = utf8_le(c) + BYTE_DELTA[idx]               # fold by byte add
     return decode(word)
 ```
 
-The per-`char` path encodes `c` to its little-endian byte word, adds the
-run's `BYTE_DELTA`, and decodes the result — the same delta the bulk byte
-path applies directly to the input bytes.
+The scan walks `RUN_END_LOW` — a dense array of clean `end_low` bytes — and
+stops at the first one `>= low`, a raw byte comparison with no masking. That
+also guarantees `low <= end_low`, so membership is just `low >= start_low`,
+both 6-bit within-page offsets, no `cp` reconstruction. The per-`char` path
+encodes `c` to its little-endian byte word, adds the run's `BYTE_DELTA`, and
+decodes the result — the same delta the bulk byte path applies directly to the
+input bytes.
 
 `successor(cp)` returns the run whose `end_low` is the smallest one ≥ `cp`'s
 low 6 bits *within `cp`'s own 64-cp page*, or `None`. Because the build splits
@@ -145,14 +152,14 @@ The successor lookup is:
 3. The dense index of `page` is `POPCNT_SAMPLES[page/64] +
    popcount(PAGE_BITMAP[page/64] & ((1 << (page%64)) - 1))` — one load
    plus one masked popcount.
-4. Linear-scan `RUN_DATA[PAGE_OFFSET[dense] .. PAGE_OFFSET[dense+1]]` for
-   the first entry whose `& 0x3F` is ≥ `cp & 0x3F`. Pages hold at most 30
-   runs (averaging ~3.8), so the search touches a small contiguous slice and
-   is branch-predictable.
+4. Linear-scan `RUN_END_LOW[PAGE_OFFSET[dense] .. PAGE_OFFSET[dense+1]]` for
+   the first byte that is ≥ `cp & 0x3F` — a raw `u8` comparison, no masking.
+   Pages hold at most 30 runs (averaging ~3.8), so the search touches a small
+   contiguous slice of a dense byte array and is branch-predictable.
 
 Every access touches the bitmap (248 B), the popcount samples (32 B),
-`PAGE_OFFSET` (60 B), `RUN_DATA` (476 B) and, on a hit, `BYTE_DELTA` (952 B) —
-all small, cache-friendly arrays.
+`PAGE_OFFSET` (60 B), `RUN_END_LOW` (238 B) and, on a hit, `RUN_START_STRIDE`
+(238 B) and `BYTE_DELTA` (952 B) — all small, cache-friendly arrays.
 
 ## Performance
 
@@ -162,12 +169,12 @@ foldhash::fast::FixedState>` baseline (which costs ~17 KB for the same data;
 
 | Workload                                 | Casefold table     | HashMap        |
 |------------------------------------------|-------------------:|---------------:|
-| Sequential BMP scan (63 488 chars)       | **1 700 Melem/s**  |  356 Melem/s   |
+| Sequential BMP scan (63 488 chars)       | **1 680 Melem/s**  |  356 Melem/s   |
 | Random BMP (10 000 chars)                | **1 560 Melem/s**  |  573 Melem/s   |
-| Random ASCII (10 000 chars)              | **3 090 Melem/s**  |  615 Melem/s   |
-| Only-folds (every defined fold)          |     201 Melem/s    |  720 Melem/s   |
+| Random ASCII (10 000 chars)              | **3 080 Melem/s**  |  615 Melem/s   |
+| Only-folds (every defined fold)          |     210 Melem/s    |  720 Melem/s   |
 
-Casefold wins three of four workloads decisively (4.8×, 2.7×, and 5.0×
+Casefold wins three of four workloads decisively (4.7×, 2.7×, and 5.0×
 respectively) while using ~10× less memory than the `HashMap`. The
 `only_folds` workload — every input is a code point that *does* fold — is
 the worst case for the bitmap design (no early-out on the empty-bit test)
