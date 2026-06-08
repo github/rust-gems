@@ -41,9 +41,9 @@ Unicode 16.0 defines 1484 simple-fold mappings. Common ways to store them:
 | Naïve `[(u32, u32); 1484]`                            | ~11.6 KB    |
 | `regex-syntax::unicode_tables::case_folding_simple`   | ~67 KB src  |
 | Go `unicode.SimpleFold` (orbit + ASCII + ranges)      | ~7.3 KB     |
-| **This crate (paged bitmap + packed runs)**           | **1768 B**  |
+| **This crate (paged bitmap + packed runs)**           | **1776 B**  |
 
-That is 9.5 bits per fold entry. A little over half of that is the
+That is 9.6 bits per fold entry. A little over half of that is the
 `BYTE_DELTA` side table that powers the decode-free bulk fold path (see
 below); the index + run records alone are ~4.4 bits per entry.
 
@@ -97,17 +97,17 @@ query, and let the bulk byte path fold without ever decoding a character:
    length-preserving fold also works because runs are split wherever the byte
    delta would change (e.g. when the destination crosses a 64-cp boundary).
 
-### Table layout (1768 B total)
+### Table layout (1776 B total)
 
 | Component                                       | Bytes |
 |-------------------------------------------------|------:|
 | `PAGE_BITMAP[31]: u64` (1 bit per 64-cp page)   |   248 |
 | `POPCNT_SAMPLES[32]: u8` (cumulative popcount)  |    32 |
 | `PAGE_OFFSET[60]: u8` (per populated page)      |    60 |
-| `RUN_END_LOW[238]: u8` (clean scan key, `end & 0x3F`)     | 238 |
+| `RUN_END_LOW[238 + 8]: u8` (clean scan key, `end & 0x3F`; +8 SWAR pad) | 246 |
 | `RUN_START_STRIDE[238]: u8` (`start & 0x3F` \| stride bit) | 238 |
 | `BYTE_DELTA[238]: u32` (little-endian fold delta per run) | 952 |
-| **Total**                                       | **1768** |
+| **Total**                                       | **1776** |
 
 (Splitting runs at byte-delta boundaries raises the run count from 227 to 238.)
 The data file is parsed at build time by `build.rs`, which emits the packed
@@ -194,7 +194,10 @@ fold (CJK, Hangul, Kana, Arabic, Hebrew, Indic, symbols, …) avoid a second
 buffer entirely. Once a real fold is found it allocates once, then builds the
 output with a raw write cursor: unmodified spans are bulk-copied and each
 folded character is a masked little-endian load + `BYTE_DELTA` add + 4-byte
-store (no decode/encode).
+store (no decode/encode). Its within-page run search uses a chunked SWAR scan
+(8 `end_low` bytes at a time, branchlessly) rather than the per-`char` scalar
+scan — the byte path's longer per-character pipeline hides the SWAR latency and
+benefits from dropping the scan's data-dependent branch.
 
 Throughput on an Apple M-series machine (criterion medians), against the SIMD
 `simd-normalizer` crate, the same byte path backed by a `HashMap` instead of
@@ -202,11 +205,11 @@ the table, and the standard library:
 
 | Workload (input size) | `fold_into_bytes` | `simd_normalizer` | HashMap (byte path) | `str::to_lowercase` | `chars().flat_map` | `to_ascii_lowercase`† |
 |---|--:|--:|--:|--:|--:|--:|
-| Pure ASCII (5 700 B)                   | **40.4 GiB/s** |   1.21 GiB/s |  212 MiB/s | 25.4 GiB/s | 374 MiB/s | 23.0 GiB/s |
-| CJK, no folds (8 100 B)                | **2.97 GiB/s** |   1.98 GiB/s |  562 MiB/s | 479 MiB/s  | 377 MiB/s | 25.0 GiB/s |
-| Symbols / Myanmar, no folds (9 000 B)  | **3.03 GiB/s** |   1.55 GiB/s |  409 MiB/s | 499 MiB/s  | 350 MiB/s | 23.5 GiB/s |
-| Mixed BMP, all folding (8 800 B)       |   742 MiB/s    | **931 MiB/s**|  330 MiB/s | 287 MiB/s  | 207 MiB/s | 23.2 GiB/s |
-| Length-changing folds (1 700 B)        | **1.11 GiB/s** |  726 MiB/s   |  234 MiB/s | 493 MiB/s  | 271 MiB/s | 18.7 GiB/s |
+| Pure ASCII (5 700 B)                   | **40.8 GiB/s** |   1.21 GiB/s |  213 MiB/s | 26.1 GiB/s | 383 MiB/s | 21.2 GiB/s |
+| CJK, no folds (8 100 B)                | **2.95 GiB/s** |   1.97 GiB/s |  558 MiB/s | 473 MiB/s  | 369 MiB/s | 22.9 GiB/s |
+| Symbols / Myanmar, no folds (9 000 B)  | **2.96 GiB/s** |   1.56 GiB/s |  410 MiB/s | 497 MiB/s  | 348 MiB/s | 22.9 GiB/s |
+| Mixed BMP, all folding (8 800 B)       |   869 MiB/s    | **922 MiB/s**|  334 MiB/s | 287 MiB/s  | 205 MiB/s | 21.1 GiB/s |
+| Length-changing folds (1 700 B)        | **1.26 GiB/s** |  716 MiB/s   |  233 MiB/s | 492 MiB/s  | 269 MiB/s | 15.9 GiB/s |
 
 † `str::to_ascii_lowercase` is **not** a correct case-folder for non-ASCII —
 it leaves every multibyte sequence untouched. It is shown only as the
@@ -216,16 +219,16 @@ diverge on e.g. final-sigma, `İ`, `ß`); this is an equal-workload throughput
 comparison, not an output-equality one.
 
 `fold_into_bytes` leads every workload except all-folding mixed-BMP text,
-where `simd-normalizer`'s wide-lane SIMD beats our scalar fold. Two things
-stand out:
+where `simd-normalizer`'s wide-lane SIMD still edges ahead (922 vs 869 MiB/s) —
+though the chunked SWAR run-scan closed most of that gap. Two things stand out:
 
 * **The no-fold rows run at GiB/s** (CJK 3.0, symbols 3.0 — ~6× `str::
   to_lowercase`): the tail scan probes `PAGE_BITMAP` from the first one or two
   UTF-8 bytes, finds nothing folds, and returns the input buffer as-is — no
   second allocation, no byte copied.
 * **The compact table beats a HashMap by 3–5×** on the *identical* byte-level
-  fold (CJK 2.97 GiB/s vs 562 MiB/s, mixed-BMP 742 vs 330 MiB/s), and the
-  HashMap has no ASCII fast path at all (212 MiB/s vs 40 GiB/s).
+  fold (CJK 2.95 GiB/s vs 558 MiB/s, mixed-BMP 869 vs 334 MiB/s), and the
+  HashMap has no ASCII fast path at all (213 MiB/s vs 40 GiB/s).
 
 Reproduce with:
 

@@ -257,12 +257,9 @@ fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
         let low_v = bytes[read + c_len - 1] & 0x3F;
         let dense = popcount_up_to(page) as usize;
         let lo = PAGE_OFFSET[dense] as usize;
-        let slice = &RUN_END_LOW[lo..PAGE_OFFSET[dense + 1] as usize];
-        let mut off = 0;
-        while off < slice.len() && slice[off] < low_v {
-            off += 1;
-        }
-        let idx = if off < slice.len() {
+        let n = PAGE_OFFSET[dense + 1] as usize - lo;
+        let off = scan_end_low(lo, n, low_v);
+        let idx = if off < n {
             // The scan guarantees `low_v <= end_low`; the run covers `low_v`
             // iff `low_v >= start_low` (and, for stride 2, the offset is even).
             // No code-point reconstruction — `low_v` is compared directly.
@@ -394,12 +391,39 @@ fn popcount_up_to(page: u32) -> u32 {
     base + partial.count_ones()
 }
 
+/// Offset of the first run with `end_low >= low_v` in a page of `n` runs at
+/// `RUN_END_LOW[lo..]`, or `n` if none. Scans 8 `end_low` bytes at a time via
+/// SWAR: one branchless chunk covers the average ~3.8-run page; the outer loop
+/// advances only for the rare page with >8 runs. Padding / next-page bytes that
+/// the over-read pulls in are discarded by the `j < n` bound, so no per-lane
+/// validity mask is needed.
+#[inline]
+fn scan_end_low(lo: usize, n: usize, low_v: u8) -> usize {
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    let bcast = (low_v as u64).wrapping_mul(ONES);
+    let mut base = 0;
+    while base < n {
+        // `RUN_END_LOW` is padded by 8 bytes so this read is always in bounds.
+        let chunk = u64::from_le_bytes(RUN_END_LOW[lo + base..lo + base + 8].try_into().unwrap());
+        // `(b | 0x80) - low_v` keeps its high bit iff `b >= low_v` (no
+        // cross-lane borrow). The first set lane is the first run `>= low_v`.
+        let ge = (chunk | HIGH).wrapping_sub(bcast) & HIGH;
+        if ge != 0 {
+            let j = base + (ge.trailing_zeros() / 8) as usize;
+            return if j < n { j } else { n };
+        }
+        base += 8;
+    }
+    n
+}
+
 /// Smallest run with `end >= cp` *within `cp`'s own page*, or `None` if the
 /// page has no intervals or none of its ends is `>= cp`. Returns the absolute
-/// `RUN_END_LOW`/`RUN_START_STRIDE`/`BYTE_DELTA` index of the run. Because runs are split at
-/// page boundaries, this is also the only possible run that could contain `cp`
-/// — no cross-page scan is ever needed. The caller checks `cp & 0x3F` against
-/// the run's `start_low` to confirm membership.
+/// `RUN_END_LOW`/`RUN_START_STRIDE`/`BYTE_DELTA` index of the run. Because runs
+/// are split at page boundaries, this is also the only possible run that could
+/// contain `cp` — no cross-page scan is ever needed. The caller checks
+/// `cp & 0x3F` against the run's `start_low` to confirm membership.
 #[inline]
 fn successor(cp: u32) -> Option<usize> {
     let page = cp >> PAGE_BITS;
@@ -416,10 +440,11 @@ fn successor(cp: u32) -> Option<usize> {
     let lo = PAGE_OFFSET[dense_idx] as usize;
     let hi = PAGE_OFFSET[dense_idx + 1] as usize;
 
-    // Within-slot linear scan over clean `end_low` bytes: the right run is the
-    // first whose `end_low` is ≥ `low_v` — a direct byte comparison, no mask.
-    // Slots hold at most 30 entries and ~3.8 on average; the scan is
-    // branch-predictable and reads sequential u8s.
+    // Short scalar scan over clean `end_low` bytes. For the isolated per-`char`
+    // lookup this beats the chunked SWAR scan (`scan_end_low`, used by the bulk
+    // byte path): a page averages ~3.8 runs, so ~4 well-predicted compares win
+    // over the SWAR setup latency, which is only hidden inside the byte path's
+    // longer per-character pipeline.
     let slice = &RUN_END_LOW[lo..hi];
     let mut off = 0;
     while off < slice.len() && slice[off] < low_v {

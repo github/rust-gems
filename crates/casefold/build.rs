@@ -289,6 +289,11 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
         run_end_low.push(end_low);
         run_start_stride.push(start_low | (stride_bit << 6));
     }
+    // Pad `RUN_END_LOW` so the chunked 8-wide scan can always read a full
+    // 8-byte chunk past any page start. `0xFF` padding reads as "≥ low_v" but
+    // lands past the page's run count, so the `j < n` check discards it.
+    let num_runs = run_end_low.len();
+    run_end_low.resize(num_runs + 8, 0xFF);
 
     // Parallel little-endian byte deltas, one per run. Each run was split so
     // its byte-delta is constant, so we read it off the run's start. The byte
