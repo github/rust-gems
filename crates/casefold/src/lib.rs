@@ -150,14 +150,15 @@ fn fold_into_bytes(s: String) -> Vec<u8> {
 fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::new();
     let src = bytes.as_ptr();
-    // Raw write cursor into `out`'s buffer (valid once `building` is set). We
-    // bypass the Vec push/reserve API: the buffer is reserved once for the
-    // worst case, so every copy/store below is unchecked.
+    // Raw write cursor into `out`'s buffer. Null until the first real fold
+    // allocates `out` (its pointer is then non-null), so `dst.is_null()` doubles
+    // as the "haven't started building the output yet" flag. We bypass the Vec
+    // push/reserve API: the buffer is reserved once for the worst case, so every
+    // copy/store below is unchecked.
     let mut dst: *mut u8 = core::ptr::null_mut();
     // `flushed` marks the start of the contiguous run of `bytes` that is
     // already correct but not yet copied out.
     let mut flushed = 0usize;
-    let mut building = false;
     let mut read = start;
     while read < bytes.len() {
         // ASCII (already lowercased by pass 1) — unchanged, keep scanning.
@@ -223,15 +224,15 @@ fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
         let word = raw & (u32::MAX >> ((4 - c_len) * 8));
         let folded = word.wrapping_add(BYTE_DELTA[idx]);
         let dest_len = utf8_len((folded & 0xFF) as u8);
-        if !building {
+        if dst.is_null() {
             // Reserve once for the worst case so the writes below never need a
             // per-store capacity check. Output is at most 1.5× the input: the
             // only folds that grow are U+023A/U+023E (2→3 bytes), so every 2
             // input bytes yield ≤3 output bytes; `+ 4` covers the 4-byte
-            // over-store of the final character.
+            // over-store of the final character. The non-zero capacity makes
+            // `out.as_mut_ptr()` non-null, so `dst` is non-null from here on.
             out = Vec::with_capacity(bytes.len() + bytes.len() / 2 + 4);
             dst = out.as_mut_ptr();
-            building = true;
         }
         // SAFETY: the buffer is reserved for the worst-case 1.5× output plus 4
         // bytes of over-store headroom, so `dst` (the running output length)
@@ -250,7 +251,7 @@ fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
         read += c_len;
         flushed = read;
     }
-    if !building {
+    if dst.is_null() {
         // Nothing folded — return the original buffer with no extra copy.
         return bytes;
     }
