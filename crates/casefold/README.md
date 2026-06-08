@@ -12,14 +12,12 @@ folds (`F`, e.g. `ß` → `ss`) and Turkic locale folds (`T`) are not supported.
 
 [cf]: https://www.unicode.org/Public/UCD/latest/ucd/CaseFolding.txt
 
-`simple_fold` consumes a `String` and returns a `String` (the fold is always
-valid UTF-8). ASCII is lowercased in place via the string's existing heap
-allocation (a single auto-vectorized pass over the bytes), and the multibyte
-tail is scanned for the first character that actually folds; if none does, the
-original allocation is returned untouched — so text whose multibyte content
-never folds (CJK, Kana, Arabic, Hebrew, …) pays nothing. A fresh buffer is
-allocated only once a real fold is found, since simple folds can change UTF-8
-length (e.g. U+212A KELVIN SIGN → `k`, or U+023A Ⱥ → U+2C65 ⱥ).
+The output is always valid UTF-8. ASCII is lowercased in place in the input's
+own buffer (one auto-vectorized pass); the multibyte tail is scanned and the
+original allocation is returned untouched unless a character actually folds, so
+text that never folds (CJK, Kana, Arabic, Hebrew, …) pays nothing. A second
+buffer is allocated only on the first real fold, since folds can change UTF-8
+length (U+212A KELVIN SIGN → `k`, U+023A Ⱥ → U+2C65 ⱥ).
 
 ```rust
 use casefold::simple_fold;
@@ -38,59 +36,37 @@ Unicode 16.0 defines 1484 simple-fold mappings. Common ways to store them:
 | Go `unicode.SimpleFold` (orbit + ASCII + ranges)      | ~7.3 KB     |
 | **This crate (paged bitmap + packed runs)**           | **1776 B**  |
 
-That is 9.6 bits per fold entry. A little over half of that is the
-`BYTE_DELTA` side table that powers the decode-free bulk fold path (see
-below); the index + run records alone are ~4.4 bits per entry.
+That is **9.6 bits per fold entry** — a little over half of it the `BYTE_DELTA`
+side table that powers the decode-free fold path; the index + run records alone
+are ~4.4 bits per entry.
 
 ## How the encoding works
 
-Several observations make the data extraordinarily compressible *and* fast to
-query, and let the bulk byte path fold without ever decoding a character:
+A few observations make the data both highly compressible and decode-free to
+query:
 
-1. **Most folds occur in runs.** Stretches of adjacent code points share the
-   same delta to their fold, e.g. `U+0041..U+005A` (`A`–`Z`) all map with
-   delta `+32`. A great many Latin-Extended pairs come in *alternating*
-   sequences like `0x0100, 0x0102, 0x0104 …` where every second code point
-   folds. A 1-bit `stride` flag lets the same run encoding cover both cases.
-
-2. **Run ends cluster in a few 64-cp pages.** After splitting any run that
-   crosses a 64-cp boundary (and, for the byte-delta fold, wherever the delta
-   changes), just 238 runs live in only 59 of the ~1960 possible pages. A
-   page-presence bitmap plus a cumulative popcount sidetable answers, in a
-   single bit test, whether the page containing `cp` holds any run at all —
-   and because every run lives entirely inside one page, an unset bit is a
-   *definitive* "no fold". No cross-page successor scan is ever required.
-
-3. **A run is two clean bytes.** Because every run is split to stay inside one
-   64-cp page, *both* ends fit in 6 bits, and the record splits across two byte
-   arrays: `RUN_END_LOW[i]` (`end & 0x3F`) and `RUN_START_STRIDE[i]`
-   (`start & 0x3F | (stride−1) << 6`). The hot within-page scan compares
-   `RUN_END_LOW` **byte-to-byte against `cp & 0x3F`** — no mask, no shift, and a
-   dense `u8` array — and reads `RUN_START_STRIDE` only on a hit to confirm
-   `cp & 0x3F >= start_low`. No code-point reconstruction anywhere. The fold
-   itself is *not* stored here — it lives in the parallel `BYTE_DELTA` table
-   (idea 5).
-
-4. **The bulk path rejects whole characters from their first bytes.** For a
-   2-/3-byte UTF-8 sequence the page index `cp >> 6` is fully determined by
-   the first one or two bytes — only the final continuation byte carries the
-   within-page offset `cp & 0x3F`. So `simple_fold` probes `PAGE_BITMAP`
-   straight from `b0` (and `b1`); a clear page bit copies the character
-   verbatim without assembling `cp` or scanning a run. This skips fold-free
-   scripts (CJK, Hangul, Kana, Arabic, Hebrew, Indic) *and* the empty 64-cp
-   pages inside otherwise-foldable blocks (e.g. Myanmar, punctuation/symbol
-   blocks), reusing the very same `PAGE_BITMAP` the run lookup uses.
-
-5. **Folding is a little-endian byte add.** On a little-endian machine the
-   folded character is the source character's UTF-8 bytes — read as a `u32` —
-   plus a per-run constant. `BYTE_DELTA[i]` stores that constant (a full 32 b,
-   because the low code-point bits land in the high word byte and 3→1-byte
-   shrinks must subtract whole bytes away). The bulk fold is therefore a
-   masked 4-byte load, one `wrapping_add`, and a single 4-byte store — no
-   UTF-8 decode, no encode — and it handles length-changing folds (`K`→`k`,
-   `Ⱥ`→`ⱥ`) by simply writing fewer or more bytes than it read. Every
-   length-preserving fold also works because runs are split wherever the byte
-   delta would change (e.g. when the destination crosses a 64-cp boundary).
+1. **Folds come in runs.** Adjacent code points share a fold delta (`A`–`Z` all
+   map with `+32`); a 1-bit `stride` flag also covers *alternating* runs like
+   Latin-Extended `0x0100, 0x0102, …` where every second code point folds.
+2. **Runs cluster in pages.** Splitting every run at 64-cp page boundaries (and
+   wherever the byte delta changes) leaves 238 runs in just 59 of ~1960 pages.
+   A page-presence bitmap plus a cumulative-popcount sidetable answers "does
+   this page hold any run?" in one bit test — and since runs never cross a page,
+   an unset bit is a *definitive* "no fold".
+3. **A run is two clean bytes.** Both ends fit in 6 bits, split across
+   `RUN_END_LOW[i]` (`end & 0x3F`, the scan key) and `RUN_START_STRIDE[i]`
+   (`start & 0x3F | (stride−1) << 6`). The hot scan compares `RUN_END_LOW`
+   byte-to-byte against `cp & 0x3F` — no mask, no shift, no code-point
+   reconstruction — reading `RUN_START_STRIDE` only on a hit.
+4. **Whole characters are rejected from their lead bytes.** For a 2-/3-byte
+   sequence the page index `cp >> 6` is fixed by the first one or two bytes, so
+   the bulk path probes `PAGE_BITMAP` straight from them and copies fold-free
+   characters (CJK, Hangul, Kana, …) verbatim without ever assembling `cp`.
+5. **Folding is a little-endian byte add.** The folded character is the source
+   bytes read as a `u32` plus a per-run `BYTE_DELTA[i]` (a full 32 b, since low
+   code-point bits land in the high word byte): a masked 4-byte load, one
+   `wrapping_add`, one 4-byte store — no decode, no encode. Writing fewer/more
+   bytes than were read handles length-changing folds (`K`→`k`, `Ⱥ`→`ⱥ`).
 
 ### Table layout (1776 B total)
 
@@ -108,11 +84,10 @@ query, and let the bulk byte path fold without ever decoding a character:
 The data file is parsed at build time by `build.rs`, which emits the packed
 `static` tables to `OUT_DIR/table.rs`.
 
-### Lookup algorithm
+### Lookup
 
 `simple_fold` folds one multibyte character at byte offset `read` like so
-(ASCII is already lowercased by the in-place tier-1 pass, so it never reaches
-here):
+(ASCII is already lowercased by the in-place pass, so it never reaches here):
 
 ```text
 fold_char(bytes, read):
@@ -129,52 +104,26 @@ fold_char(bytes, read):
     write word (dest_len bytes)
 ```
 
-The scan walks `RUN_END_LOW` — a dense array of clean `end_low` bytes — and
-stops at the first one `>= low`, a raw byte comparison with no masking. That
-also guarantees `low <= end_low`, so membership is just `low >= start_low`,
-both 6-bit within-page offsets, no `cp` reconstruction. The fold is a masked
-little-endian load of the input bytes plus the run's `BYTE_DELTA`, written back
-directly — no decode/encode.
-
-`run_in_page(page, low)` returns the run whose `end_low` is the smallest one ≥
-`low` *within that 64-cp page*, or "no fold". Because the build splits every run
-at 64-cp boundaries, no other page can contain a run covering the character, so
-the answer is either in this page or there is no fold:
-
-1. `page = cp >> 6` — the 64-cp page containing the character.
-2. Test bit `page % 64` of `PAGE_BITMAP[page / 64]`. **If clear, there is no
-   fold** — the page is empty, a definitive "no fold".
-3. The dense index of `page` is `POPCNT_SAMPLES[page/64] +
-   popcount(PAGE_BITMAP[page/64] & ((1 << (page%64)) - 1))` — one load
-   plus one masked popcount.
-4. Scan `RUN_END_LOW[PAGE_OFFSET[dense] .. PAGE_OFFSET[dense+1]]` for the first
-   byte that is ≥ `low` — a raw `u8` comparison, no masking. Pages hold at most
-   30 runs (averaging ~3.8), so the search touches a small contiguous slice of a
-   dense byte array and is branch-predictable.
-
-Every access touches the bitmap (248 B), the popcount samples (32 B),
-`PAGE_OFFSET` (60 B), `RUN_END_LOW` (238 B) and, on a hit, `RUN_START_STRIDE`
-(238 B) and `BYTE_DELTA` (952 B) — all small, cache-friendly arrays.
+Test the character's `PAGE_BITMAP` bit (clear ⇒ no fold). On a hit, the dense
+page index is `POPCNT_SAMPLES[page/64] + popcount(PAGE_BITMAP[page/64] & ((1 <<
+(page%64)) − 1))`, and a short scan of `RUN_END_LOW[PAGE_OFFSET[dense] ..]`
+finds the first end `>= low` — a raw `u8` compare, no masking. Because runs
+never cross a page that run is the only candidate, and (since the scan
+guarantees `low <= end_low`) membership is just `low >= start_low`, both 6-bit
+offsets, no `cp` reconstruction. Pages hold ≤30 runs (~3.8 on average), so every
+lookup touches only small, branch-predictable, cache-friendly arrays.
 
 ## Performance
 
-`simple_fold(s: String) -> String` consumes the input `String` and
-auto-vectorizes a single in-place pass that lowercases ASCII and detects
-whether any multibyte sequence is present. It then scans the multibyte tail
-and **hands back the original allocation untouched unless a character actually
-folds** — so pure-ASCII input and any text whose multibyte characters never
-fold (CJK, Hangul, Kana, Arabic, Hebrew, Indic, symbols, …) avoid a second
-buffer entirely. Once a real fold is found it allocates once, then builds the
-output with a raw write cursor: unmodified spans are bulk-copied and each
-folded character is a masked little-endian load + `BYTE_DELTA` add + 4-byte
-store (no decode/encode). Its within-page run search uses a chunked SWAR scan
-(8 `end_low` bytes at a time, branchlessly): the byte path's longer
-per-character pipeline hides the SWAR latency and benefits from dropping the
-scan's data-dependent branch.
+The byte path returns the input allocation untouched unless a character folds;
+otherwise it builds the output with a raw write cursor (bulk-copied unmodified
+spans + masked `BYTE_DELTA` folds). Its within-page scan is a chunked SWAR scan
+(8 `end_low` bytes at a time, branchless), whose latency the per-character
+pipeline hides.
 
 Throughput on an Apple M-series machine (criterion medians), against the SIMD
-`simd-normalizer` crate, the same byte path backed by a `HashMap` instead of
-the table, and the standard library:
+`simd-normalizer` crate, the same byte path backed by a `HashMap`, and the
+standard library:
 
 | Workload (input size) | `simple_fold` | `simd_normalizer` | HashMap (byte path) | `str::to_lowercase` | `chars().flat_map` | `to_ascii_lowercase`† |
 |---|--:|--:|--:|--:|--:|--:|
@@ -184,24 +133,17 @@ the table, and the standard library:
 | Mixed BMP, all folding (8 800 B)       |   869 MiB/s    | **922 MiB/s**|  334 MiB/s | 287 MiB/s  | 205 MiB/s | 21.1 GiB/s |
 | Length-changing folds (1 700 B)        | **1.26 GiB/s** |  716 MiB/s   |  233 MiB/s | 492 MiB/s  | 269 MiB/s | 15.9 GiB/s |
 
-† `str::to_ascii_lowercase` is **not** a correct case-folder for non-ASCII —
-it leaves every multibyte sequence untouched. It is shown only as the
-"memcpy + ASCII-lowercase" speed floor. The two `to_lowercase` variants
-perform Unicode *lowercasing*, which is not identical to case folding (they
-diverge on e.g. final-sigma, `İ`, `ß`); this is an equal-workload throughput
-comparison, not an output-equality one.
+† `str::to_ascii_lowercase` leaves multibyte sequences untouched (shown only as
+the "memcpy + ASCII-lowercase" floor); the two `to_lowercase` variants do
+Unicode *lowercasing*, not case folding (they diverge on final-sigma, `İ`, `ß`)
+— an equal-workload throughput comparison, not output-equality.
 
-`simple_fold` leads every workload except all-folding mixed-BMP text,
-where `simd-normalizer`'s wide-lane SIMD still edges ahead (922 vs 869 MiB/s) —
-though the chunked SWAR run-scan closed most of that gap. Two things stand out:
-
-* **The no-fold rows run at GiB/s** (CJK 3.0, symbols 3.0 — ~6× `str::
-  to_lowercase`): the tail scan probes `PAGE_BITMAP` from the first one or two
-  UTF-8 bytes, finds nothing folds, and returns the input buffer as-is — no
-  second allocation, no byte copied.
-* **The compact table beats a HashMap by 3–5×** on the *identical* byte-level
-  fold (CJK 2.95 GiB/s vs 558 MiB/s, mixed-BMP 869 vs 334 MiB/s), and the
-  HashMap has no ASCII fast path at all (213 MiB/s vs 40 GiB/s).
+`simple_fold` leads every workload except all-folding mixed-BMP, where
+`simd-normalizer`'s wide-lane SIMD edges ahead (922 vs 869 MiB/s). Two
+highlights: no-fold text runs at GiB/s (~6× `str::to_lowercase`) by probing
+`PAGE_BITMAP` and returning the buffer as-is, and the compact table beats a
+`HashMap` by 3–5× on the *identical* byte-level fold — plus an ASCII fast path
+the `HashMap` lacks (40 GiB/s vs 213 MiB/s).
 
 Reproduce with:
 
