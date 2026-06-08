@@ -40,14 +40,6 @@ pub fn reference_map() -> FoldHashMap {
     out
 }
 
-/// Look up via the HashMap baseline.
-#[inline]
-pub fn hashmap_fold(map: &FoldHashMap, c: char) -> char {
-    let cp = c as u32;
-    let folded = map.get(&cp).copied().unwrap_or(cp);
-    char::from_u32(folded).unwrap_or(c)
-}
-
 /// Encodes a character's UTF-8 bytes into a little-endian `u32`, with any
 /// unused high bytes left zero. This is the writable low-byte form the fold
 /// *output* uses: the lead byte sits in the low byte, so storing the whole

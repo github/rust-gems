@@ -47,7 +47,7 @@
 //!    without assembling `cp` or consulting the run table, so fold-free scripts
 //!    (CJK, Hangul, Kana, Arabic, Hebrew, Indic) *and* the empty 64-cp pages
 //!    inside otherwise-foldable blocks are skipped at memory speed. No extra
-//!    table: it reuses the same `PAGE_BITMAP` the per-`char` lookup uses.
+//!    table: it reuses the same `PAGE_BITMAP` the run lookup uses.
 //! 5. **Little-endian byte-delta fold.** On a little-endian machine a folded
 //!    character is the source character's UTF-8 bytes, read as a `u32`, plus a
 //!    per-run constant. `BYTE_DELTA[i]` stores that constant (32 b, since the
@@ -59,11 +59,9 @@
 //! # Example
 //!
 //! ```
-//! use casefold::simple_fold;
-//! assert_eq!(simple_fold('A'), 'a');
-//! assert_eq!(simple_fold('Ä'), 'ä');
-//! assert_eq!(simple_fold('a'), 'a');
-//! assert_eq!(simple_fold('1'), '1');
+//! use casefold::fold_into_bytes;
+//! assert_eq!(fold_into_bytes("Hello, WORLD!".to_string()), b"hello, world!");
+//! assert_eq!(fold_into_bytes("ÜBER".to_string()), "über".as_bytes());
 //! ```
 
 #![deny(missing_docs)]
@@ -73,87 +71,6 @@ mod table {
 }
 
 use table::*;
-
-const PAGE_BITS: u32 = 6;
-const PAGE_MASK: u32 = (1u32 << PAGE_BITS) - 1;
-
-/// Returns the simple (1-to-1) lower-case fold of `c`, or `c` itself if no
-/// fold is defined for it.
-///
-/// This is suitable for case-insensitive comparison of individual characters.
-/// For full case-insensitive string matching (which may require multi-character
-/// folds such as `ß` → `ss`), use a dedicated locale-aware library.
-#[inline]
-pub fn simple_fold(c: char) -> char {
-    let cp = c as u32;
-    // ASCII fast path: branchless A..Z → a..z, identity otherwise.
-    if cp < 0x80 {
-        let is_upper = u32::from(cp.wrapping_sub(b'A' as u32) < 26);
-        // Safe: `cp | 0x20` for any ASCII byte stays in the ASCII range, and
-        // for cp in 'A'..='Z' it produces 'a'..='z'. For any other ASCII byte
-        // `is_upper` is 0, so the OR is a no-op.
-        return unsafe { char::from_u32_unchecked(cp | (is_upper << 5)) };
-    }
-    simple_fold_non_ascii(c)
-}
-
-/// Identical to [`simple_fold`], but assumes `c as u32 >= 0x80`. Use this in
-/// hot loops where the caller has already separated ASCII from non-ASCII (the
-/// generic `simple_fold` retests `cp < 0x80` on every call).
-///
-/// On an ASCII codepoint this still returns the correct (identity) result —
-/// every ASCII char's lookup misses the bitmap and returns `c` — but the
-/// ASCII fast path that `simple_fold` provides is skipped, so calling this
-/// on ASCII is slower than `simple_fold`.
-#[inline]
-pub fn simple_fold_non_ascii(c: char) -> char {
-    let cp = c as u32;
-    if cp > LAST_COVERED {
-        return c;
-    }
-    let idx = match successor(cp) {
-        Some(x) => x,
-        None => return c,
-    };
-    let ss = RUN_START_STRIDE[idx];
-    let start_low = ss & 0x3F;
-    let stride_bit = ss >> 6;
-    // The scan guarantees `cp & 0x3F <= end_low`; the run covers `cp` iff its
-    // low 6 bits are `>= start_low` (and, for stride 2, an even offset). No
-    // code-point reconstruction needed.
-    let low_v = (cp & PAGE_MASK) as u8;
-    if low_v < start_low || ((low_v - start_low) & stride_bit) != 0 {
-        return c;
-    }
-    // Fold with the run's little-endian byte delta: encode `cp`, add the delta,
-    // decode the result. The same `BYTE_DELTA` table serves the bulk byte path.
-    let mut buf = [0u8; 4];
-    c.encode_utf8(&mut buf);
-    let folded = u32::from_le_bytes(buf).wrapping_add(BYTE_DELTA[idx]);
-    char::from_u32(decode_utf8_le(folded)).unwrap_or(c)
-}
-
-/// Decodes the little-endian UTF-8 byte word `word` (low bytes hold the
-/// character, length implied by the lead byte) back into a code point.
-#[inline]
-fn decode_utf8_le(word: u32) -> u32 {
-    let b = word.to_le_bytes();
-    match utf8_len(b[0]) {
-        1 => b[0] as u32,
-        2 => (((b[0] & 0x1F) as u32) << 6) | (b[1] & 0x3F) as u32,
-        3 => {
-            (((b[0] & 0x0F) as u32) << 12)
-                | (((b[1] & 0x3F) as u32) << 6)
-                | (b[2] & 0x3F) as u32
-        }
-        _ => {
-            (((b[0] & 0x07) as u32) << 18)
-                | (((b[1] & 0x3F) as u32) << 12)
-                | (((b[2] & 0x3F) as u32) << 6)
-                | (b[3] & 0x3F) as u32
-        }
-    }
-}
 
 /// Consumes `s` and returns its simple-fold form as a `Vec<u8>`. The input's
 /// heap buffer is handed back untouched whenever folding changes no bytes —
@@ -197,8 +114,8 @@ pub fn fold_into_bytes(s: String) -> Vec<u8> {
     }
     // Non-ASCII bytes are present. Locate the first one (SIMD-fast via
     // `position`/memchr) and hand off to the UTF-8 path from there — the
-    // ASCII prefix is already lowercased and `simple_fold` is idempotent
-    // on lower-case ASCII, so skipping it is purely an optimization.
+    // ASCII prefix is already lowercased and folding is idempotent on
+    // lower-case ASCII, so skipping it is purely an optimization.
     let first_non_ascii = bytes.iter().position(|&b| b & 0x80 != 0).unwrap();
     fold_non_ascii_tail(bytes, first_non_ascii)
 }
@@ -215,8 +132,7 @@ pub fn fold_into_bytes(s: String) -> Vec<u8> {
 /// Characters are never fully decoded: the page index (`cp >> 6`) comes from
 /// the first one or two bytes for the `PAGE_BITMAP` reject, and on a page hit
 /// the remaining `cp & 0x3F` is read directly from the final byte to drive the
-/// within-page run search and delta — so the fold logic of
-/// [`simple_fold_non_ascii`] is inlined here without repeating its page test.
+/// within-page run search and byte-delta fold — no code-point reconstruction.
 fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::new();
     let src = bytes.as_ptr();
@@ -418,46 +334,6 @@ fn scan_end_low(lo: usize, n: usize, low_v: u8) -> usize {
     n
 }
 
-/// Smallest run with `end >= cp` *within `cp`'s own page*, or `None` if the
-/// page has no intervals or none of its ends is `>= cp`. Returns the absolute
-/// `RUN_END_LOW`/`RUN_START_STRIDE`/`BYTE_DELTA` index of the run. Because runs
-/// are split at page boundaries, this is also the only possible run that could
-/// contain `cp` — no cross-page scan is ever needed. The caller checks
-/// `cp & 0x3F` against the run's `start_low` to confirm membership.
-#[inline]
-fn successor(cp: u32) -> Option<usize> {
-    let page = cp >> PAGE_BITS;
-    let low_v = (cp & PAGE_MASK) as u8;
-
-    let word_idx = (page / 64) as usize;
-    let bit_in_word = page % 64;
-    let word = PAGE_BITMAP[word_idx];
-    if (word >> bit_in_word) & 1 == 0 {
-        // Slot has no intervals at all → cp definitely doesn't fold.
-        return None;
-    }
-    let dense_idx = popcount_up_to(page) as usize;
-    let lo = PAGE_OFFSET[dense_idx] as usize;
-    let hi = PAGE_OFFSET[dense_idx + 1] as usize;
-
-    // Short scalar scan over clean `end_low` bytes. For the isolated per-`char`
-    // lookup this beats the chunked SWAR scan (`scan_end_low`, used by the bulk
-    // byte path): a page averages ~3.8 runs, so ~4 well-predicted compares win
-    // over the SWAR setup latency, which is only hidden inside the byte path's
-    // longer per-character pipeline.
-    let slice = &RUN_END_LOW[lo..hi];
-    let mut off = 0;
-    while off < slice.len() && slice[off] < low_v {
-        off += 1;
-    }
-    if off >= slice.len() {
-        // All ends in this slot are < cp's low byte; since intervals don't
-        // span slots, cp is past every interval and so doesn't fold.
-        return None;
-    }
-    Some(lo + off)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,40 +361,16 @@ mod tests {
         out
     }
 
-    #[test]
-    fn matches_unicode_data_for_every_codepoint() {
-        let r = reference();
-        for cp in 0..0x110000u32 {
-            // Surrogates are not valid `char`s, skip.
-            if (0xD800..0xE000).contains(&cp) {
-                continue;
-            }
-            let c = char::from_u32(cp).unwrap();
-            let expected = r.get(&cp).copied().unwrap_or(cp);
-            let got = simple_fold(c) as u32;
-            assert_eq!(
-                got, expected,
-                "mismatch at U+{cp:04X}: got U+{got:04X}, want U+{expected:04X}"
-            );
+    /// Per-character fold via the reference map, used as the oracle for the
+    /// byte-oriented `fold_into_bytes` cross-checks below.
+    fn fold_oracle(r: &HashMap<u32, u32>, s: &str) -> Vec<u8> {
+        let mut out = String::new();
+        for c in s.chars() {
+            let cp = c as u32;
+            let folded = r.get(&cp).copied().unwrap_or(cp);
+            out.push(char::from_u32(folded).unwrap());
         }
-    }
-
-    #[test]
-    fn ascii_fast_cases() {
-        assert_eq!(simple_fold('A'), 'a');
-        assert_eq!(simple_fold('Z'), 'z');
-        assert_eq!(simple_fold('a'), 'a');
-        assert_eq!(simple_fold('0'), '0');
-        assert_eq!(simple_fold(' '), ' ');
-    }
-
-    #[test]
-    fn extended_cases() {
-        assert_eq!(simple_fold('Ä'), 'ä');
-        assert_eq!(simple_fold('Ω'), 'ω');
-        // Codepoints with no defined fold map to themselves.
-        assert_eq!(simple_fold('漢'), '漢');
-        assert_eq!(simple_fold('\u{1F600}'), '\u{1F600}'); // 😀
+        out.into_bytes()
     }
 
     #[test]
@@ -637,20 +489,21 @@ mod tests {
     }
 
     #[test]
-    fn fold_into_bytes_matches_per_char_fold() {
-        // Cross-check against per-char `simple_fold` on a varied input.
+    fn fold_into_bytes_matches_reference_map() {
+        // Cross-check against the reference fold map on a varied input.
+        let r = reference();
         let input = "Quick BROWN Fox 🦊 ÜBER Größe ΣΟΦΙΑ \u{0130}\u{023A}漢";
-        let expected: String = input.chars().map(simple_fold).collect();
-        assert_eq!(fold_into_bytes(input.to_string()), expected.as_bytes());
+        assert_eq!(fold_into_bytes(input.to_string()), fold_oracle(&r, input));
     }
 
     #[test]
-    fn fold_into_bytes_matches_per_char_fold_exhaustive() {
+    fn fold_into_bytes_matches_reference_map_exhaustive() {
         // Drive every assigned code point through the byte-oriented fold path
-        // and cross-check against per-char `simple_fold`. This guarantees the
+        // and cross-check against the reference fold map. This guarantees the
         // UTF-8 lead-byte reject filter never skips a code point that actually
         // folds (a false reject would corrupt output here). A leading 'X'
         // forces the tier-2 UTF-8 tail to run from the very first char.
+        let r = reference();
         let mut input = String::from("X");
         for cp in 0x80..0x110000u32 {
             if (0xD800..0xE000).contains(&cp) {
@@ -658,7 +511,7 @@ mod tests {
             }
             input.push(char::from_u32(cp).unwrap());
         }
-        let expected: String = input.chars().map(simple_fold).collect();
-        assert_eq!(fold_into_bytes(input), expected.into_bytes());
+        let expected = fold_oracle(&r, &input);
+        assert_eq!(fold_into_bytes(input), expected);
     }
 }

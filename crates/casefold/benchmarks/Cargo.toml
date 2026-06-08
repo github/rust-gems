@@ -7,12 +7,6 @@ path = "lib.rs"
 test = false
 
 [[bench]]
-name = "performance"
-path = "performance.rs"
-harness = false
-test = false
-
-[[bench]]
 name = "conversion"
 path = "conversion.rs"
 harness = false

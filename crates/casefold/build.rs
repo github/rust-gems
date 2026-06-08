@@ -328,9 +328,6 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
     s.push_str("#[allow(dead_code)]\n");
     s.push_str(&format!("pub(crate) const N: u32 = {n};\n"));
     s.push_str(&format!(
-        "pub(crate) const LAST_COVERED: u32 = {last_covered};\n"
-    ));
-    s.push_str(&format!(
         "pub(crate) const NUM_FOLD_ENTRIES: u32 = {};\n\n",
         folds.len()
     ));
