@@ -2,8 +2,8 @@
 
 A **fast** Unicode simple case-folding library for Rust, backed by a **very
 compact** (~1.7 KB) paged-bitmap + run-length table. It folds whole strings at
-multiple GiB/s — outpacing both a `HashMap` baseline and `str::to_lowercase` by
-several × — while using ~10× less memory than a hash map of the same data.
+multiple GiB/s — several × faster than a `HashMap` fold table — while using
+~10× less memory than that hash map of the same data.
 
 `simple_fold(s: String) -> String` maps a string to its lower-case fold
 form, as defined by the Unicode [CaseFolding.txt][cf] data file restricted to
@@ -121,29 +121,40 @@ spans + masked `BYTE_DELTA` folds). Its within-page scan is a chunked SWAR scan
 (8 `end_low` bytes at a time, branchless), whose latency the per-character
 pipeline hides.
 
-Throughput on an Apple M-series machine (criterion medians), against the SIMD
-`simd-normalizer` crate, the same byte path backed by a `HashMap`, and the
-standard library:
+Throughput on an Apple M-series machine (criterion medians). The **true
+case-folders** produce the same output as `simple_fold`:
 
-| Workload (input size) | `simple_fold` | `simd_normalizer` | HashMap (byte path) | `str::to_lowercase` | `chars().flat_map` | `to_ascii_lowercase`† |
-|---|--:|--:|--:|--:|--:|--:|
-| Pure ASCII (5 700 B)                   | **40.8 GiB/s** |   1.21 GiB/s |  213 MiB/s | 26.1 GiB/s | 383 MiB/s | 21.2 GiB/s |
-| CJK, no folds (8 100 B)                | **2.95 GiB/s** |   1.97 GiB/s |  558 MiB/s | 473 MiB/s  | 369 MiB/s | 22.9 GiB/s |
-| Symbols / Myanmar, no folds (9 000 B)  | **2.96 GiB/s** |   1.56 GiB/s |  410 MiB/s | 497 MiB/s  | 348 MiB/s | 22.9 GiB/s |
-| Mixed BMP, all folding (8 800 B)       |   869 MiB/s    | **922 MiB/s**|  334 MiB/s | 287 MiB/s  | 205 MiB/s | 21.1 GiB/s |
-| Length-changing folds (1 700 B)        | **1.26 GiB/s** |  716 MiB/s   |  233 MiB/s | 492 MiB/s  | 269 MiB/s | 15.9 GiB/s |
+| Workload (input size) | `simple_fold` | `simd_normalizer` | `HashMap` (byte path) |
+|---|--:|--:|--:|
+| Pure ASCII (5 700 B)                   | **40.8 GiB/s** |  1.21 GiB/s | 213 MiB/s |
+| CJK, no folds (8 100 B)                | **2.95 GiB/s** |  1.97 GiB/s | 558 MiB/s |
+| Symbols / Myanmar, no folds (9 000 B)  | **2.96 GiB/s** |  1.56 GiB/s | 410 MiB/s |
+| Mixed BMP, all folding (8 800 B)       |   869 MiB/s    | **922 MiB/s**| 334 MiB/s |
+| Length-changing folds (1 700 B)        | **1.26 GiB/s** |  716 MiB/s  | 233 MiB/s |
 
-† `str::to_ascii_lowercase` leaves multibyte sequences untouched (shown only as
-the "memcpy + ASCII-lowercase" floor); the two `to_lowercase` variants do
-Unicode *lowercasing*, not case folding (they diverge on final-sigma, `İ`, `ß`)
-— an equal-workload throughput comparison, not output-equality.
+The standard-library routines below perform Unicode **lowercasing**, *not* case
+folding — a different operation with different output (they diverge on e.g.
+final-sigma, `İ`, `ß`; `to_ascii_lowercase`† leaves all multibyte sequences
+untouched). They are included only as a throughput reference for the same
+workloads, not as output-equivalent alternatives:
 
-`simple_fold` leads every workload except all-folding mixed-BMP, where
-`simd-normalizer`'s wide-lane SIMD edges ahead (922 vs 869 MiB/s). Two
-highlights: no-fold text runs at GiB/s (~6× `str::to_lowercase`) by probing
-`PAGE_BITMAP` and returning the buffer as-is, and the compact table beats a
-`HashMap` by 3–5× on the *identical* byte-level fold — plus an ASCII fast path
-the `HashMap` lacks (40 GiB/s vs 213 MiB/s).
+| Workload (input size) | `simple_fold` (fold) | `str::to_lowercase` | `chars().flat_map` | `to_ascii_lowercase`† |
+|---|--:|--:|--:|--:|
+| Pure ASCII (5 700 B)                   | **40.8 GiB/s** | 26.1 GiB/s | 383 MiB/s | 21.2 GiB/s |
+| CJK, no folds (8 100 B)                | **2.95 GiB/s** | 473 MiB/s  | 369 MiB/s | 22.9 GiB/s |
+| Symbols / Myanmar, no folds (9 000 B)  | **2.96 GiB/s** | 497 MiB/s  | 348 MiB/s | 22.9 GiB/s |
+| Mixed BMP, all folding (8 800 B)       |   869 MiB/s    | 287 MiB/s  | 205 MiB/s | 21.1 GiB/s |
+| Length-changing folds (1 700 B)        | **1.26 GiB/s** | 492 MiB/s  | 269 MiB/s | 15.9 GiB/s |
+
+† `to_ascii_lowercase` is shown only as the "memcpy + ASCII-lowercase" speed
+floor.
+
+Against the true case-folders, `simple_fold` leads every workload except
+all-folding mixed-BMP, where `simd-normalizer` edges ahead (922 vs 869 MiB/s).
+Two highlights: no-fold text runs at GiB/s by probing `PAGE_BITMAP` and
+returning the buffer as-is, and the compact table beats the `HashMap` by 3–5×
+on the *identical* byte-level fold — plus an ASCII fast path the `HashMap`
+lacks (40 GiB/s vs 213 MiB/s).
 
 Reproduce with:
 

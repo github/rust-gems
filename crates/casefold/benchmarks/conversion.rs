@@ -34,9 +34,10 @@ fn to_ascii_lowercase_into_bytes(s: String) -> Vec<u8> {
     s.to_ascii_lowercase().into_bytes()
 }
 
-/// `simd-normalizer::casefold` — SIMD-accelerated Unicode simple case
-/// folding (C+S, Unicode 17.0). On aarch64 uses NEON; on x86_64 uses
-/// SSE4.2/AVX2/AVX-512 via runtime CPUID dispatch.
+/// `simd-normalizer::casefold` — Unicode simple case folding (C+S, Unicode
+/// 17.0). The crate uses SIMD for some passes (e.g. ASCII/scan), but its
+/// case-fold mapping itself does not appear to use SIMD lookups; it is included
+/// here as another correct case-folder for throughput comparison.
 #[inline]
 fn simd_normalizer_casefold_into_bytes(s: String) -> Vec<u8> {
     let folded = simd_normalizer::casefold(&s, simd_normalizer::CaseFoldMode::Standard);
