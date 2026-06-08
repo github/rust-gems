@@ -334,8 +334,11 @@ fn scan_end_low(lo: usize, n: usize, low_v: u8) -> usize {
     while base < n {
         // `RUN_END_LOW` is padded by 8 bytes (build.rs) so this read is always
         // in bounds; the slice length is statically 8.
-        let chunk =
-            u64::from_le_bytes(RUN_END_LOW[lo + base..lo + base + 8].try_into().expect("8-byte slice"));
+        let chunk = u64::from_le_bytes(
+            RUN_END_LOW[lo + base..lo + base + 8]
+                .try_into()
+                .expect("8-byte slice"),
+        );
         // `(b | 0x80) - low_v` keeps its high bit iff `b >= low_v` (no
         // cross-lane borrow). The first set lane is the first run `>= low_v`.
         let ge = (chunk | HIGH).wrapping_sub(bcast) & HIGH;
@@ -358,7 +361,11 @@ mod tests {
         let text = fs::read_to_string("data/CaseFolding.txt").expect("CaseFolding.txt");
         let mut out = HashMap::new();
         for raw in text.lines() {
-            let line = raw.split('#').next().expect("split yields at least one item").trim();
+            let line = raw
+                .split('#')
+                .next()
+                .expect("split yields at least one item")
+                .trim();
             if line.is_empty() {
                 continue;
             }
@@ -371,7 +378,10 @@ mod tests {
                 continue;
             }
             let target = u32::from_str_radix(
-                mapping.split_whitespace().next().expect("mapping has a target"),
+                mapping
+                    .split_whitespace()
+                    .next()
+                    .expect("mapping has a target"),
                 16,
             )
             .expect("mapping is hex");
