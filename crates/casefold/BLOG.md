@@ -20,19 +20,19 @@ waiting for the bytes to arrive.
 
 This post is about how the common case got that fast — and how, once the ASCII
 engine was running at memory speed, the comparatively sluggish throughput on the
-*non*-ASCII path started to bug me too, so I pulled out all the stops there as
+*non*-ASCII path started to bug me too, and I pulled out all the stops there as
 well: a 1.7 KB table that folds without ever decoding a character, and beats them.
 
 ## Wait — why case-fold at all?
 
 Suppose a user searches for `straße` and your corpus contains `STRASSE`, or they
 type `İstanbul` and you stored `istanbul`. To make these match you need a
-canonical form that erases case distinctions, so two strings that "differ only
+canonical form that erases case distinctions, letting two strings that "differ only
 in case" compare equal. That form is **case folding**, and it shows up wherever
 text is *matched* rather than *displayed*:
 
 - **Search engines** push every indexed term and every query token through the
-  same fold, so `Café`, `café`, and `CAFÉ` share one posting list. It runs on
+  same fold, collapsing `Café`, `café`, and `CAFÉ` into one posting list. It runs on
   every token at index time and query time — it has to be fast and
   allocation-light.
 - **Regex engines** implement the case-insensitive flag `(?i)` by folding the
@@ -50,12 +50,12 @@ different operations with different goals:
   final sigma `Σ` lowercases to `ς` at the end of a word and `σ` elsewhere;
   Turkish `I` lowercases differently than English `I`.
 - **Case folding** is for *comparison* and is deliberately context-free and
-  locale-independent, so the relation stays stable and symmetric. The Unicode
+  locale-independent, keeping the relation stable and symmetric. The Unicode
   Character Database ships an explicit
   [`CaseFolding.txt`](https://www.unicode.org/Public/UCD/latest/ucd/CaseFolding.txt)
   for exactly this.
 
-These diverge on real characters — `ß`, `İ`, final sigma — so lowercasing as a
+These diverge on real characters — `ß`, `İ`, final sigma — and lowercasing as a
 stand-in silently produces wrong matches. This crate implements the **simple**
 (1-to-1) folds — statuses `C` and `S` in `CaseFolding.txt` — and deliberately
 *not* the multi-character "full" folds (`ß` → `ss`) or Turkic locale folds.
@@ -64,7 +64,7 @@ That restriction is a feature, not a shortcut: regex engines like
 [ripgrep](https://github.com/BurntSushi/ripgrep) (via the Rust `regex` crate)
 match case-insensitively with the *same* simple-fold table, expanding each
 character class over its simple folds. Sticking to simple folds keeps this
-crate's results **consistent with the tools people already search with**, so
+crate's results **consistent with the tools people already search with**, and
 text normalized here matches the way a `(?i)` ripgrep query would.
 
 ## The workload is mostly ASCII
@@ -78,7 +78,7 @@ a string literal or comment. The same is true of logs, URLs, HTTP headers,
 machine-generated text, and most English-language content. A tool like ripgrep
 grepping a codebase case-insensitively spends almost all of its time on ASCII.
 
-So the ASCII path isn't a corner case to tolerate on the way to the "real"
+The ASCII path, then, isn't a corner case to tolerate on the way to the "real"
 Unicode logic — it *is* the common case, and making it run at memory speed is
 the single most important thing the crate does. Everything else exists to keep
 the rare non-ASCII path from spoiling that.
@@ -86,8 +86,8 @@ the rare non-ASCII path from spoiling that.
 ## The counterintuitive core: don't stop early
 
 The fold of an ASCII letter is trivial — `A..=Z` map to `a..=z`, everything else
-is unchanged — so the ASCII pass is really just "sweep the buffer, lowercase in
-place." Here's how almost everyone writes it the first time:
+is unchanged — making the ASCII pass really just "sweep the buffer, lowercase in
+place." Ask any LLM for it and you'll get something like this:
 
 ```rust
 let bytes = s.as_bytes_mut();
@@ -110,12 +110,12 @@ do — and the reason is every one of those `if`s.
 Two lines carry a **data-dependent branch**: the `b >= 0x80` early-exit and the
 `is_ascii_uppercase` test. Data-dependent
 branches in the loop body are exactly what stop the compiler from
-auto-vectorizing, so this loop runs one byte at a time. Crucially, vectorization
+auto-vectorizing, leaving this loop to run one byte at a time. Crucially, vectorization
 is **all-or-nothing**: a single branch in the body is enough to disable it
 entirely. Removing just `if b >= 0x80 { break }` doesn't shave a few percent off
 — it's the difference between scalar and SIMD.
 
-So let's delete every branch, line by line:
+Let's delete every branch, line by line:
 
 - **`if b >= 0x80 { break }`** → don't stop at all. OR every byte into an
   accumulator and test it *once*, after the loop: `high_bit_acc |= *b`. Same
@@ -125,7 +125,7 @@ So let's delete every branch, line by line:
   with no branch.
 - **The conditional write** → fold the mask into the store. `| (is_upper << 5)`
   sets bit 5 — turning an upper-case letter lower-case and being a no-op on
-  everything else — so the byte is always written, never branched on.
+  everything else — the byte is always written, never branched on.
 
 What's left has no branch in its body and no early exit:
 
@@ -141,7 +141,7 @@ if high_bit_acc & 0x80 == 0 {
 }
 ```
 
-A loop with no data-dependent control flow is trivially vectorizable, so LLVM
+A loop with no data-dependent control flow is trivially vectorizable: LLVM
 emits 16-byte-at-a-time NEON and the whole thing runs at >**45 GiB/s** —
 essentially memory bandwidth. And we come out of the pass already knowing, from
 `high_bit_acc`, whether there's any non-ASCII work left to do.
@@ -171,7 +171,7 @@ making the upper-case fold branchless — then turns a *partially* vectorized lo
 > conditional `strb` is skipped for every lowercase letter, digit and space (the
 > vast majority of real text), and the well-predicted branch that guards it is
 > nearly free. The branchless version replaces that rarely-taken store with an
-> **unconditional `strb` every iteration**, so it writes back all ~5,700 bytes
+> **unconditional `strb` every iteration**, writing back all ~5,700 bytes
 > instead of just the handful of upper-case ones. Extra write traffic for no
 > benefit. Branchless-write only *wins* once the loop vectorizes, because then the
 > store becomes a single 16-byte vector write regardless of content and the
@@ -186,7 +186,7 @@ a time** — on a 64-bit target it tests 16 bytes per iteration by OR-ing two
 chunk-scan to find the ASCII prefix, then run the branchless (vectorizable)
 convert over it. That keeps the early-exit ability — it still bails on the first
 non-ASCII block — while letting both halves go fast. The catch is that it reads
-the data **twice** (once to scan, once to convert), so it lands at about
+the data **twice** (once to scan, once to convert), landing at about
 **23 GiB/s** — roughly half of the single-pass branchless sweep, and ~7× the
 naive break loop. A solid, general-purpose default; just not the absolute ceiling
 when you control the whole loop and can fold detection and conversion into one
@@ -194,11 +194,11 @@ branch-free pass.
 
 > **NOTE — wouldn't *fusing* the two passes be faster?** It's the obvious next
 > thought: keep the chunked early-exit but convert each 16-byte block right after
-> you've confirmed it's ASCII, so you read the data only *once*. Measured, it's
+> you've confirmed it's ASCII, reading the data only *once*. Measured, it's
 > **~2.6× slower** — 8.7 GiB/s versus the two-pass 23. The inner block convert
 > still vectorizes to a single 16-byte op, but now there's a data-dependent
 > early-exit branch *every 16 bytes*, and that branch pins the loop to one block
-> at a time: the compiler can't unroll or software-pipeline across blocks, so each
+> at a time: the compiler can't unroll or software-pipeline across blocks, and each
 > iteration pays the full load→test→branch→convert→store latency with nothing to
 > hide it behind. Split into two passes, each one is clean: the scan is a
 > branch-light, **store-free** word scan that races through memory, and the
@@ -217,12 +217,12 @@ car.
 ## Touch the heap only when you must
 
 40 GiB/s also means doing zero unnecessary allocation. `simple_fold` takes the
-input `String` *by value*, so it owns the heap buffer and can mutate and return
+input `String` *by value*, owning the heap buffer it can mutate and return
 it. If the OR-accumulator's high bit was clear, the input was pure ASCII —
-already folded in place — so we hand the **same allocation** straight back, no
+already folded in place — we hand the **same allocation** straight back, no
 second buffer and no copy. Otherwise we `memchr` to the first non-ASCII byte and
 scan the tail from there, leaving the output buffer *unallocated* (a null write
-cursor) until we hit a character that folds to **different bytes**. So text whose
+cursor) until we hit a character that folds to **different bytes**. Text whose
 multibyte content never folds — CJK, Hangul, Kana, Arabic, Hebrew, symbols — also
 returns the original allocation untouched, never copying a byte.
 
@@ -239,11 +239,11 @@ capacity, occasionally reallocating, copying everything written so far, and
 juggling extra length/capacity bookkeeping; a single up-front allocation lets a
 raw write cursor run straight to the end with none of that. (And since the
 cursor is null until that first growing/changing fold, it doubles as the "have
-we started building yet?" flag — so the decision to allocate costs no extra
+we started building yet?" flag — the decision to allocate costs no extra
 state either.)
 
 Sizing it needs a bound on growth, and those same two outliers give it: every 2
-input bytes yield at most 3 output bytes, so the output is at most **1.5× the
+input bytes yield at most 3 output bytes, capping the output at **1.5× the
 input** — exactly the capacity we reserve:
 
 ```rust
@@ -268,8 +268,8 @@ UTF-8, hash, re-encode. Unicode 16.0 has 1484 simple-fold mappings, but they're 
 
 But before any of that, the most important ingredient: even on the non-ASCII
 path, the overwhelming majority of characters **do not fold**. CJK, Hangul, Kana,
-Arabic, Hebrew, Indic scripts, emoji, punctuation, symbols — none of it folds. So
-the hot operation isn't really "fold this character," it's "*does* this character
+Arabic, Hebrew, Indic scripts, emoji, punctuation, symbols — none of it folds. The
+hot operation, then, isn't really "fold this character," it's "*does* this character
 fold? — almost always no." The table has to make that **negative test** as close
 to free as possible; the actual folding is the rare sub-case of an already-rare
 path. That priority is what shapes the layout below — the page bitmap
@@ -301,8 +301,8 @@ precede it) to find its slice of entries, storing nothing for the ~1900 empty
 pages.
 
 Why **64**? Six bits is exactly what makes the probe fall out of the UTF-8 bytes.
-A continuation byte carries 6 payload bits, so the within-page offset `cp & 0x3F`
-is *literally the low 6 bits of the last byte*. Indexing the bitmap as 64-bit
+A continuation byte carries 6 payload bits, which makes the within-page offset `cp & 0x3F`
+*literally the low 6 bits of the last byte*. Indexing the bitmap as 64-bit
 words, the bit position is another 6 bits — straight from the second-to-last
 byte — leaving only the higher bits as the word index:
 
@@ -312,7 +312,7 @@ byte — leaving only the higher bits as the word index:
 | 3 | `b2 & 0x3F` | `b1 & 0x3F` | `lead & 0x0F` |
 | 4 | `b3 & 0x3F` | `b2 & 0x3F` | `((lead & 0x07) << 6) \| (b1 & 0x3F)` |
 
-So the bit index is always just the second-to-last byte masked with `0x3F`, and
+The bit index is therefore always just the second-to-last byte masked with `0x3F`, and
 the word index is `0`, a nibble, or (only for four-byte sequences) two merged
 bytes — a tiny branch on the lead byte, no full code-point reconstruction:
 
@@ -347,11 +347,11 @@ to scan them all to find the one matching the current code point. The structure
 of the data rescues us again. Adjacent code points overwhelmingly share the same
 delta to their fold: `A`–`Z` all map `+32`, and Latin Extended is full of
 *alternating* runs like `0x0100, 0x0102, 0x0104, …` where every second code point
-folds. So instead of per-code-point entries we store **runs** — start, end,
+folds. Instead of per-code-point entries we store **runs** — start, end,
 stride, delta — and a 1-bit `stride` flag covers both the contiguous and the
 every-other case. This interval compression collapses the ~1484 individual folds
-into just **238** runs across the 59 pages (≈4 per page), so the within-page
-search has only a handful of entries to look at instead of dozens. This
+into just **238** runs across the 59 pages (≈4 per page), leaving the within-page
+search only a handful of entries to look at instead of dozens. This
 range-with-delta encoding (including the stride trick) is borrowed from Go's
 `unicode` package, whose
 [`CaseRange`](https://github.com/golang/go/blob/master/src/unicode/tables.go)
@@ -371,9 +371,9 @@ load **8 `end_low` bytes into a single `u64` and test all of them at once** with
 one branchless SWAR step — `(chunk | 0x80…80) − broadcast(low) & 0x80…80` sets
 the top bit of every lane whose key is `≥ cp & 0x3F`. A single bit-scan of that
 mask (the keys are sorted, so the first set lane is the run we want) finds the
-slot. A page holds ~4 runs on average, so that one 8-wide compare almost always
+slot. A page holds ~4 runs on average; that one 8-wide compare almost always
 resolves the entire search in a single step. One unlucky page does hold 30 runs,
-so the compare sits inside a short loop that strides 8 keys at a time — but that
+which puts the compare inside a short loop that strides 8 keys at a time — but that
 loop trips at most a handful of times on exactly one page in all of Unicode, and
 never on the common ones. Either way: no per-run branch, and no code-point
 reconstruction anywhere.
@@ -411,7 +411,7 @@ fn scan_end_low(lo: usize, n: usize, low_v: u8) -> usize {
 
 On a little-endian machine the
 folded character's UTF-8 bytes, read as a `u32`, equal the source bytes (as a
-`u32`) plus a **per-run constant**. So a parallel `BYTE_DELTA[i]` table turns the
+`u32`) plus a **per-run constant**. A parallel `BYTE_DELTA[i]` table then turns the
 whole fold into a masked load, one `wrapping_add`, and a 4-byte store:
 
 ```rust
@@ -424,7 +424,7 @@ dst += utf8_len(folded);                                       // ...advance by 
 Both lengths in that snippet — the `length_mask` for the source character and
 the *advance by the folded length* for the destination — come from one more tiny
 trick. A UTF-8 sequence's length is fixed by the top four bits of its lead byte,
-so the 16 possible lengths are packed one nibble each into a single 64-bit
+letting the 16 possible lengths pack one nibble each into a single 64-bit
 constant (`0x4322_1111_1111_1111`); the length is then a shift and a mask,
 `(LEN_BITS >> (4 * (lead >> 4))) & 0xF` — no `if` chain, no table memory, nothing
 for the predictor to get wrong. (A *count leading ones* — `(!lead).leading_zeros()`
@@ -507,7 +507,7 @@ more smaller — and unlike most of them it never decodes a character:
 Criterion medians on an Apple M-series machine. The other **true case-folders** —
 `simd-normalizer` and the same byte path backed by a simple `HashMap` — produce
 identical output. `str::to_lowercase` does *not* in general, but on pure ASCII it
-coincides with the fold exactly, so it earns a spot on that row as the correct
+coincides with the fold exactly, earning a spot on that row as the correct
 std-library baseline:
 
 | Workload (input size)                  | `simple_fold`  | `simd_normalizer` | `HashMap` (byte path) | `str::to_lowercase` |
@@ -529,7 +529,7 @@ less memory; `simple_fold` only trails on all-folding mixed-BMP text, where
 `simd-normalizer` edges ahead by a hair (922 vs 869 MiB/s).
 
 The pure-ASCII row is the fairest fight of all: there `str::to_lowercase`
-produces the **exact same bytes** we do, so it's a correct std-library baseline
+produces the **exact same bytes** we do — a correct std-library baseline
 rather than a different operation — and even then the branch-free sweep is ~1.5×
 faster (40.8 vs 27.7 GiB/s), because `to_lowercase` still scans for the first
 non-ASCII byte and allocates a fresh `String` instead of folding in place. On
