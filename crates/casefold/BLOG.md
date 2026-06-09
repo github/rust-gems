@@ -1,20 +1,27 @@
 # Case-folding source code at >40 GiB/s on a single core
 
-Here is a number that surprised me: this crate case-folds pure-ASCII text — the
-kind of text source code, logs, and URLs are made of — at over **40 GiB/s on a
-single M4 core**. That's memory-bandwidth territory; the CPU is essentially waiting
-for the bytes to arrive.
+This started as a cleanup, not a project. Coming back to some AVX-optimized
+case-folding code we'd written a couple of years earlier, I mostly wanted to know
+whether all that hand-vectorized machinery was still worth maintaining — or
+whether the problem had quietly solved itself in the meantime. The first surprise
+was that the answer looked like "solved": Rust's `str::to_lowercase` in the
+standard library was already *fast*, fast enough that the question seemed settled.
 
-The interesting part isn't a pile of SIMD intrinsics. It's that the biggest win
-came from *removing* a common optimization — the
-"stop as soon as you see a non-ASCII byte" early-exit — which turns out to cost
-not a few percent but a **~15× slowdown**, because that single branch stops the
-compiler from vectorizing the loop at all. This post is about how the common case
-got that fast — and
-how, once the ASCII engine was running at memory speed, the comparatively
-sluggish throughput of every other approach on the *non*-ASCII path started to
-bug us too, so we pulled out all the stops there as well: a 1.7 KB table that
-folds without ever decoding a character, and beats them.
+The second surprise is the reason this post exists. I had Copilot write the most
+boring version of the loop imaginable, then strip out one conditional at a time —
+and somewhere along the way the plain, SIMD-free code pulled **~15× ahead** of the
+naive version and comfortably past `to_lowercase`, without a single intrinsic. The
+biggest win came from *removing* a common optimization — the "stop as soon as you
+see a non-ASCII byte" early-exit — because that one branch is what stops the
+compiler from vectorizing the loop at all. The end result case-folds pure-ASCII
+text — the kind source code, logs, and URLs are made of — at over **40 GiB/s on a
+single M4 core**: memory-bandwidth territory, where the CPU is essentially just
+waiting for the bytes to arrive.
+
+This post is about how the common case got that fast — and how, once the ASCII
+engine was running at memory speed, the comparatively sluggish throughput on the
+*non*-ASCII path started to bug me too, so I pulled out all the stops there as
+well: a 1.7 KB table that folds without ever decoding a character, and beats them.
 
 ## Wait — why case-fold at all?
 
