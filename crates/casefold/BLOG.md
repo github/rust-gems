@@ -87,7 +87,7 @@ the rare non-ASCII path from spoiling that.
 
 The fold of an ASCII letter is trivial — `A..=Z` map to `a..=z`, everything else
 is unchanged — making the ASCII pass really just "sweep the buffer, lowercase in
-place." Ask any LLM for it and you'll get something like this:
+place." Ask any LLM for it and you might get something like this:
 
 ```rust
 let bytes = s.as_bytes_mut();
