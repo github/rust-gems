@@ -344,14 +344,6 @@ Because we advance by the *folded* length, this even handles length-changing fol
 And it's the part I believe is genuinely new: every other folder I looked at — ICU, Go's `unicode`, Rust's
 `regex`, CPython, glibc — decodes UTF-8 to a code point, applies the fold there, and re-encodes (even SIMD folders decode first). Doing the arithmetic in byte space skips both the decode and the encode, which is exactly why this path can outrun a hash map that already has the answer tabulated — the hash map still has to decode its key and encode its result.
 
-[^overlong]: The byte-space arithmetic assumes the input is **well-formed, shortest-form UTF-8
-** — every code point encoded with the minimal number of bytes. Reading the source bytes as a
-`u32` and adding a per-run delta only lands on the correct folded encoding when the source is in canonical form; an
-*overlong* encoding (a code point padded into more bytes than necessary, e.g. `/` as
-`0xC0 0xAF`) has a different byte pattern and would break the
-`length_mask` and the delta arithmetic. This is not a real restriction in Rust — `&str`/
-`String` are guaranteed to hold valid UTF-8, which by definition rejects overlong sequences — but a caller feeding raw bytes from elsewhere must validate (or otherwise normalize) them first.
-
 ### The ASCII shortcut in the tail loop
 
 One more shortcut rounds out the tail loop. Remember the first pass already lowercased every ASCII byte, so when the scan meets an ASCII byte in the tail it advances a single byte and moves on — no page probe, no table touch at all. And it doesn't copy that byte either: unmodified bytes (ASCII and non-folding multibyte alike) aren't moved one at a time. The scan just keeps walking until it reaches a character that actually folds, then flushes the whole unchanged run between the last fold and this one with a single
@@ -397,3 +389,12 @@ On the rare path, the win was looking at the
 The meta-lesson: "basic" rarely means "fully explored." Measuring instead of guessing — and questioning the optimization everyone reaches for first — can still find an order of magnitude. That's the fun part.
 
 The crate is [`casefold`](../README.md); the generated table and full design notes live alongside the source.
+
+[^overlong]: The byte-space arithmetic assumes the input is **well-formed, shortest-form UTF-8
+** — every code point encoded with the minimal number of bytes. Reading the source bytes as a
+`u32` and adding a per-run delta only lands on the correct folded encoding when the source is in canonical form; an
+*overlong* encoding (a code point padded into more bytes than necessary, e.g. `/` as
+`0xC0 0xAF`) has a different byte pattern and would break the
+`length_mask` and the delta arithmetic. This is not a real restriction in Rust — `&str`/
+`String` are guaranteed to hold valid UTF-8, which by definition rejects overlong sequences — but a caller feeding raw bytes from elsewhere must validate (or otherwise normalize) them first.
+
