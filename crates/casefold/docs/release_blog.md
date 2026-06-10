@@ -5,7 +5,55 @@ Over the years we have optimized a lot of the hot paths in our code search and i
 
 That cleanup and validation resulted in an even simpler and faster implementation than we had previously been using.
 
-Let's walk through how that new implementation came about and the benchmark results that show how big of an improvement it is.
+## How fast is it?
+
+Criterion medians on an Apple M4 (single core,
+`target-cpu=native`). Treat the absolute figures as illustrative, not portable: the whole design leans on auto-vectorization, SWAR, and little-endian byte arithmetic, so the numbers — and even the
+*ratios* between rows — can shift substantially on a different microarchitecture (a wider or narrower vector unit, different memory bandwidth, a big-endian target, x86 vs ARM). The qualitative story holds; the exact GiB/s do not.
+
+The other **true case-folders** —
+`simd-normalizer` and the same byte path backed by a simple `HashMap` — produce identical output.
+`str::to_lowercase` does
+*not* in general, but on pure ASCII it coincides with the fold exactly, earning a spot on that row as the correct std-library baseline. The final column is
+**not** a folder at all: it is
+[
+`simdutf`](https://github.com/simdutf/simdutf)'s UTF-8 → UTF-32 → UTF-8 round trip — decoding to code points with a state-of-the-art SIMD decoder and re-encoding them — included as the
+*transcoding
+tax* any folder that reconstructs code points must pay around its lookup (both buffer lengths assumed known, so only the two transcodes are timed; no folding happens in between):
+
+| Workload (input size)                  | `simple_fold`  | `simd_normalizer` | `HashMap` (byte path) | `str::to_lowercase` | `simdutf` round-trip |
+|----------------------------------------|---------------:|------------------:|----------------------:|--------------------:|---------------------:|
+| Pure ASCII (5.7 KB)                    | **40.8 GiB/s** |        1.21 GiB/s |              213 MiB/s |          27.7 GiB/s |           9.33 GiB/s |
+| CJK, no folds (8.1 KB)                 |  **2.95 GiB/s**|        1.97 GiB/s |              558 MiB/s |                  —  |           2.57 GiB/s |
+| Symbols / Myanmar, no folds (9.0 KB)   |  **2.96 GiB/s**|        1.56 GiB/s |              410 MiB/s |                  —  |           2.00 GiB/s |
+| Mixed BMP, all folding (8.8 KB)        |     869 MiB/s  |      **922 MiB/s**|              334 MiB/s |                  —  |           1.99 GiB/s |
+| Length-changing folds (1.7 KB)         |  **1.26 GiB/s**|         716 MiB/s |              233 MiB/s |                  —  |           1.77 GiB/s |
+
+The headline ASCII row is the workload that dominates real text, and it runs an order of magnitude faster than the SIMD-dispatching
+`simd-normalizer` and ~200× faster than a
+`HashMap` — purely because the common path is one branch-free vectorized sweep. The no-fold rows (CJK, symbols) run at GiB/s for the same reason: the page-bitmap probe rejects whole characters from their lead bytes and the original buffer is returned without a single byte copied. Even on the identical byte-level fold, the compact table beats a
+`HashMap` by 3–5× at ~10× less memory; `simple_fold` only trails on all-folding mixed-BMP text, where
+`simd-normalizer` edges ahead by a hair (922 vs 869 MiB/s).
+
+The `simdutf` column is really about the **multibyte** rows. The ASCII figure
+(9.33 GiB/s) is almost meaningless: nobody would transcode pure ASCII to 4-byte code units and straight back — there is nothing to gain and a 4× blow-up in memory traffic to pay, so the round trip there measures a step no sane folder takes. It is the non-ASCII path where a code-point-based folder is genuinely
+*forced* to transcode, and that's where this number bites. Decode-
+*and*-re-encode is the unavoidable envelope of every such design — ICU, Go's `unicode`, the
+`regex` crate, CPython all decode UTF-8 to code points and re-encode the result — and even a world-class SIMD transcoder caps out at
+**1.8–2.6 GiB/s** on multibyte input. That round trip is a *floor on the
+competition*: any folder that decodes first has already spent this much transcoding before it looks a single character up. Yet
+`simple_fold` beats it outright on the no-fold rows (2.95 vs 2.57, 2.96 vs 2.00 GiB/s) — the very rows where a decode-then-fold design would be paying the full transcoding tax — because it answers the real question,
+*does this character
+fold?*, straight from the raw bytes without ever decoding. Folding in byte space doesn't just beat the hash map's lookup; on multibyte text it beats the decode-and-re-encode that every code-point-based folder pays around the lookup.
+
+The pure-ASCII row is the fairest fight of all: there `str::to_lowercase`
+produces the **exact same bytes
+** we do — a correct std-library baseline rather than a different operation — and even then the branch-free sweep is ~1.5× faster (40.8 vs 27.7 GiB/s), because
+`to_lowercase` still scans for the first non-ASCII byte and allocates a fresh
+`String` instead of folding in place. On multibyte inputs `to_lowercase` both diverges from the fold
+*and* slows to roughly 290–500 MiB/s.
+
+Let's walk through the evolution in detail.
 
 ## Why case-folding is even important?
 
@@ -361,54 +409,6 @@ Next to the obvious alternatives, that 1776 bytes is an order of magnitude or mo
 | Go's `unicode.SimpleFold` (orbit + ASCII + ranges)  | ~7.3 KB    |
 | A runtime `HashMap<u32, u32>`                        | ~17 KB     |
 | **This crate (paged bitmap + packed runs)**         | **1776 B** |
-
-## How fast is it?
-
-Criterion medians on an Apple M4 (single core,
-`target-cpu=native`). Treat the absolute figures as illustrative, not portable: the whole design leans on auto-vectorization, SWAR, and little-endian byte arithmetic, so the numbers — and even the
-*ratios* between rows — can shift substantially on a different microarchitecture (a wider or narrower vector unit, different memory bandwidth, a big-endian target, x86 vs ARM). The qualitative story holds; the exact GiB/s do not.
-
-The other **true case-folders** —
-`simd-normalizer` and the same byte path backed by a simple `HashMap` — produce identical output.
-`str::to_lowercase` does
-*not* in general, but on pure ASCII it coincides with the fold exactly, earning a spot on that row as the correct std-library baseline. The final column is
-**not** a folder at all: it is
-[
-`simdutf`](https://github.com/simdutf/simdutf)'s UTF-8 → UTF-32 → UTF-8 round trip — decoding to code points with a state-of-the-art SIMD decoder and re-encoding them — included as the
-*transcoding
-tax* any folder that reconstructs code points must pay around its lookup (both buffer lengths assumed known, so only the two transcodes are timed; no folding happens in between):
-
-| Workload (input size)                  | `simple_fold`  | `simd_normalizer` | `HashMap` (byte path) | `str::to_lowercase` | `simdutf` round-trip |
-|----------------------------------------|---------------:|------------------:|----------------------:|--------------------:|---------------------:|
-| Pure ASCII (5.7 KB)                    | **40.8 GiB/s** |        1.21 GiB/s |              213 MiB/s |          27.7 GiB/s |           9.33 GiB/s |
-| CJK, no folds (8.1 KB)                 |  **2.95 GiB/s**|        1.97 GiB/s |              558 MiB/s |                  —  |           2.57 GiB/s |
-| Symbols / Myanmar, no folds (9.0 KB)   |  **2.96 GiB/s**|        1.56 GiB/s |              410 MiB/s |                  —  |           2.00 GiB/s |
-| Mixed BMP, all folding (8.8 KB)        |     869 MiB/s  |      **922 MiB/s**|              334 MiB/s |                  —  |           1.99 GiB/s |
-| Length-changing folds (1.7 KB)         |  **1.26 GiB/s**|         716 MiB/s |              233 MiB/s |                  —  |           1.77 GiB/s |
-
-The headline ASCII row is the workload that dominates real text, and it runs an order of magnitude faster than the SIMD-dispatching
-`simd-normalizer` and ~200× faster than a
-`HashMap` — purely because the common path is one branch-free vectorized sweep. The no-fold rows (CJK, symbols) run at GiB/s for the same reason: the page-bitmap probe rejects whole characters from their lead bytes and the original buffer is returned without a single byte copied. Even on the identical byte-level fold, the compact table beats a
-`HashMap` by 3–5× at ~10× less memory; `simple_fold` only trails on all-folding mixed-BMP text, where
-`simd-normalizer` edges ahead by a hair (922 vs 869 MiB/s).
-
-The `simdutf` column is really about the **multibyte** rows. The ASCII figure
-(9.33 GiB/s) is almost meaningless: nobody would transcode pure ASCII to 4-byte code units and straight back — there is nothing to gain and a 4× blow-up in memory traffic to pay, so the round trip there measures a step no sane folder takes. It is the non-ASCII path where a code-point-based folder is genuinely
-*forced* to transcode, and that's where this number bites. Decode-
-*and*-re-encode is the unavoidable envelope of every such design — ICU, Go's `unicode`, the
-`regex` crate, CPython all decode UTF-8 to code points and re-encode the result — and even a world-class SIMD transcoder caps out at
-**1.8–2.6 GiB/s** on multibyte input. That round trip is a *floor on the
-competition*: any folder that decodes first has already spent this much transcoding before it looks a single character up. Yet
-`simple_fold` beats it outright on the no-fold rows (2.95 vs 2.57, 2.96 vs 2.00 GiB/s) — the very rows where a decode-then-fold design would be paying the full transcoding tax — because it answers the real question,
-*does this character
-fold?*, straight from the raw bytes without ever decoding. Folding in byte space doesn't just beat the hash map's lookup; on multibyte text it beats the decode-and-re-encode that every code-point-based folder pays around the lookup.
-
-The pure-ASCII row is the fairest fight of all: there `str::to_lowercase`
-produces the **exact same bytes
-** we do — a correct std-library baseline rather than a different operation — and even then the branch-free sweep is ~1.5× faster (40.8 vs 27.7 GiB/s), because
-`to_lowercase` still scans for the first non-ASCII byte and allocates a fresh
-`String` instead of folding in place. On multibyte inputs `to_lowercase` both diverges from the fold
-*and* slows to roughly 290–500 MiB/s.
 
 ## Takeaways
 
