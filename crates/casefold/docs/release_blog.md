@@ -7,9 +7,7 @@ That cleanup and validation resulted in an even simpler and faster implementatio
 
 ## How fast is it?
 
-Criterion medians on an Apple M4 (single core,
-`target-cpu=native`). Treat the absolute figures as illustrative, not portable: the whole design leans on auto-vectorization, SWAR, and little-endian byte arithmetic, so the numbers — and even the
-*ratios* between rows — can shift substantially on a different microarchitecture (a wider or narrower vector unit, different memory bandwidth, a big-endian target, x86 vs ARM).
+Criterion medians on an Apple M4 (single core, `target-cpu=native`).[^bench]
 
 | Workload (input size)                  | `simple_fold`  | `simd_normalizer` | `HashMap` (byte path) | `str::to_lowercase` | `simdutf` round-trip |
 |----------------------------------------|---------------:|------------------:|----------------------:|--------------------:|---------------------:|
@@ -389,6 +387,8 @@ On the rare path, the win was looking at the
 The meta-lesson: "basic" rarely means "fully explored." Measuring instead of guessing — and questioning the optimization everyone reaches for first — can still find an order of magnitude. That's the fun part.
 
 The crate is [`casefold`](../README.md); the generated table and full design notes live alongside the source.
+
+[^bench]: Treat the absolute figures as illustrative, not portable: the whole design leans on auto-vectorization, SWAR, and little-endian byte arithmetic, so the numbers — and even the *ratios* between rows — can shift substantially on a different microarchitecture (a wider or narrower vector unit, different memory bandwidth, a big-endian target, x86 vs ARM).
 
 [^overlong]: The byte-space arithmetic assumes the input is **well-formed, shortest-form UTF-8
 ** — every code point encoded with the minimal number of bytes. Reading the source bytes as a
