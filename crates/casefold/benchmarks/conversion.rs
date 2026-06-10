@@ -1,7 +1,8 @@
 //! Benchmarks for `casefold::simple_fold`, comparing it against several
-//! baselines on representative inputs. Each input is run through six variants:
+//! baselines on representative inputs. Each input is run through these variants:
 //!
 //! - `casefold::simple_fold` — the implementation under test.
+//! - `casefold::index_fold` — the one-byte-per-character index fold.
 //! - `HashMap::fold_into_bytes` — a HashMap-based case fold over raw UTF-8.
 //! - `str::to_lowercase` — straightforward Unicode lowercasing baseline.
 //! - `chars().flat_map(to_lowercase)` — the per-char flat-map variant.
@@ -13,7 +14,7 @@
 //! cases (e.g. `Σ` final-sigma context, `İ` → `i\u{0307}`). These benchmarks
 //! are about throughput on equivalent workloads, not output equality.
 
-use casefold::{simple_fold, utf8_len};
+use casefold::{index_fold, simple_fold, utf8_len};
 use casefold_benchmarks::{hashmap_fold_utf8, reference_map_utf8, FoldHashMap};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
@@ -151,6 +152,17 @@ fn bench_conversion(c: &mut Criterion, name: &str, input: &str) {
             b.iter_batched(
                 || input.to_string(),
                 |s| simple_fold(black_box(s)),
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+
+    group.bench_function(
+        BenchmarkId::new("Casefold::index_fold", input.len()),
+        |b| {
+            b.iter_batched(
+                || input.to_string(),
+                |s| index_fold(black_box(s)),
                 criterion::BatchSize::SmallInput,
             );
         },
