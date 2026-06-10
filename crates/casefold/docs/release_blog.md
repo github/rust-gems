@@ -19,6 +19,7 @@ Criterion medians on an Apple M4 (single core,
 | Mixed BMP, all folding (8.8 KB)        |     869 MiB/s  |      **922 MiB/s**|              334 MiB/s |                  —  |           1.99 GiB/s |
 | Length-changing folds (1.7 KB)         |  **1.26 GiB/s**|         716 MiB/s |              233 MiB/s |                  —  |           1.77 GiB/s |
 
+More details can be found in the [performance section of the README](https://github.com/github/rust-gems/blob/main/crates/casefold/README.md#performance).
 
 Let's walk through the evolution in detail.
 
@@ -66,12 +67,12 @@ The fold of an ASCII letter is trivial — `A..=Z` map to
 ```rust
 let bytes = s.as_bytes_mut();
 for (i, b) in bytes.iter_mut().enumerate() {
-if * b > = 0x80 {
-break; // non-ASCII at index i: hand the rest to the Unicode path
-}
-if b.is_ascii_uppercase() {
-* b += 32; // 'A'..='Z' → 'a'..='z'
-}
+    if *b >= 0x80 {
+        break; // non-ASCII at index i: hand the rest to the Unicode path
+    }
+    if b.is_ascii_uppercase() {
+        *b += 32; // 'A'..='Z' → 'a'..='z'
+    }
 }
 ```
 
@@ -93,13 +94,13 @@ What's left has no branch in its body and no early exit:
 
 ```rust
 let mut high_bit_acc: u8 = 0;
-for b in & mut bytes {
-high_bit_acc |= * b;                       // detect any non-ASCII byte
-let is_upper = b.wrapping_sub(b'A') < 26; // branchless A..=Z test
-* b |= u8::from(is_upper) < < 5;            // set bit 5 → lowercase, else no-op
+for b in &mut bytes {
+    high_bit_acc |= *b; // detect any non-ASCII byte
+    let is_upper = b.wrapping_sub(b'A') < 26; // branchless A..=Z test
+    *b |= u8::from(is_upper) << 5; // set bit 5 → lowercase, else no-op
 }
 if high_bit_acc & 0x80 == 0 {
-return bytes; // pure ASCII: already folded in place, no second buffer
+    return bytes; // pure ASCII: already folded in place, no second buffer
 }
 ```
 
@@ -233,16 +234,20 @@ byte*. Indexing the bitmap as 64-bit words, the bit position is another 6 bits �
 
 ```rust
 let (word_idx, bit_idx, c_len) = if lead < 0xE0 {
-(0usize, lead & 0x1F, 2usize)                         // 2-byte: word 0
+    (0usize, lead & 0x1F, 2usize) // 2-byte: word 0
 } else if lead < 0xF0 {
-((lead & 0x0F) as usize, bytes[read + 1] & 0x3F, 3)   // 3-byte: word = nibble
+    ((lead & 0x0F) as usize, bytes[read + 1] & 0x3F, 3) // 3-byte: word = nibble
 } else {
-((((lead & 0x07) as usize) < < 6) | (bytes[read + 1] & 0x3F) as usize, bytes[read + 2] & 0x3F, 4usize,) // 4-byte: merge 2 bytes
+    (
+        (((lead & 0x07) as usize) << 6) | (bytes[read + 1] & 0x3F) as usize,
+        bytes[read + 2] & 0x3F,
+        4usize,
+    ) // 4-byte: merge 2 bytes
 };
 // reject without decoding: clear bit ⇒ no fold
-if word_idx > = PAGE_BITMAP.len() | | (PAGE_BITMAP[word_idx] > > bit_idx) & 1 == 0 {
-read += c_len;
-continue;
+if word_idx >= PAGE_BITMAP.len() || (PAGE_BITMAP[word_idx] >> bit_idx) & 1 == 0 {
+    read += c_len;
+    continue;
 }
 ```
 
@@ -312,10 +317,10 @@ On a little-endian machine the folded character's UTF-8 bytes, read as a `u32`, 
 `wrapping_add`, and a 4-byte store:
 
 ```rust
-let word   = u32::from_le_bytes(next_four_bytes) & length_mask; // keep this char's bytes
-let folded = word.wrapping_add(BYTE_DELTA[i]);                  // the fold, as one byte add
-write_u32_le(dst, folded);                                     // store all 4 bytes...
-dst += utf8_len(folded);                                       // ...advance by the folded length
+let word = u32::from_le_bytes(next_four_bytes) & length_mask; // keep this char's bytes
+let folded = word.wrapping_add(BYTE_DELTA[i]); // the fold, as one byte add
+write_u32_le(dst, folded); // store all 4 bytes...
+dst += utf8_len(folded); // ...advance by the folded length
 ```
 
 Both lengths in that snippet — the `length_mask` for the source character and the *advance by the folded
