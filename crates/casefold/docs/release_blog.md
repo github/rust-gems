@@ -40,7 +40,8 @@ These diverge on real characters — `ß`,
 
 That restriction aligns with the behavior of other common tools and regex engines like [ripgrep](https://github.com/BurntSushi/ripgrep).
 
-We deal mostly with source code, so the text you fold is overwhelmingly ASCII. Since ASCII *is* the common case, and making it run at memory speed is the single most important thing we can do. Everything else needs to keep the rare non-ASCII path from spoiling that.
+We deal mostly with source code, so the text you fold is overwhelmingly ASCII. Since ASCII
+*is* the common case, and making it run at memory speed is the single most important thing we can do. Everything else needs to keep the rare non-ASCII path from spoiling that.
 
 ## The counterintuitive core: don't stop early
 
@@ -50,38 +51,46 @@ The fold of an ASCII letter is trivial — `A..=Z` map to
 ```rust
 let bytes = s.as_bytes_mut();
 for (i, b) in bytes.iter_mut().enumerate() {
-    if * b > = 0x80 {
-        break; // non-ASCII at index i: hand the rest to the Unicode path
-    }
-    if b.is_ascii_uppercase() {
-        *b += 32; // 'A'..='Z' → 'a'..='z'
-    }
+if * b > = 0x80 {
+break; // non-ASCII at index i: hand the rest to the Unicode path
+}
+if b.is_ascii_uppercase() {
+* b += 32; // 'A'..='Z' → 'a'..='z'
+}
 }
 ```
 
-It looks ideal: do the cheap byte work, and the instant you hit a non-ASCII byte, `break` and let the "real" Unicode path take over — "only do the cheap work until you have to." On an Apple M4 this runs at about **3 GiB/s**. That sounds fine in isolation, but it is more than **15× short** of "optimal" because of the `if` branchs.
+It looks ideal: do the cheap byte work, and the instant you hit a non-ASCII byte,
+`break` and let the "real" Unicode path take over — "only do the cheap work until you have to." On an Apple M4 this runs at about
+**3 GiB/s**. That sounds fine in isolation, but it is more than **15× short** of "optimal" because of the `if` branchs.
 
 Let's delete every branch, line by line:
 
-- **`if b >= 0x80 { break }`** → don't stop at all. OR every byte into an accumulator and test it *once*, after the loop: `high_bit_acc |= *b`. Same information (was there any non-ASCII byte?), zero branches in the body.
-- **The `A..=Z` range test** → make it arithmetic. `b.wrapping_sub(b'A') < 26` is true exactly for `A..=Z` (any other byte wraps to `≥ 26`), yielding a 0/1 mask with no branch.
-- **The conditional write** → fold the mask into the store. `| (is_upper << 5)` sets bit 5 — turning an upper-case letter lower-case and being a no-op on everything else — the byte is always written, never branched on.
+- **`if b >= 0x80 { break }`** → don't stop at all. OR every byte into an accumulator and test it
+  *once*, after the loop:
+  `high_bit_acc |= *b`. Same information (was there any non-ASCII byte?), zero branches in the body.
+- **The `A..=Z` range test** → make it arithmetic. `b.wrapping_sub(b'A') < 26` is true exactly for
+  `A..=Z` (any other byte wraps to `≥ 26`), yielding a 0/1 mask with no branch.
+- **The conditional write** → fold the mask into the store.
+  `| (is_upper << 5)` sets bit 5 — turning an upper-case letter lower-case and being a no-op on everything else — the byte is always written, never branched on.
 
 What's left has no branch in its body and no early exit:
 
 ```rust
 let mut high_bit_acc: u8 = 0;
 for b in & mut bytes {
-    high_bit_acc |= * b;                       // detect any non-ASCII byte
-    let is_upper = b.wrapping_sub(b'A') < 26; // branchless A..=Z test
-    *b |= u8::from(is_upper) << 5;            // set bit 5 → lowercase, else no-op
+high_bit_acc |= * b;                       // detect any non-ASCII byte
+let is_upper = b.wrapping_sub(b'A') < 26; // branchless A..=Z test
+* b |= u8::from(is_upper) < < 5;            // set bit 5 → lowercase, else no-op
 }
 if high_bit_acc & 0x80 == 0 {
-    return bytes; // pure ASCII: already folded in place, no second buffer
+return bytes; // pure ASCII: already folded in place, no second buffer
 }
 ```
 
-A loop with no data-dependent control flow is trivially vectorizable: LLVM emits 16-byte-at-a-time NEON and the whole thing runs at > **45 GiB/s** — essentially memory bandwidth. And we come out of the pass already knowing, from `high_bit_acc`, whether there's any non-ASCII work left to do.
+A loop with no data-dependent control flow is trivially vectorizable: LLVM emits 16-byte-at-a-time NEON and the whole thing runs at >
+**45 GiB/s** — essentially memory bandwidth. And we come out of the pass already knowing, from
+`high_bit_acc`, whether there's any non-ASCII work left to do.
 
 How much did each step matter? Measuring the cumulative ladder on pure ASCII (Apple M4, 5.7 KB buffer):
 
@@ -92,13 +101,14 @@ How much did each step matter? Measuring the cumulative ladder on pure ASCII (Ap
 | → drop the early-exit `break`         | 7.6 GiB/s  | **partially** (25 vector instrs) |
 | → branchless test + write (the loop)  | **46.9 GiB/s** | fully (41 vector instrs) |
 
-The early-exit is what gates vectorization at all: keep the
-`break` but make the body perfectly branch-free and you still get **zero** vector instructions
-(~2.6 GiB/s); a data-dependent loop exit is enough on its own to keep the loop scalar. Only once the
+The early-exit is what gates vectorization: keep the `break` but make the body perfectly branch-free and you still get *
+*zero
+** vector instructions (~2.6 GiB/s); a data-dependent loop exit is enough on its own to keep the loop scalar. Only once the
 `break` is gone can the compiler vectorize. The final step — making the upper-case fold branchless — then turns a
 *partially* vectorized loop (which still compiles the conditional store to a compare-blend-masked-store, ~7.6 GiB/s) into the straight-line arithmetic that hits memory bandwidth.
 
-> **NOTE — branchless is a *pessimization* in scalar code.** Look again at the
+> [!Note]
+> Branchless is a *pessimization* in scalar code.** Look again at the
 > table: making the body branchless while *keeping* the `break` (2.6 GiB/s) is
 > actually **slower** than the naive branchy loop (3.1 GiB/s). The asm explains
 > why. The branchy version only stores a byte when it actually changes one — its
@@ -112,17 +122,15 @@ The early-exit is what gates vectorization at all: keep the
 > per-byte cost disappears. The lesson: a branchless body is worth it **only** as
 > the enabler for vectorization — on its own, in scalar code, it can cost you.
 
-There's also a middle ground, and it's the one the standard library takes. Instead of testing one byte at a time,
+There's also a middle ground, and it's what standard library uses. Instead of testing one byte at a time,
 `[u8]::is_ascii` scans a **machine word at a time** — on a 64-bit target it tests 16 bytes per iteration by OR-ing two
 `u64` lanes and checking all their high bits with a single
-`& 0x8080_8080_8080_8080` mask. You can build the ASCII fast path on top of that:
-chunk-scan to find the ASCII prefix, then run the branchless (vectorizable)
-convert over it. That keeps the early-exit ability — it still bails on the first non-ASCII block — while letting both halves go fast. The catch is that it reads the data
-**twice** (once to scan, once to convert), landing at about
-**23 GiB/s
+`& 0x8080_8080_8080_8080` mask. You can build the ASCII fast path on top of that: chunk-scan to find the ASCII prefix, then run the branchless (vectorizable) convert over it. That keeps the early-exit ability — it still bails on the first non-ASCII block — while letting both halves go fast. The catch is that it reads the data
+**twice** (once to scan, once to convert), landing at about **23 GiB/s
 ** — roughly half of the single-pass branchless sweep, and ~7× the naive break loop. A solid, general-purpose default; just not the absolute ceiling when you control the whole loop and can fold detection and conversion into one branch-free pass.
 
-> **NOTE — wouldn't *fusing* the two passes be faster?** It's the obvious next
+> [!Tip]
+> Wouldn't *fusing* the two passes be faster?** It's the obvious next
 > thought: keep the chunked early-exit but convert each 16-byte block right after
 > you've confirmed it's ASCII, reading the data only *once*. Measured, it's
 > **~2.6× slower** — 8.7 GiB/s versus the two-pass 23. The inner block convert
@@ -140,7 +148,7 @@ convert over it. That keeps the early-exit ability — it still bails on the fir
 It is genuinely faster to
 *unconditionally* sweep the entire buffer once, branch-free, and decide what to do afterwards than to try to stop early. Stripped of every branch, the loop becomes almost insultingly simple — a flat sequence of loads, an OR, an add, and stores over a contiguous buffer — and a loop that simple is a piece of cake for the compiler to vectorize into a 45 GiB/s racing car.
 
-## Touch the heap only when you must
+## Avoiding the heap
 
 40 GiB/s also means doing zero unnecessary allocation. `simple_fold` takes the input `String` *by
 value*, owning the heap buffer it can mutate and return it. If the OR-accumulator's high bit was clear, the input was pure ASCII — already folded in place — we hand the
@@ -150,9 +158,9 @@ value*, owning the heap buffer it can mutate and return it. If the OR-accumulato
 **. Text whose multibyte content never folds — CJK, Hangul, Kana, Arabic, Hebrew, symbols — also returns the original allocation untouched, never copying a byte.
 
 Why a *second* buffer rather than rewriting in place like the ASCII pass? Because folding can make the string **longer
-**: almost every fold preserves the UTF-8 length or shrinks it, but two outliers grow — U+023A (`Ⱥ`) and U+023E
-(`Ɀ`) are 2 bytes each yet fold to 3-byte characters (`ⱥ`,
-`ɀ`). Once one appears, the output no longer fits in the input's bytes and we need somewhere new to write.
+**: almost every fold preserves the UTF-8 length or shrinks it, but two outliers grow — U+023A (`Ⱥ`) and U+023E (
+`Ɀ`) are 2 bytes each yet fold to 3-byte characters (`ⱥ`,
+`ɀ`). Once one appears, the output no longer fits in the input's bytes, and we need somewhere new to write.
 
 We allocate that buffer **once**, sized for the worst case, rather than growing it as more folds appear. Incremental
 `reserve` calls would mean re-checking capacity, occasionally reallocating, copying everything written so far, and juggling extra length/capacity bookkeeping; a single up-front allocation lets a raw write cursor run straight to the end with none of that. (And since the cursor is null until that first growing/changing fold, it doubles as the "have we started building yet?" flag — the decision to allocate costs no extra state either.)
@@ -170,7 +178,7 @@ After that the loop writes through a raw pointer with no capacity checks and cal
 *folded* length (1–4) — dropping a branch on the output length from the hot path, with the
 `+ 4` in the reservation as the headroom that makes the final character's over-store safe.
 
-## Making the rare path cheap too
+## Making Unicode cheap too
 
 When a character
 *does* fold, we still don't want to fall off a cliff — decode UTF-8, hash, re-encode. Unicode 16.0 has 1484 simple-fold mappings, but they're a
@@ -180,9 +188,8 @@ When a character
 But before any of that, the most important ingredient: even on the non-ASCII path, the overwhelming majority of characters
 **do not fold
 **. CJK, Hangul, Kana, Arabic, Hebrew, Indic scripts, emoji, punctuation, symbols — none of it folds. The hot operation, then, isn't really "fold this character," it's "
-*does* this character fold? — almost always no." The table has to make that **negative test
-** as close to free as possible; the actual folding is the rare sub-case of an already-rare path. That priority is what shapes the layout below — the page bitmap
-([idea 1](#idea-1-foldable-code-points-cluster-into-64-code-point-pages)) exists precisely so a non-folding character is rejected in a single bit test, straight from its leading UTF-8 bytes, without decoding or scanning anything.
+*does* this character fold?" — almost always no. The table has to make that **negative test
+** as close to free as possible; the actual folding is the rare sub-case of an already-rare path. That priority is what shapes the layout below — the page bitmap ([idea 1](#idea-1-foldable-code-points-cluster-into-64-code-point-pages)) exists precisely so a non-folding character is rejected in a single bit test, straight from its leading UTF-8 bytes, without decoding or scanning anything.
 
 This is exactly why a `HashMap<u32, u32>` is the
 *wrong* shape for the job, not just a bigger one. A hash map is optimized for the **hit
@@ -211,20 +218,16 @@ byte*. Indexing the bitmap as 64-bit words, the bit position is another 6 bits �
 
 ```rust
 let (word_idx, bit_idx, c_len) = if lead < 0xE0 {
-(0usize, lead & 0x1F, 2usize)                         // 2-byte: word 0
+    (0usize, lead & 0x1F, 2usize)                         // 2-byte: word 0
 } else if lead < 0xF0 {
-((lead & 0x0F) as usize, bytes[read + 1] & 0x3F, 3)   // 3-byte: word = nibble
+    ((lead & 0x0F) as usize, bytes[read + 1] & 0x3F, 3)   // 3-byte: word = nibble
 } else {
-(                                                     // 4-byte: merge 2 bytes
-(((lead & 0x07) as usize) < < 6) | (bytes[read + 1] & 0x3F) as usize,
-bytes[read + 2] & 0x3F,
-4usize,
-)
+    ((((lead & 0x07) as usize) < < 6) | (bytes[read + 1] & 0x3F) as usize, bytes[read + 2] & 0x3F, 4usize,)// 4-byte: merge 2 bytes
 };
 // reject without decoding: clear bit ⇒ no fold
-if word_idx > = PAGE_BITMAP.len() | | (PAGE_BITMAP[word_idx] > > bit_idx) & 1 == 0 {
-read += c_len;
-continue;
+if word_idx > = PAGE_BITMAP.len() || (PAGE_BITMAP[word_idx] >> bit_idx) & 1 == 0 {
+    read += c_len;
+    continue;
 }
 ```
 
