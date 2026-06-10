@@ -222,7 +222,10 @@ mod tests {
         // Ü (U+00DC) folds to ü (U+00FC); 0x80 | (0xFC & 0x7F) == 0xFC.
         assert_eq!(index_fold("Ü".into()), vec![0xFC]);
         // Length-preserving fold of three 2-byte chars to one byte each.
-        assert_eq!(index_fold("ÄÖÜ".into()), vec![0x80 | 0x64, 0x80 | 0x76, 0xFC]);
+        assert_eq!(
+            index_fold("ÄÖÜ".into()),
+            vec![0x80 | 0x64, 0x80 | 0x76, 0xFC]
+        );
         // Fold to ASCII keeps the high bit set: U+212A KELVIN SIGN -> 'k'.
         assert_eq!(
             index_fold("\u{212A}elvin".into()),

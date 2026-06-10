@@ -317,7 +317,10 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
 
     // Sanity: size accounting (printed as build warnings for visibility).
     let index_bytes = page_bitmap.len() * 8 + popcnt_samples.len() + page_offset.len();
-    let total = index_bytes + run_end_low.len() + run_start_stride.len() + byte_deltas.len() * 4
+    let total = index_bytes
+        + run_end_low.len()
+        + run_start_stride.len()
+        + byte_deltas.len() * 4
         + index_deltas.len();
     if env::var_os("CASEFOLD_BUILD_INFO").is_some() {
         println!(

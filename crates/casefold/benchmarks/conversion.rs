@@ -157,16 +157,13 @@ fn bench_conversion(c: &mut Criterion, name: &str, input: &str) {
         },
     );
 
-    group.bench_function(
-        BenchmarkId::new("Casefold::index_fold", input.len()),
-        |b| {
-            b.iter_batched(
-                || input.to_string(),
-                |s| index_fold(black_box(s)),
-                criterion::BatchSize::SmallInput,
-            );
-        },
-    );
+    group.bench_function(BenchmarkId::new("Casefold::index_fold", input.len()), |b| {
+        b.iter_batched(
+            || input.to_string(),
+            |s| index_fold(black_box(s)),
+            criterion::BatchSize::SmallInput,
+        );
+    });
 
     let fold_map = reference_map_utf8();
     group.bench_function(
