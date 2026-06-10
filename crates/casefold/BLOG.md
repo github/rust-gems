@@ -103,7 +103,7 @@ for (i, b) in bytes.iter_mut().enumerate() {
 
 It looks ideal: do the cheap byte work, and the instant you hit a non-ASCII byte,
 `break` and let the "real" Unicode path take over — "only do the cheap work until
-you have to." On an Apple M-series this runs at about **3 GiB/s**. That sounds
+you have to." On an Apple M4 this runs at about **3 GiB/s**. That sounds
 fine in isolation, but it is more than **15× short** of what the same work can
 do — and the reason is every one of those `if`s.
 
@@ -147,7 +147,7 @@ essentially memory bandwidth. And we come out of the pass already knowing, from
 `high_bit_acc`, whether there's any non-ASCII work left to do.
 
 How much did each step matter? Measuring the cumulative ladder on pure ASCII
-(Apple M-series, 5.7 KB buffer):
+(Apple M4, 5.7 KB buffer):
 
 | version | throughput | vectorized? |
 |---|--:|---|
@@ -304,17 +304,10 @@ Why **64**? Six bits is exactly what makes the probe fall out of the UTF-8 bytes
 A continuation byte carries 6 payload bits, which makes the within-page offset `cp & 0x3F`
 *literally the low 6 bits of the last byte*. Indexing the bitmap as 64-bit
 words, the bit position is another 6 bits — straight from the second-to-last
-byte — leaving only the higher bits as the word index:
-
-| Length | last byte | bit index (2nd-to-last byte) | word index (earlier bytes) |
-|---|---|---|---|
-| 2 | `b1 & 0x3F` | `lead & 0x1F` | **always 0** |
-| 3 | `b2 & 0x3F` | `b1 & 0x3F` | `lead & 0x0F` |
-| 4 | `b3 & 0x3F` | `b2 & 0x3F` | `((lead & 0x07) << 6) \| (b1 & 0x3F)` |
-
-The bit index is therefore always just the second-to-last byte masked with `0x3F`, and
-the word index is `0`, a nibble, or (only for four-byte sequences) two merged
-bytes — a tiny branch on the lead byte, no full code-point reconstruction:
+byte — leaving only the higher bits as the word index. So the bit index is
+always just the second-to-last byte masked with `0x3F`, and the word index is
+`0`, a nibble, or (only for four-byte sequences) two merged bytes — a tiny
+branch on the lead byte, no full code-point reconstruction:
 
 ```rust
 let (word_idx, bit_idx, c_len) = if lead < 0xE0 {
@@ -504,19 +497,32 @@ more smaller — and unlike most of them it never decodes a character:
 
 ## How fast is it?
 
-Criterion medians on an Apple M-series machine. The other **true case-folders** —
+Criterion medians on an Apple M4 (single core, `target-cpu=native`). Treat the
+absolute figures as illustrative, not portable: the whole design leans on
+auto-vectorization, SWAR, and little-endian byte arithmetic, so the numbers — and
+even the *ratios* between rows — can shift substantially on a different
+microarchitecture (a wider or narrower vector unit, different memory bandwidth, a
+big-endian target, x86 vs ARM). The qualitative story holds; the exact GiB/s do
+not.
+
+The other **true case-folders** —
 `simd-normalizer` and the same byte path backed by a simple `HashMap` — produce
 identical output. `str::to_lowercase` does *not* in general, but on pure ASCII it
 coincides with the fold exactly, earning a spot on that row as the correct
-std-library baseline:
+std-library baseline. The final column is **not** a folder at all: it is
+[`simdutf`](https://github.com/simdutf/simdutf)'s UTF-8 → UTF-32 → UTF-8 round
+trip — decoding to code points with a state-of-the-art SIMD decoder and
+re-encoding them — included as the *transcoding tax* any folder that reconstructs
+code points must pay around its lookup (both buffer lengths assumed known, so only
+the two transcodes are timed; no folding happens in between):
 
-| Workload (input size)                  | `simple_fold`  | `simd_normalizer` | `HashMap` (byte path) | `str::to_lowercase` |
-|----------------------------------------|---------------:|------------------:|----------------------:|--------------------:|
-| Pure ASCII (5.7 KB)                    | **40.8 GiB/s** |        1.21 GiB/s |              213 MiB/s |          27.7 GiB/s |
-| CJK, no folds (8.1 KB)                 |  **2.95 GiB/s**|        1.97 GiB/s |              558 MiB/s |                  —  |
-| Symbols / Myanmar, no folds (9.0 KB)   |  **2.96 GiB/s**|        1.56 GiB/s |              410 MiB/s |                  —  |
-| Mixed BMP, all folding (8.8 KB)        |     869 MiB/s  |      **922 MiB/s**|              334 MiB/s |                  —  |
-| Length-changing folds (1.7 KB)         |  **1.26 GiB/s**|         716 MiB/s |              233 MiB/s |                  —  |
+| Workload (input size)                  | `simple_fold`  | `simd_normalizer` | `HashMap` (byte path) | `str::to_lowercase` | `simdutf` round-trip |
+|----------------------------------------|---------------:|------------------:|----------------------:|--------------------:|---------------------:|
+| Pure ASCII (5.7 KB)                    | **40.8 GiB/s** |        1.21 GiB/s |              213 MiB/s |          27.7 GiB/s |           9.33 GiB/s |
+| CJK, no folds (8.1 KB)                 |  **2.95 GiB/s**|        1.97 GiB/s |              558 MiB/s |                  —  |           2.57 GiB/s |
+| Symbols / Myanmar, no folds (9.0 KB)   |  **2.96 GiB/s**|        1.56 GiB/s |              410 MiB/s |                  —  |           2.00 GiB/s |
+| Mixed BMP, all folding (8.8 KB)        |     869 MiB/s  |      **922 MiB/s**|              334 MiB/s |                  —  |           1.99 GiB/s |
+| Length-changing folds (1.7 KB)         |  **1.26 GiB/s**|         716 MiB/s |              233 MiB/s |                  —  |           1.77 GiB/s |
 
 The headline ASCII row is the workload that dominates real text, and it runs an
 order of magnitude faster than the SIMD-dispatching `simd-normalizer` and ~200×
@@ -527,6 +533,24 @@ the original buffer is returned without a single byte copied. Even on the
 identical byte-level fold, the compact table beats a `HashMap` by 3–5× at ~10×
 less memory; `simple_fold` only trails on all-folding mixed-BMP text, where
 `simd-normalizer` edges ahead by a hair (922 vs 869 MiB/s).
+
+The `simdutf` column is really about the **multibyte** rows. The ASCII figure
+(9.33 GiB/s) is almost meaningless: nobody would transcode pure ASCII to 4-byte
+code units and straight back — there is nothing to gain and a 4× blow-up in
+memory traffic to pay, so the round trip there measures a step no sane folder
+takes. It is the non-ASCII path where a code-point-based folder is genuinely
+*forced* to transcode, and that's where this number bites. Decode-*and*-re-encode
+is the unavoidable envelope of every such design — ICU, Go's `unicode`, the
+`regex` crate, CPython all decode UTF-8 to code points and re-encode the result —
+and even a world-class SIMD transcoder caps out at **1.8–2.6 GiB/s** on multibyte
+input. That round trip is a *floor on the competition*: any folder that decodes
+first has already spent this much transcoding before it looks a single character
+up. Yet `simple_fold` beats it outright on the no-fold rows (2.95 vs 2.57, 2.96
+vs 2.00 GiB/s) — the very rows where a decode-then-fold design would be paying the
+full transcoding tax — because it answers the real question, *does this character
+fold?*, straight from the raw bytes without ever decoding. Folding in byte space
+doesn't just beat the hash map's lookup; on multibyte text it beats the
+decode-and-re-encode that every code-point-based folder pays around the lookup.
 
 The pure-ASCII row is the fairest fight of all: there `str::to_lowercase`
 produces the **exact same bytes** we do — a correct std-library baseline
