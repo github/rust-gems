@@ -47,7 +47,8 @@ assert_eq!(index_fold("中".to_string()), &[0x80 | 0x2D]);
 ```
 
 The result is fixed-width (one byte per character) and is therefore **not**
-valid UTF-8.
+valid UTF-8. To fold a single code point, use `index_fold_char(c: char) -> u8`,
+which returns the same byte `index_fold` would emit for that character.
 
 ### Why one byte per character?
 

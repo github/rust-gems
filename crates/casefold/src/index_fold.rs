@@ -128,6 +128,53 @@ pub fn index_fold(s: String) -> Vec<u8> {
     bytes
 }
 
+/// Folds a single `char` to its one-byte [`index_fold`] representation.
+///
+/// Equivalent to the per-character output of [`index_fold`]: an ASCII `char`
+/// yields its lowercased byte (high bit clear); any other `char` yields
+/// `0x80 | (cp & 0x7F)` of its *folded* code point (high bit set), including a
+/// multibyte `char` that folds to ASCII (e.g. U+212A KELVIN SIGN → `0x80 | b'k'`).
+///
+/// # Example
+///
+/// ```
+/// use casefold::index_fold_char;
+/// assert_eq!(index_fold_char('A'), b'a');
+/// assert_eq!(index_fold_char('Ü'), 0xFC); // ü → 0x80 | (0xFC & 0x7F)
+/// assert_eq!(index_fold_char('中'), 0x80 | 0x2D);
+/// ```
+pub fn index_fold_char(c: char) -> u8 {
+    let cp = c as u32;
+    if cp < 0x80 {
+        // ASCII: lowercase A..Z (a no-op otherwise), high bit stays clear.
+        let b = cp as u8;
+        let is_upper = b.wrapping_sub(b'A') < 26;
+        return b | (u8::from(is_upper) << 5);
+    }
+    // Multibyte: the `PAGE_BITMAP` coordinates of `cp >> 6` are `word_idx =
+    // cp >> 12` (the bitmap word) and `bit_idx = (cp >> 6) & 63` (the bit).
+    let word_idx = (cp >> 12) as usize;
+    let bit_idx = (cp >> 6) & 0x3F;
+    let low_v = (cp & 0x3F) as u8;
+    // `cp & 0x7F` is the source low 7 bits; a fold adds the run's 7-bit delta.
+    let mut folded_index = (cp & 0x7F) as u8;
+    if word_idx < PAGE_BITMAP.len() && (PAGE_BITMAP[word_idx] >> bit_idx) & 1 != 0 {
+        let dense = popcount_up_to(word_idx, bit_idx) as usize;
+        let lo = PAGE_OFFSET[dense] as usize;
+        let n = PAGE_OFFSET[dense + 1] as usize - lo;
+        let off = scan_end_low(lo, n, low_v);
+        if off < n {
+            let ss = RUN_START_STRIDE[lo + off];
+            let start_low = ss & 0x3F;
+            let stride_bit = ss >> 6;
+            if low_v >= start_low && ((low_v - start_low) & stride_bit) == 0 {
+                folded_index = folded_index.wrapping_add(INDEX_DELTA[lo + off]);
+            }
+        }
+    }
+    0x80 | folded_index
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +255,30 @@ mod tests {
         }
         let expected = index_fold_oracle(&r, &input);
         assert_eq!(index_fold(input), expected);
+    }
+
+    #[test]
+    fn index_fold_char_examples() {
+        assert_eq!(index_fold_char('A'), b'a');
+        assert_eq!(index_fold_char('!'), b'!');
+        assert_eq!(index_fold_char('Ü'), 0xFC);
+        assert_eq!(index_fold_char('中'), 0x80 | 0x2D);
+        // Fold to ASCII keeps the high bit set.
+        assert_eq!(index_fold_char('\u{212A}'), 0x80 | b'k');
+    }
+
+    #[test]
+    fn index_fold_char_matches_index_fold_exhaustive() {
+        // Every code point's single-char `index_fold_char` must equal the lone
+        // byte `index_fold` produces for that character.
+        for cp in 0u32..0x110000 {
+            if (0xD800..0xE000).contains(&cp) {
+                continue; // surrogates aren't valid chars
+            }
+            let c = char::from_u32(cp).expect("cp is a valid non-surrogate char");
+            let folded = index_fold(c.to_string());
+            assert_eq!(folded.len(), 1, "cp {cp:#x} did not yield one byte");
+            assert_eq!(index_fold_char(c), folded[0], "cp {cp:#x}");
+        }
     }
 }
