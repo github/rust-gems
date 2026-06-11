@@ -31,8 +31,7 @@ Suppose a user searches for `straße` and your corpus contains `STRASSE`, or the
   `CAFÉ` into one posting list. It runs on every token at index time and query time so it has to be fast and allocation-light.
 - **Regex engines** implement the case-insensitive flag
   `(?i)` by folding the pattern's character classes (and comparing against folded input).
-- **Identifiers and protocols
-  ** use case-insensitive comparison of usernames, hostnames, file paths, HTTP headers, and so on.
+- **Identifiers and protocols** use case-insensitive comparison of usernames, hostnames, file paths, HTTP headers, and so on.
 
 ### Folding is not lowercasing
 
@@ -47,8 +46,7 @@ It is tempting to reach for
   for exactly this.
 
 These diverge on real characters — `ß`,
-`İ`, final sigma — and lowercasing as a stand-in silently produces incorrect matches. This crate implements the **simple
-** (1-to-1) folds — statuses `C` and `S` in [
+`İ`, final sigma — and lowercasing as a stand-in silently produces incorrect matches. This crate implements the **simple** (1-to-1) folds — statuses `C` and `S` in [
 `CaseFolding.txt`](https://www.unicode.org/Public/UCD/latest/ucd/CaseFolding.txt) — and deliberately
 *not* the multi-character "full" folds (`ß` → `ss`) or Turkic locale folds.
 
@@ -76,7 +74,7 @@ for (i, b) in bytes.iter_mut().enumerate() {
 
 It looks ideal: do the cheap byte work, and the instant you hit a non-ASCII byte,
 `break` and let the "real" Unicode path take over — "only do the cheap work until you have to." On an Apple M4 this runs at about
-**3 GiB/s**. That sounds fine in isolation, but it is more than **15× short** of "optimal" because of the `if` branchs.
+**3 GiB/s**. That sounds fine in isolation, but it is more than **15× short** of "optimal" because of the `if` branches.
 
 Let's delete every branch, line by line:
 
@@ -115,14 +113,12 @@ How much did each step matter? Measuring the cumulative ladder on pure ASCII (Ap
 | → drop the early-exit `break`         | 7.6 GiB/s  | **partially** (25 vector instrs) |
 | → branchless test + write (the loop)  | **46.9 GiB/s** | fully (41 vector instrs) |
 
-The early-exit is what gates vectorization: keep the `break` but make the body perfectly branch-free and you still get *
-*zero
-** vector instructions (~2.6 GiB/s); a data-dependent loop exit is enough on its own to keep the loop scalar. Only once the
+The early-exit is what gates vectorization: keep the `break` but make the body perfectly branch-free and you still get **zero** vector instructions (~2.6 GiB/s); a data-dependent loop exit is enough on its own to keep the loop scalar. Only once the
 `break` is gone can the compiler vectorize. The final step — making the upper-case fold branchless — then turns a
 *partially* vectorized loop (which still compiles the conditional store to a compare-blend-masked-store, ~7.6 GiB/s) into the straight-line arithmetic that hits memory bandwidth.
 
 > [!Note]
-> Branchless is a *pessimization* in scalar code.** Look again at the
+> **Branchless is a *pessimization* in scalar code.** Look again at the
 > table: making the body branchless while *keeping* the `break` (2.6 GiB/s) is
 > actually **slower** than the naive branchy loop (3.1 GiB/s). The asm explains
 > why. The branchy version only stores a byte when it actually changes one — its
@@ -140,11 +136,10 @@ There's also a middle ground, and it's what standard library uses. Instead of te
 `[u8]::is_ascii` scans a **machine word at a time** — on a 64-bit target it tests 16 bytes per iteration by OR-ing two
 `u64` lanes and checking all their high bits with a single
 `& 0x8080_8080_8080_8080` mask. You can build the ASCII fast path on top of that: chunk-scan to find the ASCII prefix, then run the branchless (vectorizable) convert over it. That keeps the early-exit ability — it still bails on the first non-ASCII block — while letting both halves go fast. The catch is that it reads the data
-**twice** (once to scan, once to convert), landing at about **23 GiB/s
-** — roughly half of the single-pass branchless sweep, and ~7× the naive break loop. A solid, general-purpose default; just not the absolute ceiling when you control the whole loop and can fold detection and conversion into one branch-free pass.
+**twice** (once to scan, once to convert), landing at about **23 GiB/s** — roughly half of the single-pass branchless sweep, and ~7× the naive break loop. A solid, general-purpose default; just not the absolute ceiling when you control the whole loop and can fold detection and conversion into one branch-free pass.
 
 > [!Tip]
-> Wouldn't *fusing* the two passes be faster?** It's the obvious next
+> **Wouldn't *fusing* the two passes be faster?** It's the obvious next
 > thought: keep the chunked early-exit but convert each 16-byte block right after
 > you've confirmed it's ASCII, reading the data only *once*. Measured, it's
 > **~2.6× slower** — 8.7 GiB/s versus the two-pass 23. The inner block convert
@@ -168,11 +163,9 @@ It is genuinely faster to
 value*, owning the heap buffer it can mutate and return it. If the OR-accumulator's high bit was clear, the input was pure ASCII — already folded in place — we hand the
 **same allocation** straight back, no second buffer and no copy. Otherwise we
 `memchr` to the first non-ASCII byte and scan the tail from there, leaving the output buffer
-*unallocated* (a null write cursor) until we hit a character that folds to **different bytes
-**. Text whose multibyte content never folds — CJK, Hangul, Kana, Arabic, Hebrew, symbols — also returns the original allocation untouched, never copying a byte.
+*unallocated* (a null write cursor) until we hit a character that folds to **different bytes**. Text whose multibyte content never folds — CJK, Hangul, Kana, Arabic, Hebrew, symbols — also returns the original allocation untouched, never copying a byte.
 
-Why a *second* buffer rather than rewriting in place like the ASCII pass? Because folding can make the string **longer
-**: almost every fold preserves the UTF-8 length or shrinks it, but two outliers grow — U+023A (`Ⱥ`) and U+023E (
+Why a *second* buffer rather than rewriting in place like the ASCII pass? Because folding can make the string **longer**: almost every fold preserves the UTF-8 length or shrinks it, but two outliers grow — U+023A (`Ⱥ`) and U+023E (
 `Ɀ`) are 2 bytes each yet fold to 3-byte characters (`ⱥ`,
 `ɀ`). Once one appears, the output no longer fits in the input's bytes, and we need somewhere new to write.
 
