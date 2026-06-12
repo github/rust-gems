@@ -21,12 +21,16 @@ Suppose a user searches for `straße` and your corpus contains `STRASSE`, or the
 
 Criterion medians on an Apple M4 (single core, `target-cpu=native`).
 
+The first three columns are real case-folders that produce identical output: **`simple_fold`** (this crate), **`simd_normalizer`** (the [`simd-normalizer`](https://crates.io/crates/simd-normalizer) crate), and **`HashMap`** (naive `CaseFolding.txt` lookup). The last two are references, *not* folders: **`str::to_lowercase`** *lowercases* rather than folds, so it's only comparable on ASCII (`—` elsewhere, where the operations diverge), and **`simdutf` round-trip** is [simdutf](https://github.com/simdutf/simdutf).
+
+The workloads are chosen to hit each code path:
+
 | Workload (input size)                  | `simple_fold`  | `simd_normalizer` | `HashMap` (byte path) | `str::to_lowercase` | `simdutf` round-trip |
 |----------------------------------------|---------------:|------------------:|----------------------:|--------------------:|---------------------:|
 | Pure ASCII (5.7 KB)                    | **40.8 GiB/s** |        1.21 GiB/s |              213 MiB/s |          27.7 GiB/s |           9.33 GiB/s |
-| CJK, no folds (8.1 KB)                 |  **2.95 GiB/s**|        1.97 GiB/s |              558 MiB/s |                  —  |           2.57 GiB/s |
+| **C**hinese/**J**apanese/**K**orean, no folds (8.1 KB)                 |  **2.95 GiB/s**|        1.97 GiB/s |              558 MiB/s |                  —  |           2.57 GiB/s |
 | Symbols / Myanmar, no folds (9.0 KB)   |  **2.96 GiB/s**|        1.56 GiB/s |              410 MiB/s |                  —  |           2.00 GiB/s |
-| Mixed BMP, all folding (8.8 KB)        |     869 MiB/s  |      **922 MiB/s**|              334 MiB/s |                  —  |           1.99 GiB/s |
+| Worst case: Latin/Greek/Cyrillic (Unicode `U+0000`–`U+FFFF`), all folding (8.8 KB)        |     869 MiB/s  |      **922 MiB/s**|              334 MiB/s |                  —  |           1.99 GiB/s |
 | Length-changing folds (1.7 KB)         |  **1.26 GiB/s**|         716 MiB/s |              233 MiB/s |                  —  |           1.77 GiB/s |
 _*Treat the absolute figures as illustrative, not portable: the whole design leans on auto-vectorization, SWAR, and little-endian byte arithmetic, so the numbers — and even the *ratios* between rows — can shift substantially on a different microarchitecture (a wider or narrower vector unit, different memory bandwidth, a big-endian target, x86 vs ARM)._
 
