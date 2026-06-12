@@ -5,22 +5,6 @@ Over the years we have optimized a lot of the hot paths in our code search and i
 
 That cleanup and validation resulted in an even simpler and faster implementation than we had previously been using.
 
-## How fast is it?
-
-Criterion medians on an Apple M4 (single core, `target-cpu=native`).[^bench]
-
-| Workload (input size)                  | `simple_fold`  | `simd_normalizer` | `HashMap` (byte path) | `str::to_lowercase` | `simdutf` round-trip |
-|----------------------------------------|---------------:|------------------:|----------------------:|--------------------:|---------------------:|
-| Pure ASCII (5.7 KB)                    | **40.8 GiB/s** |        1.21 GiB/s |              213 MiB/s |          27.7 GiB/s |           9.33 GiB/s |
-| CJK, no folds (8.1 KB)                 |  **2.95 GiB/s**|        1.97 GiB/s |              558 MiB/s |                  —  |           2.57 GiB/s |
-| Symbols / Myanmar, no folds (9.0 KB)   |  **2.96 GiB/s**|        1.56 GiB/s |              410 MiB/s |                  —  |           2.00 GiB/s |
-| Mixed BMP, all folding (8.8 KB)        |     869 MiB/s  |      **922 MiB/s**|              334 MiB/s |                  —  |           1.99 GiB/s |
-| Length-changing folds (1.7 KB)         |  **1.26 GiB/s**|         716 MiB/s |              233 MiB/s |                  —  |           1.77 GiB/s |
-
-More details can be found in the [performance section of the README](https://github.com/github/rust-gems/blob/main/crates/casefold/README.md#performance).
-
-Let's walk through the evolution in detail.
-
 ## Why case-folding is even important?
 
 Suppose a user searches for `straße` and your corpus contains `STRASSE`, or they type `İstanbul` and you stored
@@ -32,6 +16,23 @@ Suppose a user searches for `straße` and your corpus contains `STRASSE`, or the
 - **Regex engines** implement the case-insensitive flag
   `(?i)` by folding the pattern's character classes (and comparing against folded input).
 - **Identifiers and protocols** use case-insensitive comparison of usernames, hostnames, file paths, HTTP headers, and so on.
+
+## How fast is it?
+
+Criterion medians on an Apple M4 (single core, `target-cpu=native`).
+
+| Workload (input size)                  | `simple_fold`  | `simd_normalizer` | `HashMap` (byte path) | `str::to_lowercase` | `simdutf` round-trip |
+|----------------------------------------|---------------:|------------------:|----------------------:|--------------------:|---------------------:|
+| Pure ASCII (5.7 KB)                    | **40.8 GiB/s** |        1.21 GiB/s |              213 MiB/s |          27.7 GiB/s |           9.33 GiB/s |
+| CJK, no folds (8.1 KB)                 |  **2.95 GiB/s**|        1.97 GiB/s |              558 MiB/s |                  —  |           2.57 GiB/s |
+| Symbols / Myanmar, no folds (9.0 KB)   |  **2.96 GiB/s**|        1.56 GiB/s |              410 MiB/s |                  —  |           2.00 GiB/s |
+| Mixed BMP, all folding (8.8 KB)        |     869 MiB/s  |      **922 MiB/s**|              334 MiB/s |                  —  |           1.99 GiB/s |
+| Length-changing folds (1.7 KB)         |  **1.26 GiB/s**|         716 MiB/s |              233 MiB/s |                  —  |           1.77 GiB/s |
+_*Treat the absolute figures as illustrative, not portable: the whole design leans on auto-vectorization, SWAR, and little-endian byte arithmetic, so the numbers — and even the *ratios* between rows — can shift substantially on a different microarchitecture (a wider or narrower vector unit, different memory bandwidth, a big-endian target, x86 vs ARM)._
+
+More details can be found in the [performance section of the README](https://github.com/github/rust-gems/blob/main/crates/casefold/README.md#performance).
+
+Let's walk through the evolution in detail.
 
 ### Folding is not lowercasing
 
@@ -161,7 +162,7 @@ It is genuinely faster to
 
 40 GiB/s also means doing zero unnecessary allocation. `simple_fold` takes the input `String` *by
 value*, owning the heap buffer it can mutate and return it. If the OR-accumulator's high bit was clear, the input was pure ASCII — already folded in place — we hand the
-**same allocation** straight back, no second buffer and no copy. Otherwise we
+**same allocation** straight back, no second buffer and no copy. Otherwise, we
 `memchr` to the first non-ASCII byte and scan the tail from there, leaving the output buffer
 *unallocated* (a null write cursor) until we hit a character that folds to **different bytes**. Text whose multibyte content never folds — CJK, Hangul, Kana, Arabic, Hebrew, symbols — also returns the original allocation untouched, never copying a byte.
 
@@ -192,21 +193,14 @@ When a character
 *very* sparse and *very* structured relation. Four observations shrink them to
 **1776 bytes** and let the fold run **without ever decoding a full character**.
 
-But before any of that, the most important ingredient: even on the non-ASCII path, the overwhelming majority of characters
-**do not fold
-**. CJK, Hangul, Kana, Arabic, Hebrew, Indic scripts, emoji, punctuation, symbols — none of it folds. The hot operation, then, isn't really "fold this character," it's "
-*does* this character fold?" — almost always no. The table has to make that **negative test
-** as close to free as possible; the actual folding is the rare sub-case of an already-rare path. That priority is what shapes the layout below — the page bitmap ([idea 1](#idea-1-foldable-code-points-cluster-into-64-code-point-pages)) exists precisely so a non-folding character is rejected in a single bit test, straight from its leading UTF-8 bytes, without decoding or scanning anything.
+Even on the non-ASCII path, the overwhelming majority of characters do not fold. The hot operation, then, isn't really "fold this character," it's "does this character fold?" — almost always no. The table has to make that **negative test
+** as close to free as possible; the actual folding is the rare case on an already-rare path. That priority is what shapes the layout below — the page bitmap exists precisely so a non-folding character is rejected in a single bit test, straight from its leading UTF-8 bytes, without decoding or scanning anything.
 
-This is exactly why a `HashMap<u32, u32>` is the
-*wrong* shape for the job, not just a bigger one. A hash map is optimized for the **hit
-**: it finds a present key in roughly one probe, and only spends extra work (more probes, full key comparison) when load factor or collisions bite. But our workload is dominated by
-**misses** — characters that aren't in the table at all — and a miss is a hash map's
-*least* favourite query: it still has to hash the key, jump to a bucket, and walk the probe sequence far enough to
-*prove
+> [!Important]
+> This is exactly why a `HashMap<u32, u32>` is the *wrong* shape for the job, not just a bigger one. A hash map is optimized for the **hit**: it finds a present key in roughly one probe, and only spends extra work (more probes, full key comparison) when load factor or collisions bite. But our workload is dominated by **misses** — characters that aren't in the table at all — and a miss is a hash map's *least* favourite query: it still has to hash the key, jump to a bucket, and walk the probe sequence far enough to *prove
 absence*. We'd be paying the map's slow path on virtually every character and its fast path almost never. The bitmap inverts that: the common case (no fold) is a single bit test, and only the rare hit does any further work — the exact opposite of the hash map's bias, and the right one for this data.
 
-### Idea 1: foldable code points cluster into 64-code-point "pages"
+### Foldable code points cluster into 64-code-point "pages"
 
 Foldable code points bunch together. Slice the code space into 64-code-point
 "pages" and the ~1484 folds touch just **59** of ~1960 possible pages. A one-bit-per-page **presence bitmap
@@ -218,7 +212,7 @@ Foldable code points bunch together. Slice the code space into 64-code-point
 Why **64
 **? Six bits is exactly what makes the probe fall out of the UTF-8 bytes. A continuation byte carries 6 payload bits, which makes the within-page offset
 `cp & 0x3F`
-*literally the low 6 bits of the last
+*the low 6 bits of the last
 byte*. Indexing the bitmap as 64-bit words, the bit position is another 6 bits — straight from the second-to-last byte — leaving only the higher bits as the word index. So the bit index is always just the second-to-last byte masked with
 `0x3F`, and the word index is
 `0`, a nibble, or (only for four-byte sequences) two merged bytes — a tiny branch on the lead byte, no full code-point reconstruction:
@@ -245,7 +239,7 @@ if word_idx >= PAGE_BITMAP.len() || (PAGE_BITMAP[word_idx] >> bit_idx) & 1 == 0 
 Because
 `word_idx` depends only on the lead byte (and, for four-byte sequences, the first continuation byte), the bitmap load can be issued early.
 
-### Idea 2: within a page, folds come in runs
+### Within a page, folds come in runs
 
 A set page bit tells us
 *something* on this page folds, but not which code points or to what. The obvious encoding is one entry per foldable code point — but that is both bulky and slow to search: a page can hold dozens of folds, and we'd have to scan them all to find the one matching the current code point. The structure of the data rescues us again. Adjacent code points overwhelmingly share the same delta to their fold:
@@ -262,7 +256,7 @@ records store a `Lo`/`Hi` range plus per-case deltas, with an `UpperLower`
 sentinel marking the alternating blocks. Runs are clipped at the 64-cp page boundaries so a run never straddles two pages — which is exactly what lets the page bitmap above treat a clear bit as a
 *definitive* "no fold".
 
-### Idea 3: a run record is two clean bytes
+### A run record is two clean bytes
 
 With both endpoints inside one page they fit in 6 bits, split across two arrays:
 `RUN_END_LOW[i] = end & 0x3F` (the scan key) and
@@ -301,7 +295,7 @@ fn scan_end_low(lo: usize, n: usize, low_v: u8) -> usize {
 }
 ```
 
-### Idea 4: folding is a little-endian byte addition
+### Folding is a little-endian byte addition
 
 On a little-endian machine the folded character's UTF-8 bytes, read as a `u32`, equal the source bytes (as a
 `u32`) plus a **per-run constant**. A parallel `BYTE_DELTA[i]` table then turns the whole fold into a masked load, one
@@ -331,9 +325,13 @@ pub fn utf8_len(lead: u8) -> usize {
 ```
 
 Because we advance by the *folded* length, this even handles length-changing folds — U+212A KELVIN SIGN (3 bytes) →
-`k` (1 byte), or U+023A `Ⱥ` (2 bytes) → U+2C65 `ⱥ` (3 bytes) — by writing fewer or more bytes than were read.[^overlong]
-And it's the part I believe is genuinely new: every other folder I looked at — ICU, Go's `unicode`, Rust's
+`k` (1 byte), or U+023A `Ⱥ` (2 bytes) → U+2C65 `ⱥ` (3 bytes) — by writing fewer or more bytes than were read.
+That's the part we believe is genuinely new: every other folder we looked at — ICU, Go's `unicode`, Rust's
 `regex`, CPython, glibc — decodes UTF-8 to a code point, applies the fold there, and re-encodes (even SIMD folders decode first). Doing the arithmetic in byte space skips both the decode and the encode, which is exactly why this path can outrun a hash map that already has the answer tabulated — the hash map still has to decode its key and encode its result.
+
+
+> [!Note]
+> The byte-space arithmetic assumes the input is **well-formed, shortest-form UTF-8** — every code point encoded with the minimal number of bytes. Reading the source bytes as a `u32` and adding a per-run delta only lands on the correct folded encoding when the source is in canonical form; an *overlong* encoding (a code point padded into more bytes than necessary, e.g. `/` as `0xC0 0xAF`) has a different byte pattern and would break the `length_mask` and the delta arithmetic. This is not a real restriction in Rust — `&str`/`String` are guaranteed to hold valid UTF-8, which by definition rejects overlong sequences — but a caller feeding raw bytes from elsewhere must validate (or otherwise normalize) them first.
 
 ### The ASCII shortcut in the tail loop
 
@@ -365,29 +363,8 @@ Next to the obvious alternatives, that 1776 bytes is an order of magnitude or mo
 | A runtime `HashMap<u32, u32>`                        | ~17 KB     |
 | **This crate (paged bitmap + packed runs)**         | **1776 B** |
 
-## Takeaways
+## Conclusion
 
-Case folding sounds solved — uppercase to lowercase, how hard can it be? Yet a task this basic hid two
-*surprising* wins, in opposite directions.
-
-On the common path, the win was doing **more** work: deleting the "obvious"
-early-exit so the loop sweeps the whole buffer ran ~15× faster, because the branch we added to
-*save* work was the very thing blocking vectorization.
-
-On the rare path, the win was looking at the
-*shape* of the data instead of reaching for a hash map: case folding is sparse, run-heavy, and page-clustered, and UTF-8's little-endian layout turns a code-point delta into a plain integer add — so a 1.7 KB table beats a hash map on both size and speed.
-
-The meta-lesson: "basic" rarely means "fully explored." Measuring instead of guessing — and questioning the optimization everyone reaches for first — can still find an order of magnitude. That's the fun part.
+You can often find optimizations in unexpected places if you are carefully, and this solution still probably isn't truly optimal. It does meaningfully improve the other options we have found.
 
 The crate is [`casefold`](../README.md); the generated table and full design notes live alongside the source.
-
-[^bench]: Treat the absolute figures as illustrative, not portable: the whole design leans on auto-vectorization, SWAR, and little-endian byte arithmetic, so the numbers — and even the *ratios* between rows — can shift substantially on a different microarchitecture (a wider or narrower vector unit, different memory bandwidth, a big-endian target, x86 vs ARM).
-
-[^overlong]: The byte-space arithmetic assumes the input is **well-formed, shortest-form UTF-8
-** — every code point encoded with the minimal number of bytes. Reading the source bytes as a
-`u32` and adding a per-run delta only lands on the correct folded encoding when the source is in canonical form; an
-*overlong* encoding (a code point padded into more bytes than necessary, e.g. `/` as
-`0xC0 0xAF`) has a different byte pattern and would break the
-`length_mask` and the delta arithmetic. This is not a real restriction in Rust — `&str`/
-`String` are guaranteed to hold valid UTF-8, which by definition rejects overlong sequences — but a caller feeding raw bytes from elsewhere must validate (or otherwise normalize) them first.
-
