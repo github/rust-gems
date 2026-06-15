@@ -21,7 +21,7 @@ Suppose a user searches for `straße` and your corpus contains `STRASSE`, or the
 
 Criterion medians on an Apple M4 (single core, `target-cpu=native`).
 
-The first three columns are real case-folders that produce identical output: **`simple_fold`** (this crate), **`simd_normalizer`** (the [`simd-normalizer`](https://crates.io/crates/simd-normalizer) crate), and **`HashMap`** (naive `CaseFolding.txt` lookup). The last two are references, *not* folders: **`str::to_lowercase`** *lowercases* rather than folds, so it's only comparable on ASCII (`—` elsewhere, where the operations diverge), and **`simdutf` round-trip** is [simdutf](https://github.com/simdutf/simdutf).
+The first three columns are real case-folders that produce identical output: **`simple_fold`** (this crate), **`simd_normalizer`** (the [`simd-normalizer`](https://crates.io/crates/simd-normalizer) crate), and **`HashMap`** (naive `CaseFolding.txt` lookup). The last two are references, *not* case-folders: **`str::to_lowercase`** *lowercases* rather than folds, so it's only comparable on ASCII (`—` elsewhere, where the operations diverge), and **`simdutf` round-trip** is [simdutf](https://github.com/simdutf/simdutf).
 
 The workloads are chosen to hit each code path:
 
