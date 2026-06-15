@@ -167,29 +167,28 @@ fn fold_non_ascii_tail(bytes: Vec<u8>, start: usize) -> Vec<u8> {
             read += 1;
             continue;
         }
-        // Page-precision reject probe (see the module docs).
-        let (page, c_len) = if lead < 0xE0 {
-            ((lead & 0x1F) as u32, 2usize)
+        // Page-precision reject probe. Compute the bitmap word index and the
+        // within-word bit directly per length, instead of forming a combined
+        // `page` and re-splitting it. `word_idx` stays a function of `lead`
+        // (plus, for 4-byte, the first continuation byte) so the bitmap load
+        // issues early.
+        let (word_idx, bit_idx, c_len) = if lead < 0xE0 {
+            (0usize, lead & 0x1F, 2usize)
         } else if lead < 0xF0 {
-            (
-                (((lead & 0x0F) as u32) << 6) | (bytes[read + 1] & 0x3F) as u32,
-                3,
-            )
+            ((lead & 0x0F) as usize, bytes[read + 1] & 0x3F, 3usize)
         } else {
             (
-                (((lead & 0x07) as u32) << 12)
-                    | (((bytes[read + 1] & 0x3F) as u32) << 6)
-                    | (bytes[read + 2] & 0x3F) as u32,
-                4,
+                (((lead & 0x07) as usize) << 6) | (bytes[read + 1] & 0x3F) as usize,
+                bytes[read + 2] & 0x3F,
+                4usize,
             )
         };
-        let word_idx = (page >> 6) as usize;
-        if word_idx >= PAGE_BITMAP.len() || (PAGE_BITMAP[word_idx] >> (page & 63)) & 1 == 0 {
+        if word_idx >= PAGE_BITMAP.len() || (PAGE_BITMAP[word_idx] >> bit_idx) & 1 == 0 {
             read += c_len;
             continue;
         }
         let low_v = bytes[read + c_len - 1] & 0x3F;
-        let dense = popcount_up_to(page) as usize;
+        let dense = popcount_up_to(word_idx, bit_idx) as usize;
         let lo = PAGE_OFFSET[dense] as usize;
         let n = PAGE_OFFSET[dense + 1] as usize - lo;
         let off = scan_end_low(lo, n, low_v);
@@ -310,13 +309,11 @@ const fn table_size_bytes() -> usize {
 //   RUN_START_STRIDE[i] = (start & PAGE_MASK) | ((stride - 1) << 6)
 //                                              (membership, vs `cp & 0x3F`)
 
-/// Number of populated pages strictly before `page`.
+/// Number of populated pages strictly before the page at `word_idx`/`bit_idx`.
 #[inline]
-fn popcount_up_to(page: u32) -> u32 {
-    let word_idx = (page / 64) as usize;
-    let bit_in_word = page % 64;
+fn popcount_up_to(word_idx: usize, bit_idx: u8) -> u32 {
     let base = POPCNT_SAMPLES[word_idx] as u32;
-    let partial = PAGE_BITMAP[word_idx] & ((1u64 << bit_in_word).wrapping_sub(1));
+    let partial = PAGE_BITMAP[word_idx] & ((1u64 << bit_idx).wrapping_sub(1));
     base + partial.count_ones()
 }
 
