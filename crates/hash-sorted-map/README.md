@@ -38,7 +38,7 @@ keys, which means:
 - **Optimized growth** — during resize, elements are re-inserted without
   duplicate checking and copied via raw pointers.
 - **Generic key/value/hasher** — keys need only `Eq` (`Ord` to sort).
-  Customise hashing with the single-method [`SortingHash`] trait; any
+  Customize hashing with the single-method [`SortingHash`] trait; any
   standard `S: BuildHasher` works out of the box via a blanket impl, and
   `Borrow<Q>`-based lookups are supported.
 
