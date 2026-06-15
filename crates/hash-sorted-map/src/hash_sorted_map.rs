@@ -12,7 +12,7 @@ pub(crate) use super::group::NO_OVERFLOW;
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 #[inline]
-fn tag(hash: u32) -> u8 {
+fn tag(hash: u64) -> u8 {
     (hash as u8) | 0x80
 }
 
@@ -20,7 +20,7 @@ fn tag(hash: u32) -> u8 {
 // SortingHash
 // ────────────────────────────────────────────────────────────────────────
 
-/// Maps a key to the 32-bit hash that determines its position in the map.
+/// Maps a key to the 64-bit hash that determines its position in the map.
 ///
 /// The high bits select the primary group, so visiting groups in index order
 /// yields entries in ascending hash order — the property [`HashSortedMap`]
@@ -39,8 +39,8 @@ fn tag(hash: u32) -> u8 {
 /// #[derive(Default)]
 /// struct Identity;
 /// impl SortingHash<u32> for Identity {
-///     fn hash(&self, &key: &u32) -> u32 {
-///         key
+///     fn hash(&self, &key: &u32) -> u64 {
+///         (key as u64) | ((key as u64) << 32)
 ///     }
 /// }
 ///
@@ -50,16 +50,15 @@ fn tag(hash: u32) -> u8 {
 /// ```
 pub trait SortingHash<K: ?Sized> {
     /// Returns the hash of `key`.
-    fn hash(&self, key: &K) -> u32;
+    fn hash(&self, key: &K) -> u64;
 }
 
 /// Bridges the standard library's [`BuildHasher`] to [`SortingHash`], so any
-/// existing hasher keeps working unchanged. The high 32 bits of the 64-bit
-/// hash are used, since the map groups entries by the most significant bits.
+/// existing hasher keeps working unchanged.
 impl<K: Hash + ?Sized, S: BuildHasher> SortingHash<K> for S {
     #[inline]
-    fn hash(&self, key: &K) -> u32 {
-        (self.hash_one(key) >> 32) as u32
+    fn hash(&self, key: &K) -> u64 {
+        self.hash_one(key)
     }
 }
 
@@ -139,8 +138,8 @@ impl<K, V, S> HashSortedMap<K, V, S> {
     }
 
     #[inline]
-    pub(crate) fn group_index(&self, hash: u32) -> usize {
-        (hash >> (32 - self.n_bits)) as usize
+    pub(crate) fn group_index(&self, hash: u64) -> usize {
+        (hash >> (64 - self.n_bits)) as usize
     }
 }
 
@@ -170,7 +169,7 @@ impl<K: Eq + Ord, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
     pub fn sort_by_hash(&mut self) {
         let num_primary = 1usize << self.n_bits;
         let mut chain: Vec<u32> = Vec::new();
-        let mut hashes: Vec<u32> = Vec::new();
+        let mut hashes: Vec<u64> = Vec::new();
 
         for primary_gi in 0..num_primary {
             chain.clear();
@@ -312,7 +311,7 @@ impl<K: Eq, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
         }
     }
 
-    fn insert_hashed(&mut self, hash: u32, key: K, value: V) -> Option<V> {
+    fn insert_hashed(&mut self, hash: u64, key: K, value: V) -> Option<V> {
         let tag = tag(hash);
         let mut gi = self.group_index(hash);
         loop {
@@ -359,7 +358,7 @@ impl<K: Eq, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
         }
     }
 
-    fn get_hashed<Q>(&self, hash: u32, key: &Q) -> Option<&V>
+    fn get_hashed<Q>(&self, hash: u64, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Eq + ?Sized,
@@ -392,7 +391,7 @@ impl<K: Eq, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
     /// Returns raw pointers (instead of indices) so the caller can write
     /// directly without re-indexing. Pointers remain valid for the lifetime
     /// of `&mut self` until any reallocation (`grow`).
-    fn find_or_insertion_slot(&mut self, hash: u32, key: &K) -> FindResult<K, V> {
+    fn find_or_insertion_slot(&mut self, hash: u64, key: &K) -> FindResult<K, V> {
         let tag = tag(hash);
         let mut gi = self.group_index(hash);
 
@@ -451,7 +450,7 @@ impl<K: Eq, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
         debug_assert_eq!(self.len, old_len);
     }
 
-    fn insert_for_grow(&mut self, hash: u32, key_src: *const K, value_src: *const V) {
+    fn insert_for_grow(&mut self, hash: u64, key_src: *const K, value_src: *const V) {
         let tag = tag(hash);
         let gi = self.group_index(hash);
         let mut group = &mut self.groups[gi];
@@ -537,7 +536,7 @@ pub struct OccupiedEntry<'a, V> {
 pub struct VacantEntry<'a, K, V, S> {
     phantom: PhantomData<&'a mut HashSortedMap<K, V, S>>,
     map: *mut HashSortedMap<K, V, S>,
-    hash: u32,
+    hash: u64,
     key: K,
     insertion: Insertion<K, V>,
 }
@@ -908,8 +907,8 @@ mod tests {
 
         struct ByValue;
         impl SortingHash<Key> for ByValue {
-            fn hash(&self, key: &Key) -> u32 {
-                key.0.wrapping_mul(0x9E37_79B1)
+            fn hash(&self, key: &Key) -> u64 {
+                (key.0 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
             }
         }
 
@@ -973,11 +972,11 @@ mod tests {
         }
         map.sort_by_hash();
         // Iteration should now yield entries in (hash, key) order.
-        let mut prev_hash = 0u32;
+        let mut prev_hash = 0u64;
         let mut prev_key = 0u32;
         let mut first = true;
         for (&k, _) in &map {
-            let h = SortingHash::hash(&hasher, &k);
+            let h = hasher.hash_one(k);
             if !first {
                 assert!(
                     (h, k) >= (prev_hash, prev_key),
@@ -1018,11 +1017,11 @@ mod tests {
         }
         map.sort_by_hash();
         assert_eq!(map.len(), 100);
-        let mut prev_hash = 0u32;
+        let mut prev_hash = 0u64;
         let mut prev_key = String::new();
         let mut first = true;
         for (k, _) in &map {
-            let h = SortingHash::hash(&hasher, k);
+            let h = hasher.hash_one(k);
             if !first {
                 assert!(
                     (h, k) >= (prev_hash, &prev_key),
