@@ -11,9 +11,10 @@
 //! blanket implementation.
 //!
 //! ```
+//! use std::collections::hash_map::RandomState;
 //! use hash_sorted_map::HashSortedMap;
 //!
-//! let mut map = HashSortedMap::new();
+//! let mut map: HashSortedMap<_, _, RandomState> = HashSortedMap::new();
 //! map.insert("hello", 1);
 //! map.insert("world", 2);
 //! assert_eq!(map.get("hello"), Some(&1));

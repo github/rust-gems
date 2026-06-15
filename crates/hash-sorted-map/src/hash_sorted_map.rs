@@ -1,6 +1,5 @@
 use core::mem::MaybeUninit;
 use std::borrow::Borrow;
-use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
 
@@ -27,10 +26,11 @@ fn tag(hash: u64) -> u8 {
 /// relies on for sorted iteration and linear-time merging. The hash should
 /// therefore be well distributed in its high bits.
 ///
-/// Every [`BuildHasher`] (the default [`RandomState`], `foldhash`, `ahash`,
-/// `fnv`, …) implements this trait automatically through a blanket impl, so
-/// it can be used as a drop-in. For full control — including keys that do not
-/// implement [`Hash`] — implement this single method directly instead of the
+/// Every [`BuildHasher`] ([`RandomState`](std::collections::hash_map::RandomState),
+/// `foldhash`, `ahash`, `fnv`, …) implements this trait automatically through a
+/// blanket impl, so it can be used as a drop-in. For full control — including
+/// keys that do not implement [`Hash`] — implement this single method directly
+/// instead of the
 /// streaming [`Hasher`](std::hash::Hasher) interface:
 ///
 /// ```
@@ -71,7 +71,12 @@ impl<K: Hash + ?Sized, S: BuildHasher> SortingHash<K> for S {
 /// Uses NEON on aarch64, SSE2 on x86_64, scalar fallback elsewhere.
 /// Generic over key type `K`, value type `V`, and hashing strategy `S`
 /// (any [`SortingHash<K>`](SortingHash), which every [`BuildHasher`] satisfies).
-pub struct HashSortedMap<K, V, S = RandomState> {
+///
+/// `S` has no default: because the hasher determines the iteration order, there
+/// is no meaningful "default" hasher for a sort-by-hash map. Construct one with
+/// [`with_hasher`](Self::with_hasher), or — for a [`Default`] hasher `S` — with
+/// [`new`](Self::new) / [`with_capacity`](Self::with_capacity) / [`Default`].
+pub struct HashSortedMap<K, V, S> {
     pub(crate) groups: Box<[Group<K, V>]>,
     pub(crate) num_groups: u32,
     pub(crate) n_bits: u32,
@@ -79,22 +84,22 @@ pub struct HashSortedMap<K, V, S = RandomState> {
     hasher: S,
 }
 
-impl<K: Hash + Eq, V> Default for HashSortedMap<K, V> {
+impl<K, V, S: Default> Default for HashSortedMap<K, V, S> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K: Hash + Eq, V> HashSortedMap<K, V> {
-    /// Creates an empty map using the default [`RandomState`] hasher.
+impl<K, V, S: Default> HashSortedMap<K, V, S> {
+    /// Creates an empty map using the default-constructed hasher `S`.
     pub fn new() -> Self {
-        Self::with_capacity_and_hasher(0, RandomState::new())
+        Self::with_capacity_and_hasher(0, S::default())
     }
 
     /// Creates an empty map that can hold at least `capacity` entries without
-    /// growing, using the default [`RandomState`] hasher.
+    /// growing, using the default-constructed hasher `S`.
     pub fn with_capacity(capacity: usize) -> Self {
-        Self::with_capacity_and_hasher(capacity, RandomState::new())
+        Self::with_capacity_and_hasher(capacity, S::default())
     }
 }
 
@@ -679,13 +684,14 @@ impl<K, V, S> Drop for HashSortedMap<K, V, S> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
 
     use super::*;
 
     #[test]
     fn insert_and_get() {
-        let mut map = HashSortedMap::new();
+        let mut map = HashSortedMap::<_, _, RandomState>::new();
         map.insert(100, "hello");
         map.insert(200, "world");
         assert_eq!(map.get(&100), Some(&"hello"));
@@ -696,7 +702,7 @@ mod tests {
 
     #[test]
     fn insert_overwrite() {
-        let mut map = HashSortedMap::new();
+        let mut map = HashSortedMap::<_, _, RandomState>::new();
         map.insert(42, "a");
         assert_eq!(map.insert(42, "b"), Some("a"));
         assert_eq!(map.get(&42), Some(&"b"));
@@ -705,7 +711,7 @@ mod tests {
 
     #[test]
     fn grow_preserves_entries() {
-        let mut map = HashSortedMap::new();
+        let mut map = HashSortedMap::<_, _, RandomState>::new();
         for i in 0..200u32 {
             map.insert(i, i * 10);
         }
@@ -717,7 +723,7 @@ mod tests {
 
     #[test]
     fn many_entries() {
-        let mut map = HashSortedMap::with_capacity(2000);
+        let mut map = HashSortedMap::<_, _, RandomState>::with_capacity(2000);
         for i in 0..2000u32 {
             map.insert(i.wrapping_mul(2654435761), i);
         }
@@ -729,7 +735,7 @@ mod tests {
 
     #[test]
     fn overflow_chain() {
-        let mut map = HashSortedMap::with_capacity(8);
+        let mut map = HashSortedMap::<_, _, RandomState>::with_capacity(8);
         for i in 0..20u32 {
             let key = i | 0xAB000000;
             map.insert(key, i);
@@ -743,7 +749,7 @@ mod tests {
 
     #[test]
     fn grow_on_overflow_exhaustion() {
-        let mut map = HashSortedMap::with_capacity(1);
+        let mut map = HashSortedMap::<_, _, RandomState>::with_capacity(1);
         let old_n_bits = map.n_bits;
         for i in 0..100u32 {
             let key = i | 0xFF000000;
@@ -759,7 +765,7 @@ mod tests {
 
     #[test]
     fn string_keys() {
-        let mut map = HashSortedMap::new();
+        let mut map = HashSortedMap::<_, _, RandomState>::new();
         map.insert("hello".to_string(), 1);
         map.insert("world".to_string(), 2);
         assert_eq!(map.get("hello"), Some(&1));
@@ -774,7 +780,8 @@ mod tests {
 
     #[test]
     fn get_or_default_basics() {
-        let mut map: HashSortedMap<&str, i32> = HashSortedMap::new();
+        let mut map: HashSortedMap<&str, i32, RandomState> =
+            HashSortedMap::<_, _, RandomState>::new();
         // Inserts default (0), then mutates.
         *map.get_or_default("a") += 5;
         *map.get_or_default("b") += 7;
@@ -787,7 +794,8 @@ mod tests {
 
     #[test]
     fn get_or_insert_with_lazy() {
-        let mut map: HashSortedMap<u32, String> = HashSortedMap::new();
+        let mut map: HashSortedMap<u32, String, RandomState> =
+            HashSortedMap::<_, _, RandomState>::new();
         let mut call_count = 0;
         let mut make = |s: &str| {
             call_count += 1;
@@ -814,7 +822,8 @@ mod tests {
 
     #[test]
     fn get_or_default_survives_grow() {
-        let mut map: HashSortedMap<u32, u32> = HashSortedMap::with_capacity(1);
+        let mut map: HashSortedMap<u32, u32, RandomState> =
+            HashSortedMap::<_, _, RandomState>::with_capacity(1);
         for i in 0..500u32 {
             *map.get_or_default(i) = i * 2;
         }
@@ -827,7 +836,8 @@ mod tests {
     #[test]
     fn entry_or_default_counting() {
         // Classic counting workload via Entry API.
-        let mut map: HashSortedMap<&str, u32> = HashSortedMap::new();
+        let mut map: HashSortedMap<&str, u32, RandomState> =
+            HashSortedMap::<_, _, RandomState>::new();
         for word in ["a", "b", "a", "c", "b", "a"] {
             *map.entry(word).or_default() += 1;
         }
@@ -839,7 +849,8 @@ mod tests {
 
     #[test]
     fn entry_or_insert_lazy() {
-        let mut map: HashSortedMap<u32, String> = HashSortedMap::new();
+        let mut map: HashSortedMap<u32, String, RandomState> =
+            HashSortedMap::<_, _, RandomState>::new();
         let mut call_count = 0;
         let mut make = |s: &str| {
             call_count += 1;
@@ -856,7 +867,8 @@ mod tests {
 
     #[test]
     fn entry_and_modify() {
-        let mut map: HashSortedMap<u32, u32> = HashSortedMap::new();
+        let mut map: HashSortedMap<u32, u32, RandomState> =
+            HashSortedMap::<_, _, RandomState>::new();
         // Vacant: and_modify is a no-op, then or_insert(0) runs.
         *map.entry(7).and_modify(|v| *v *= 10).or_insert(1) += 100;
         assert_eq!(map.get(&7), Some(&101));
@@ -928,14 +940,15 @@ mod tests {
 
     #[test]
     fn sort_by_hash_empty() {
-        let mut map: HashSortedMap<u32, u32> = HashSortedMap::new();
+        let mut map: HashSortedMap<u32, u32, RandomState> =
+            HashSortedMap::<_, _, RandomState>::new();
         map.sort_by_hash();
         assert_eq!(map.len(), 0);
     }
 
     #[test]
     fn sort_by_hash_single() {
-        let mut map = HashSortedMap::new();
+        let mut map = HashSortedMap::<_, _, RandomState>::new();
         map.insert(42u32, "hello");
         map.sort_by_hash();
         assert_eq!(map.len(), 1);
@@ -945,7 +958,7 @@ mod tests {
 
     #[test]
     fn sort_by_hash_preserves_entries() {
-        let mut map = HashSortedMap::new();
+        let mut map = HashSortedMap::<_, _, RandomState>::new();
         for i in 0..200u32 {
             map.insert(i, i * 10);
         }
@@ -964,8 +977,6 @@ mod tests {
 
     #[test]
     fn sort_by_hash_produces_hash_order() {
-        use std::collections::hash_map::RandomState;
-
         let hasher = RandomState::new();
         let mut map = HashSortedMap::with_hasher(hasher.clone());
         for i in 0..500u32 {
@@ -1009,8 +1020,6 @@ mod tests {
 
     #[test]
     fn sort_by_hash_with_strings() {
-        use std::collections::hash_map::RandomState;
-
         let hasher = RandomState::new();
         let mut map = HashSortedMap::with_hasher(hasher.clone());
         for i in 0..100u32 {
