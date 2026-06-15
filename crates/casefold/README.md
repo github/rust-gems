@@ -9,6 +9,9 @@ multiple GiB/s — several × faster than a `HashMap` fold table — while using
 form, as defined by the Unicode [CaseFolding.txt][cf] data file restricted to
 the **simple** (1-to-1) folds (statuses `C` and `S`). Full multi-character
 folds (`F`, e.g. `ß` → `ss`) and Turkic locale folds (`T`) are not supported.
+The crate also provides [`index_fold`](#single-byte-index-fold), which projects
+every character — ASCII or multibyte — onto a single byte, a handy primitive for
+case-insensitive n-gram indexing.
 
 [cf]: https://www.unicode.org/Public/UCD/latest/ucd/CaseFolding.txt
 
@@ -24,6 +27,61 @@ use casefold::simple_fold;
 assert_eq!(simple_fold("Hello, WORLD!".to_string()), "hello, world!");
 assert_eq!(simple_fold("ÜBER".to_string()), "über");
 ```
+
+To fold a single code point, use `simple_fold_char(c: char) -> char`, which
+returns the same character `simple_fold` would emit for that input (ASCII is
+lowercased; a character with a simple fold maps to its folded code point; every
+other character is returned unchanged).
+
+## Single-byte index fold
+
+`index_fold(s: String) -> Vec<u8>` applies the **same** simple fold as
+`simple_fold`, then collapses **every character to exactly one byte**:
+
+- ASCII characters become their plain lowercased byte (high bit clear).
+- Every multibyte character becomes `0x80 | (cp & 0x7F)` — the low 7 bits of its
+  *folded* code point, with the high bit set. The high bit is set
+  unconditionally, so even a multibyte character that folds to ASCII (e.g.
+  U+212A KELVIN SIGN → `k`) yields `0x80 | b'k'`, never a bare ASCII byte.
+
+```rust
+use casefold::index_fold;
+assert_eq!(index_fold("Hi!".to_string()), b"hi!");
+assert_eq!(index_fold("Ü".to_string()), &[0xFC]);          // ü → 0x80 | (0xFC & 0x7F)
+assert_eq!(index_fold("中".to_string()), &[0x80 | 0x2D]);
+```
+
+The result is fixed-width (one byte per character) and is therefore **not**
+valid UTF-8. To fold a single code point, use `index_fold_char(c: char) -> u8`,
+which returns the same byte `index_fold` would emit for that character.
+
+### Why one byte per character?
+
+This is a building block for **case-insensitive n-gram indexing**. When every
+character — ASCII or not — is reduced to a single byte, a fixed *k*-gram is just
+*k* contiguous bytes: byte n-grams are trivial to slice, hash, and store, they
+are already case-folded so lookups are case-insensitive for free, and a document
+of *n* characters yields exactly *n* index bytes. ASCII keeps its natural byte,
+and multibyte scripts are projected onto the high half (`0x80–0xFF`) so they
+never collide with ASCII.
+
+The projection is intentionally **lossy** — distinct code points that share the
+same low 7 bits map to the same byte (most CJK, for instance, lands in a narrow
+band). That is fine for an index: use `index_fold` as a cheap *candidate filter*
+that never produces false negatives for a case-insensitive match, then verify
+exact hits against the original text afterwards.
+
+Mechanically it reuses the whole fold table; the only addition is a per-run
+7-bit `INDEX_DELTA`. By modular arithmetic the folded low 7 bits are
+`((cp & 0x7F) + (delta & 0x7F)) mod 128`, so the fold is a single
+`wrapping_add` — no UTF-8 reconstruction, no decode, no encode (the stray carry
+bit is overwritten by the unconditional `0x80 |`). Because the output is never
+longer than the input, it runs fully in place in the input's own buffer, and
+pure-ASCII input is returned untouched. It shares `simple_fold`'s
+auto-vectorized ASCII pass (~46 GiB/s) and, since it emits one byte per
+character, runs *faster* than `simple_fold` on folding-heavy input (e.g. ~1.9
+vs ~1.3 GiB/s on length-changing folds, ~1.1 vs ~0.9 GiB/s on mixed BMP) and a
+little slower on pure-reject CJK/symbols due to character collapsing.
 
 ## Why does this crate exist?
 
@@ -68,7 +126,7 @@ query:
    `wrapping_add`, one 4-byte store — no decode, no encode. Writing fewer/more
    bytes than were read handles length-changing folds (`K`→`k`, `Ⱥ`→`ⱥ`).
 
-### Table layout (1776 B total)
+### Table layout (2014 B total)
 
 | Component                                       | Bytes |
 |-------------------------------------------------|------:|
@@ -78,8 +136,11 @@ query:
 | `RUN_END_LOW[238 + 8]: u8` (clean scan key, `end & 0x3F`; +8 SWAR pad) | 246 |
 | `RUN_START_STRIDE[238]: u8` (`start & 0x3F` \| stride bit) | 238 |
 | `BYTE_DELTA[238]: u32` (little-endian fold delta per run) | 952 |
-| **Total**                                       | **1776** |
+| `INDEX_DELTA[238]: u8` (7-bit per-run fold delta, `index_fold` only) | 238 |
+| **Total**                                       | **2014** |
 
+The `simple_fold` path uses 1776 B of this; the 238 B `INDEX_DELTA` side table
+powers [`index_fold`](#single-byte-index-fold) only.
 (Splitting runs at byte-delta boundaries raises the run count from 227 to 238.)
 The data file is parsed at build time by `build.rs`, which emits the packed
 `static` tables to `OUT_DIR/table.rs`.

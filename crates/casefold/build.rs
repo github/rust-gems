@@ -307,9 +307,21 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
         .max()
         .unwrap_or(0);
 
+    // Parallel 7-bit index deltas, one per run, for `index_fold`. The fold
+    // collapses each code point to `cp & 0x7F`; by modular arithmetic the folded
+    // low-7-bit value is `((cp & 0x7F) + (delta & 0x7F)) & 0x7F`, so storing the
+    // code-point delta reduced mod 128 lets `index_fold` derive the folded index
+    // byte with one `wrapping_add` + mask — no UTF-8 reconstruction. The high
+    // bit is added unconditionally at write time, so only 7 bits are stored.
+    let index_deltas: Vec<u8> = runs.iter().map(|r| (r.delta & 0x7F) as u8).collect();
+
     // Sanity: size accounting (printed as build warnings for visibility).
     let index_bytes = page_bitmap.len() * 8 + popcnt_samples.len() + page_offset.len();
-    let total = index_bytes + run_end_low.len() + run_start_stride.len() + byte_deltas.len() * 4;
+    let total = index_bytes
+        + run_end_low.len()
+        + run_start_stride.len()
+        + byte_deltas.len() * 4
+        + index_deltas.len();
     if env::var_os("CASEFOLD_BUILD_INFO").is_some() {
         println!(
             "cargo:warning=casefold table: {} fold entries, {} runs, {} populated pages, {} bytes total ({:.2} bits/entry), max |delta| = {}, max |byte_delta| = {}",
@@ -338,6 +350,7 @@ fn emit_tables(folds: &[Fold], runs: &[Run]) -> String {
     emit_u8_array(&mut s, "RUN_END_LOW", &run_end_low);
     emit_u8_array(&mut s, "RUN_START_STRIDE", &run_start_stride);
     emit_u32_array(&mut s, "BYTE_DELTA", &byte_deltas);
+    emit_u8_array(&mut s, "INDEX_DELTA", &index_deltas);
 
     s
 }
