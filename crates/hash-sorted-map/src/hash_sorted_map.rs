@@ -12,8 +12,55 @@ pub(crate) use super::group::NO_OVERFLOW;
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 #[inline]
-fn tag(hash: u64) -> u8 {
+fn tag(hash: u32) -> u8 {
     (hash as u8) | 0x80
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// SortingHash
+// ────────────────────────────────────────────────────────────────────────
+
+/// Maps a key to the 32-bit hash that determines its position in the map.
+///
+/// The high bits select the primary group, so visiting groups in index order
+/// yields entries in ascending hash order — the property [`HashSortedMap`]
+/// relies on for sorted iteration and linear-time merging. The hash should
+/// therefore be well distributed in its high bits.
+///
+/// Every [`BuildHasher`] (the default [`RandomState`], `foldhash`, `ahash`,
+/// `fnv`, …) implements this trait automatically through a blanket impl, so
+/// it can be used as a drop-in. For full control — including keys that do not
+/// implement [`Hash`] — implement this single method directly instead of the
+/// streaming [`Hasher`](std::hash::Hasher) interface:
+///
+/// ```
+/// use hash_sorted_map::{HashSortedMap, SortingHash};
+///
+/// #[derive(Default)]
+/// struct Identity;
+/// impl SortingHash<u32> for Identity {
+///     fn hash(&self, &key: &u32) -> u32 {
+///         key
+///     }
+/// }
+///
+/// let mut map = HashSortedMap::with_hasher(Identity);
+/// map.insert(42u32, "answer");
+/// assert_eq!(map.get(&42), Some(&"answer"));
+/// ```
+pub trait SortingHash<K: ?Sized> {
+    /// Returns the hash of `key`.
+    fn hash(&self, key: &K) -> u32;
+}
+
+/// Bridges the standard library's [`BuildHasher`] to [`SortingHash`], so any
+/// existing hasher keeps working unchanged. The high 32 bits of the 64-bit
+/// hash are used, since the map groups entries by the most significant bits.
+impl<K: Hash + ?Sized, S: BuildHasher> SortingHash<K> for S {
+    #[inline]
+    fn hash(&self, key: &K) -> u32 {
+        (self.hash_one(key) >> 32) as u32
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -29,7 +76,7 @@ pub struct HashSortedMap<K, V, S = RandomState> {
     pub(crate) num_groups: u32,
     pub(crate) n_bits: u32,
     pub(crate) len: usize,
-    hash_builder: S,
+    hasher: S,
 }
 
 impl<K: Hash + Eq, V> Default for HashSortedMap<K, V> {
@@ -49,11 +96,11 @@ impl<K: Hash + Eq, V> HashSortedMap<K, V> {
 }
 
 impl<K, V, S> HashSortedMap<K, V, S> {
-    pub fn with_hasher(hash_builder: S) -> Self {
-        Self::with_capacity_and_hasher(0, hash_builder)
+    pub fn with_hasher(hasher: S) -> Self {
+        Self::with_capacity_and_hasher(0, hasher)
     }
 
-    pub fn with_capacity_and_hasher(capacity: usize, hash_builder: S) -> Self {
+    pub fn with_capacity_and_hasher(capacity: usize, hasher: S) -> Self {
         let adjusted = (capacity as f64 / group_ops::MAX_FILL).ceil() as usize;
         let min_groups = (adjusted.div_ceil(GROUP_SIZE)).max(1).next_power_of_two();
         let n_bits = min_groups.trailing_zeros().max(1);
@@ -63,7 +110,7 @@ impl<K, V, S> HashSortedMap<K, V, S> {
             num_groups,
             n_bits,
             len: 0,
-            hash_builder,
+            hasher,
         }
     }
 
@@ -84,12 +131,12 @@ impl<K, V, S> HashSortedMap<K, V, S> {
     }
 
     #[inline]
-    pub(crate) fn group_index(&self, hash: u64) -> usize {
-        (hash >> (64 - self.n_bits)) as usize
+    pub(crate) fn group_index(&self, hash: u32) -> usize {
+        (hash >> (32 - self.n_bits)) as usize
     }
 }
 
-impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
+impl<K: Eq + Ord, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
     /// Sort all entries within each primary group chain by their hash value,
     /// breaking ties by key.
     ///
@@ -115,7 +162,7 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
     pub fn sort_by_hash(&mut self) {
         let num_primary = 1usize << self.n_bits;
         let mut chain: Vec<u32> = Vec::new();
-        let mut hashes: Vec<u64> = Vec::new();
+        let mut hashes: Vec<u32> = Vec::new();
 
         for primary_gi in 0..num_primary {
             chain.clear();
@@ -137,9 +184,7 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
             for &cgi in &chain[..chain.len() - 1] {
                 let g = &self.groups[cgi as usize];
                 for slot in 0..GROUP_SIZE {
-                    let hash = self
-                        .hash_builder
-                        .hash_one(unsafe { g.keys[slot].assume_init_ref() });
+                    let hash = self.hasher.hash(unsafe { g.keys[slot].assume_init_ref() });
                     hashes.push(hash);
                 }
             }
@@ -149,9 +194,7 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
                 if g.ctrl[slot] == CTRL_EMPTY {
                     break;
                 }
-                let hash = self
-                    .hash_builder
-                    .hash_one(unsafe { g.keys[slot].assume_init_ref() });
+                let hash = self.hasher.hash(unsafe { g.keys[slot].assume_init_ref() });
                 hashes.push(hash);
             }
 
@@ -204,18 +247,19 @@ impl<K: Hash + Eq + Ord, V, S: BuildHasher> HashSortedMap<K, V, S> {
     }
 }
 
-impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
+impl<K: Eq, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        let hash = self.hash_builder.hash_one(&key);
+        let hash = self.hasher.hash(&key);
         self.insert_hashed(hash, key, value)
     }
 
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Eq + ?Sized,
+        S: SortingHash<Q>,
     {
-        let hash = self.hash_builder.hash_one(key);
+        let hash = self.hasher.hash(key);
         self.get_hashed(hash, key)
     }
 
@@ -238,7 +282,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
     /// the resulting `VacantEntry` already knows where to write.
     #[inline]
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V, S> {
-        let hash = self.hash_builder.hash_one(&key);
+        let hash = self.hasher.hash(&key);
         match self.find_or_insertion_slot(hash, &key) {
             FindResult::Found(ptr) => Entry::Occupied(OccupiedEntry {
                 // SAFETY: pointer is valid for `'_` (bounded by `&mut self`).
@@ -254,7 +298,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
         }
     }
 
-    fn insert_hashed(&mut self, hash: u64, key: K, value: V) -> Option<V> {
+    fn insert_hashed(&mut self, hash: u32, key: K, value: V) -> Option<V> {
         let tag = tag(hash);
         let mut gi = self.group_index(hash);
         loop {
@@ -301,7 +345,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
         }
     }
 
-    fn get_hashed<Q>(&self, hash: u64, key: &Q) -> Option<&V>
+    fn get_hashed<Q>(&self, hash: u32, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Eq + ?Sized,
@@ -334,7 +378,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
     /// Returns raw pointers (instead of indices) so the caller can write
     /// directly without re-indexing. Pointers remain valid for the lifetime
     /// of `&mut self` until any reallocation (`grow`).
-    fn find_or_insertion_slot(&mut self, hash: u64, key: &K) -> FindResult<K, V> {
+    fn find_or_insertion_slot(&mut self, hash: u32, key: &K) -> FindResult<K, V> {
         let tag = tag(hash);
         let mut gi = self.group_index(hash);
 
@@ -382,9 +426,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
 
         for group in &old_groups[..old_num_groups] {
             for i in 0..group_ops::count_occupied(&group.ctrl) {
-                let hash = self
-                    .hash_builder
-                    .hash_one(unsafe { group.keys[i].assume_init_ref() });
+                let hash = self.hasher.hash(unsafe { group.keys[i].assume_init_ref() });
                 self.insert_for_grow(hash, group.keys[i].as_ptr(), group.values[i].as_ptr());
             }
         }
@@ -395,7 +437,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashSortedMap<K, V, S> {
         debug_assert_eq!(self.len, old_len);
     }
 
-    fn insert_for_grow(&mut self, hash: u64, key_src: *const K, value_src: *const V) {
+    fn insert_for_grow(&mut self, hash: u32, key_src: *const K, value_src: *const V) {
         let tag = tag(hash);
         let gi = self.group_index(hash);
         let mut group = &mut self.groups[gi];
@@ -479,12 +521,12 @@ pub struct OccupiedEntry<'a, V> {
 pub struct VacantEntry<'a, K, V, S> {
     phantom: PhantomData<&'a mut HashSortedMap<K, V, S>>,
     map: *mut HashSortedMap<K, V, S>,
-    hash: u64,
+    hash: u32,
     key: K,
     insertion: Insertion<K, V>,
 }
 
-impl<'a, K: Hash + Eq, V, S: BuildHasher> Entry<'a, K, V, S> {
+impl<'a, K: Eq, V, S: SortingHash<K>> Entry<'a, K, V, S> {
     /// Insert `default` if vacant; return a mutable reference to the value either way.
     #[inline]
     pub fn or_insert(self, default: V) -> &'a mut V {
@@ -545,7 +587,7 @@ impl<'a, V> OccupiedEntry<'a, V> {
     }
 }
 
-impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
+impl<'a, K: Eq, V, S: SortingHash<K>> VacantEntry<'a, K, V, S> {
     /// Insert `value` and return a mutable reference to it.
     /// Writes directly to the slot pre-computed during `entry()`; only re-walks
     /// the chain on the rare grow path (where the pre-computed pointers become
@@ -597,7 +639,7 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> VacantEntry<'a, K, V, S> {
 /// the new insertion slot.
 #[cold]
 #[inline(never)]
-fn insert_after_grow<K: Hash + Eq, V, S: BuildHasher>(
+fn insert_after_grow<K: Eq, V, S: SortingHash<K>>(
     map: &mut HashSortedMap<K, V, S>,
     key: K,
     value: V,
@@ -840,6 +882,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn custom_sorting_hash_without_hash_key() {
+        // A key type that intentionally does NOT implement `Hash`, proving the
+        // map only requires `SortingHash` (not `std::hash::Hash`) when a custom
+        // hasher is supplied.
+        #[derive(PartialEq, Eq)]
+        struct Key(u32);
+
+        struct ByValue;
+        impl SortingHash<Key> for ByValue {
+            fn hash(&self, key: &Key) -> u32 {
+                key.0.wrapping_mul(0x9E37_79B1)
+            }
+        }
+
+        let mut map = HashSortedMap::with_hasher(ByValue);
+        for i in 0..200u32 {
+            assert_eq!(map.insert(Key(i), i), None);
+        }
+        assert_eq!(map.len(), 200);
+        for i in 0..200u32 {
+            assert_eq!(map.get(&Key(i)), Some(&i));
+        }
+        assert_eq!(map.get(&Key(999)), None);
+    }
+
     // ── sort_by_hash tests ──────────────────────────────────────────────
 
     #[test]
@@ -889,11 +957,11 @@ mod tests {
         }
         map.sort_by_hash();
         // Iteration should now yield entries in (hash, key) order.
-        let mut prev_hash = 0u64;
+        let mut prev_hash = 0u32;
         let mut prev_key = 0u32;
         let mut first = true;
         for (&k, _) in &map {
-            let h = hasher.hash_one(k);
+            let h = SortingHash::hash(&hasher, &k);
             if !first {
                 assert!(
                     (h, k) >= (prev_hash, prev_key),
@@ -934,11 +1002,11 @@ mod tests {
         }
         map.sort_by_hash();
         assert_eq!(map.len(), 100);
-        let mut prev_hash = 0u64;
+        let mut prev_hash = 0u32;
         let mut prev_key = String::new();
         let mut first = true;
         for (k, _) in &map {
-            let h = hasher.hash_one(k);
+            let h = SortingHash::hash(&hasher, k);
             if !first {
                 assert!(
                     (h, k) >= (prev_hash, &prev_key),
