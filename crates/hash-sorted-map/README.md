@@ -37,8 +37,10 @@ keys, which means:
   together, keeping a single insert's data within 1–2 cache lines.
 - **Optimized growth** — during resize, elements are re-inserted without
   duplicate checking and copied via raw pointers.
-- **Generic key/value/hasher** — supports any `K: Hash + Eq`, any
-  `S: BuildHasher`, and `Borrow<Q>`-based lookups.
+- **Generic key/value/hasher** — keys need only `Eq` (`Ord` to sort).
+  Customize hashing with the single-method [`SortingHash`] trait; any
+  standard `S: BuildHasher` works out of the box via a blanket impl, and
+  `Borrow<Q>`-based lookups are supported.
 
 ## Benchmark results
 
