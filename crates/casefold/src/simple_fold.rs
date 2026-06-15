@@ -36,6 +36,69 @@ pub fn simple_fold(s: String) -> String {
     unsafe { String::from_utf8_unchecked(fold_into_bytes(s)) }
 }
 
+/// Folds a single `char` to its [`simple_fold`] form.
+///
+/// Equivalent to the per-character output of [`simple_fold`]: an ASCII `char`
+/// is lowercased (`A..=Z` → `a..=z`); any other `char` that has a Unicode
+/// **simple** (1-to-1) fold is mapped to its folded code point (e.g. `'Ü'` →
+/// `'ü'`, U+212A KELVIN SIGN → `'k'`); every other `char` is returned
+/// unchanged. Multi-character folds such as `ß` → `ss` are not applied.
+///
+/// # Example
+///
+/// ```
+/// use casefold::simple_fold_char;
+/// assert_eq!(simple_fold_char('A'), 'a');
+/// assert_eq!(simple_fold_char('Ü'), 'ü');
+/// // U+212A KELVIN SIGN folds to ASCII 'k':
+/// assert_eq!(simple_fold_char('\u{212A}'), 'k');
+/// // Non-folding characters are returned unchanged:
+/// assert_eq!(simple_fold_char('中'), '中');
+/// ```
+pub fn simple_fold_char(c: char) -> char {
+    let cp = c as u32;
+    if cp < 0x80 {
+        // ASCII: lowercase A..=Z (a no-op otherwise).
+        let b = cp as u8;
+        let is_upper = b.wrapping_sub(b'A') < 26;
+        return char::from(b | (u8::from(is_upper) << 5));
+    }
+    // Multibyte: locate the within-page run exactly as the byte path does — the
+    // `PAGE_BITMAP` coordinates of `cp >> 6` are `word_idx = cp >> 12` (the
+    // bitmap word) and `bit_idx = (cp >> 6) & 63` (the bit).
+    let word_idx = (cp >> 12) as usize;
+    let bit_idx = (cp >> 6) & 0x3F;
+    let low_v = (cp & 0x3F) as u8;
+    if word_idx < PAGE_BITMAP.len() && (PAGE_BITMAP[word_idx] >> bit_idx) & 1 != 0 {
+        let dense = popcount_up_to(word_idx, bit_idx) as usize;
+        let lo = PAGE_OFFSET[dense] as usize;
+        let n = PAGE_OFFSET[dense + 1] as usize - lo;
+        let off = scan_end_low(lo, n, low_v);
+        if off < n {
+            let ss = RUN_START_STRIDE[lo + off];
+            let start_low = ss & 0x3F;
+            let stride_bit = ss >> 6;
+            if low_v >= start_low && ((low_v - start_low) & stride_bit) == 0 {
+                // Folding character: apply the run's constant UTF-8 byte delta
+                // to the little-endian encoding — exactly as the bulk path —
+                // then decode the folded bytes back into a `char`. The buffer is
+                // zero-padded, so the unused high lanes need no masking.
+                let mut buf = [0u8; 4];
+                c.encode_utf8(&mut buf);
+                let folded = u32::from_le_bytes(buf).wrapping_add(BYTE_DELTA[lo + off]);
+                let folded_bytes = folded.to_le_bytes();
+                let dest_len = utf8_len(folded_bytes[0]);
+                return core::str::from_utf8(&folded_bytes[..dest_len])
+                    .expect("folded bytes are valid UTF-8")
+                    .chars()
+                    .next()
+                    .expect("folded bytes encode exactly one char");
+            }
+        }
+    }
+    c
+}
+
 /// Byte-level core of [`simple_fold`]. Returns the fold as a `Vec<u8>` that is
 /// always valid UTF-8; see [`simple_fold`] for the allocation behavior.
 fn fold_into_bytes(s: String) -> Vec<u8> {
@@ -348,5 +411,40 @@ mod tests {
         }
         let expected = fold_oracle(&r, &input);
         assert_eq!(fold_into_bytes(input), expected);
+    }
+
+    #[test]
+    fn simple_fold_char_examples() {
+        // ASCII lowercasing (and no-ops).
+        assert_eq!(simple_fold_char('A'), 'a');
+        assert_eq!(simple_fold_char('z'), 'z');
+        assert_eq!(simple_fold_char('!'), '!');
+        // Length-preserving BMP fold.
+        assert_eq!(simple_fold_char('Ü'), 'ü');
+        assert_eq!(simple_fold_char('Σ'), 'σ');
+        // Shrinking fold: U+212A KELVIN SIGN (3 bytes) → 'k' (1 byte).
+        assert_eq!(simple_fold_char('\u{212A}'), 'k');
+        // Growing fold: U+023A 'Ⱥ' (2 bytes) → U+2C65 'ⱥ' (3 bytes).
+        assert_eq!(simple_fold_char('\u{023A}'), '\u{2C65}');
+        // Non-folding multibyte characters are returned unchanged.
+        assert_eq!(simple_fold_char('中'), '中');
+        assert_eq!(simple_fold_char('🦊'), '🦊');
+    }
+
+    #[test]
+    fn simple_fold_char_matches_simple_fold_exhaustive() {
+        // Every code point's single-char `simple_fold_char` must equal the lone
+        // (1-to-1) character `simple_fold` produces for that character.
+        for cp in 0u32..0x110000 {
+            if (0xD800..0xE000).contains(&cp) {
+                continue; // surrogates aren't valid chars
+            }
+            let c = char::from_u32(cp).expect("cp is a valid non-surrogate char");
+            assert_eq!(
+                simple_fold_char(c).to_string(),
+                simple_fold(c.to_string()),
+                "cp {cp:#x}"
+            );
+        }
     }
 }

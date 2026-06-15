@@ -28,6 +28,11 @@ assert_eq!(simple_fold("Hello, WORLD!".to_string()), "hello, world!");
 assert_eq!(simple_fold("ÜBER".to_string()), "über");
 ```
 
+To fold a single code point, use `simple_fold_char(c: char) -> char`, which
+returns the same character `simple_fold` would emit for that input (ASCII is
+lowercased; a character with a simple fold maps to its folded code point; every
+other character is returned unchanged).
+
 ## Single-byte index fold
 
 `index_fold(s: String) -> Vec<u8>` applies the **same** simple fold as

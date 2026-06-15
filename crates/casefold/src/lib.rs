@@ -73,7 +73,7 @@ mod table {
 mod index_fold;
 mod simple_fold;
 pub use index_fold::{index_fold, index_fold_char};
-pub use simple_fold::simple_fold;
+pub use simple_fold::{simple_fold, simple_fold_char};
 
 use table::*;
 
