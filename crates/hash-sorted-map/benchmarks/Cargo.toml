@@ -1,6 +1,7 @@
 [package]
 name = "hash-sorted-map-benchmarks"
 edition = "2021"
+publish = false
 
 [lib]
 path = "lib.rs"

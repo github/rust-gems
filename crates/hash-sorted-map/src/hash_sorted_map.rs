@@ -86,20 +86,26 @@ impl<K: Hash + Eq, V> Default for HashSortedMap<K, V> {
 }
 
 impl<K: Hash + Eq, V> HashSortedMap<K, V> {
+    /// Creates an empty map using the default [`RandomState`] hasher.
     pub fn new() -> Self {
         Self::with_capacity_and_hasher(0, RandomState::new())
     }
 
+    /// Creates an empty map that can hold at least `capacity` entries without
+    /// growing, using the default [`RandomState`] hasher.
     pub fn with_capacity(capacity: usize) -> Self {
         Self::with_capacity_and_hasher(capacity, RandomState::new())
     }
 }
 
 impl<K, V, S> HashSortedMap<K, V, S> {
+    /// Creates an empty map that hashes keys with `hasher`.
     pub fn with_hasher(hasher: S) -> Self {
         Self::with_capacity_and_hasher(0, hasher)
     }
 
+    /// Creates an empty map that hashes keys with `hasher` and can hold at
+    /// least `capacity` entries without growing.
     pub fn with_capacity_and_hasher(capacity: usize, hasher: S) -> Self {
         let adjusted = (capacity as f64 / group_ops::MAX_FILL).ceil() as usize;
         let min_groups = (adjusted.div_ceil(GROUP_SIZE)).max(1).next_power_of_two();
@@ -114,10 +120,12 @@ impl<K, V, S> HashSortedMap<K, V, S> {
         }
     }
 
+    /// Returns the number of entries in the map.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Returns `true` if the map contains no entries.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -248,11 +256,17 @@ impl<K: Eq + Ord, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
 }
 
 impl<K: Eq, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
+    /// Inserts a key/value pair, returning the previous value for `key` if it
+    /// was already present (otherwise `None`).
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         let hash = self.hasher.hash(&key);
         self.insert_hashed(hash, key, value)
     }
 
+    /// Returns a reference to the value for `key`, or `None` if it is absent.
+    ///
+    /// The key may be any borrowed form of `K`, as long as the borrowed value
+    /// hashes and compares equal to the owned key.
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -507,7 +521,9 @@ enum Insertion<K, V> {
 
 /// View into a single entry in a [`HashSortedMap`], either occupied or vacant.
 pub enum Entry<'a, K, V, S> {
+    /// An occupied entry whose key already exists in the map.
     Occupied(OccupiedEntry<'a, V>),
+    /// A vacant entry whose key is absent from the map.
     Vacant(VacantEntry<'a, K, V, S>),
 }
 
