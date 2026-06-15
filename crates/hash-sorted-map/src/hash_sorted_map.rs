@@ -69,7 +69,8 @@ impl<K: Hash + ?Sized, S: BuildHasher> SortingHash<K> for S {
 /// Insertion-only hash map with SIMD group scanning.
 ///
 /// Uses NEON on aarch64, SSE2 on x86_64, scalar fallback elsewhere.
-/// Generic over key type `K`, value type `V`, and hash builder `S`.
+/// Generic over key type `K`, value type `V`, and hashing strategy `S`
+/// (any [`SortingHash<K>`](SortingHash), which every [`BuildHasher`] satisfies).
 pub struct HashSortedMap<K, V, S = RandomState> {
     pub(crate) groups: Box<[Group<K, V>]>,
     pub(crate) num_groups: u32,
