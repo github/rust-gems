@@ -212,6 +212,7 @@ impl<'a, K, V, S> IntoIterator for &'a mut HashSortedMap<K, V, S> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
 
     use super::*;
@@ -238,13 +239,13 @@ mod tests {
 
     #[test]
     fn iter_empty() {
-        let map: HashSortedMap<u32, u32> = HashSortedMap::new();
+        let map: HashSortedMap<u32, u32, RandomState> = HashSortedMap::<_, _, RandomState>::new();
         assert_eq!(map.iter().count(), 0);
     }
 
     #[test]
     fn iter_yields_all_entries() {
-        let mut map = HashSortedMap::new();
+        let mut map = HashSortedMap::<_, _, RandomState>::new();
         for i in 0..100u32 {
             map.insert(i, i * 10);
         }
@@ -272,7 +273,7 @@ mod tests {
 
     #[test]
     fn iter_mut_mutates_values() {
-        let mut map = HashSortedMap::new();
+        let mut map = HashSortedMap::<_, _, RandomState>::new();
         for i in 0..20u32 {
             map.insert(i, i);
         }
@@ -286,7 +287,7 @@ mod tests {
 
     #[test]
     fn into_iter_yields_all() {
-        let mut map = HashSortedMap::new();
+        let mut map = HashSortedMap::<_, _, RandomState>::new();
         for i in 0..100u32 {
             map.insert(i, i * 3);
         }
@@ -300,7 +301,8 @@ mod tests {
 
     #[test]
     fn into_iter_partial_consume_then_drop() {
-        let mut map: HashSortedMap<String, String> = HashSortedMap::new();
+        let mut map: HashSortedMap<String, String, RandomState> =
+            HashSortedMap::<_, _, RandomState>::new();
         for i in 0..50u32 {
             map.insert(format!("key-{i}"), format!("val-{i}"));
         }
@@ -313,7 +315,7 @@ mod tests {
 
     #[test]
     fn into_iter_empty() {
-        let map: HashSortedMap<u32, u32> = HashSortedMap::new();
+        let map: HashSortedMap<u32, u32, RandomState> = HashSortedMap::<_, _, RandomState>::new();
         assert_eq!(map.into_iter().count(), 0);
     }
 
@@ -333,7 +335,7 @@ mod tests {
 
     #[test]
     fn into_iter_after_grow() {
-        let mut map = HashSortedMap::with_capacity(1);
+        let mut map = HashSortedMap::<_, _, RandomState>::with_capacity(1);
         for i in 0..500u32 {
             map.insert(i, i);
         }
@@ -358,7 +360,7 @@ mod tests {
         let counter = Rc::new(Cell::new(0usize));
         let n = 100;
         {
-            let mut map = HashSortedMap::new();
+            let mut map = HashSortedMap::<_, _, RandomState>::new();
             for i in 0..n {
                 map.insert(i, Tracked(counter.clone()));
             }
@@ -372,7 +374,7 @@ mod tests {
 
     #[test]
     fn for_loop_ref() {
-        let mut map = HashSortedMap::new();
+        let mut map = HashSortedMap::<_, _, RandomState>::new();
         map.insert(1, "a");
         map.insert(2, "b");
         let mut count = 0;
@@ -384,7 +386,7 @@ mod tests {
 
     #[test]
     fn for_loop_mut() {
-        let mut map = HashSortedMap::new();
+        let mut map = HashSortedMap::<_, _, RandomState>::new();
         map.insert(1u32, 10u32);
         map.insert(2, 20);
         for (_, v) in &mut map {
@@ -396,7 +398,7 @@ mod tests {
 
     #[test]
     fn for_loop_owned() {
-        let mut map = HashSortedMap::new();
+        let mut map = HashSortedMap::<_, _, RandomState>::new();
         map.insert(1, 10);
         map.insert(2, 20);
         let mut sum = 0;
