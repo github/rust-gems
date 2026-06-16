@@ -6,9 +6,21 @@ updates:
     schedule:
       interval: "cron"
       cronjob: "0 5 2 * *" # Second day of each month at 05:00 UTC
+    cooldown:
+      default-days: 14
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "cron"
       cronjob: "0 5 2 * *" # Second day of each month at 05:00 UTC
+    cooldown:
+      default-days: 14
+
+  - package-ecosystem: "npm"
+    directory: "/crates/string-offsets/js"
+    schedule:
+      interval: "cron"
+      cronjob: "0 5 2 * *" # Second day of each month at 05:00 UTC
+    cooldown:
+      default-days: 14
