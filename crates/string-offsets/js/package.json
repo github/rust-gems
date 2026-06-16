@@ -24,11 +24,7 @@
     "compile:web": "wasm-pack build --target web -d js/pkg/web --features wasm && node -e \"fs.unlinkSync('./pkg/web/.gitignore')\"",
     "compile:nodejs": "wasm-pack build --target nodejs -d js/pkg/nodejs --features wasm && node -e \"fs.unlinkSync('./pkg/nodejs/.gitignore')\"",
     "compile": "npm run compile:web && npm run compile:bundler && npm run compile:nodejs",
-    "test": "jest"
-  },
-  "devDependencies": {
-    "@types/jest": "^30.0.0",
-    "jest": "^30.4.2"
+    "test": "node --test"
   },
   "overrides": {
     "js-yaml": "^4.2.0"

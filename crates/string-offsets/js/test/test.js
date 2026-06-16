@@ -1,23 +1,23 @@
 //@ts-check
+const assert = require('node:assert/strict');
+const test = require('node:test');
 const { StringOffsets } = require('../');
 
-describe('StringOffsets sanity checks', () => {
-    test('basic ASCII text', () => {
-        const text = "hello\nworld";
-        const offsets = new StringOffsets(text);
+test('basic ASCII text', () => {
+    const text = "hello\nworld";
+    const offsets = new StringOffsets(text);
 
-        expect(offsets.lines()).toBe(2);
-        expect(offsets.utf8ToUtf16(0)).toBe(0);
-        expect(offsets.utf8ToLine(0)).toBe(0);
-    });
+    assert.equal(offsets.lines(), 2);
+    assert.equal(offsets.utf8ToUtf16(0), 0);
+    assert.equal(offsets.utf8ToLine(0), 0);
+});
 
-    test('Unicode text', () => {
-        const text = "☀️hello\n🗺️world";
-        const offsets = new StringOffsets(text);
+test('Unicode text', () => {
+    const text = "☀️hello\n🗺️world";
+    const offsets = new StringOffsets(text);
 
-        expect(offsets.lines()).toBe(2);
-        // ☀️ is 6 UTF-8 bytes and 3 UTF-16 code units
-        expect(offsets.utf8ToUtf16(6)).toBe(2);
-        expect(offsets.utf8ToUtf16(0)).toBe(0);
-    });
+    assert.equal(offsets.lines(), 2);
+    // ☀️ is 6 UTF-8 bytes and 3 UTF-16 code units
+    assert.equal(offsets.utf8ToUtf16(6), 2);
+    assert.equal(offsets.utf8ToUtf16(0), 0);
 });
