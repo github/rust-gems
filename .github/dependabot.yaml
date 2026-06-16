@@ -12,3 +12,9 @@ updates:
     schedule:
       interval: "cron"
       cronjob: "0 5 2 * *" # Second day of each month at 05:00 UTC
+
+  - package-ecosystem: "npm"
+    directory: "/crates/string-offsets/js"
+    schedule:
+      interval: "cron"
+      cronjob: "0 5 2 * *" # Second day of each month at 05:00 UTC
