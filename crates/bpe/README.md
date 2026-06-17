@@ -302,4 +302,5 @@ The Huggingface encoder scales better, but becomes slower and slower compared to
 ![worst-case encoding runtime comparison](./images/performance-worstcase.svg)
 
 For a full runtime analysis of incremental BPE tokenization, see Jiang and Gong, ["Incremental BPE Tokenization"](https://arxiv.org/abs/2605.30813) (ICML 2026), which presents an algorithm with a worst-case `O(n log^2 t)` complexity (where `n` is the input length and `t` is the maximum token length).
+Their work builds on our incremental algorithm and takes it one step further by combining the aho-corasick search with the compatibility test into a single automaton.
 Their implementation is available at [ModelTC/mtc-inc-bpe](https://github.com/ModelTC/mtc-inc-bpe).
