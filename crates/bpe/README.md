@@ -300,3 +300,6 @@ This case is particularly challenging for tiktoken, which shows a quadratic grow
 The Huggingface encoder scales better, but becomes slower and slower compared to our implementation as input size increases.
 
 ![worst-case encoding runtime comparison](./images/performance-worstcase.svg)
+
+For a full runtime analysis of incremental BPE tokenization, see Jiang and Gong, ["Incremental BPE Tokenization"](https://arxiv.org/abs/2605.30813) (ICML 2026), which presents an algorithm with a worst-case $\mathcal{O}(n \log^2 t)$ complexity (where $n$ is the input length and $t$ is the maximum token length).
+Their implementation is available at [ModelTC/mtc-inc-bpe](https://github.com/ModelTC/mtc-inc-bpe).
