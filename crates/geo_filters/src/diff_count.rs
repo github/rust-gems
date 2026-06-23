@@ -139,12 +139,12 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     /// [`Self::from_bit_chunks`], which re-establishes the filter invariants. The resulting filter
     /// is identical to the one produced by pushing the same hashes one by one.
     pub fn from_hashes(config: C, hashes: impl ExactSizeIterator<Item = u64>) -> Self {
-        let split = estimate_split_bucket(&config, hashes.len());
+        let (split, capacity) = estimate_split_bucket(&config, hashes.len());
 
         // Buckets >= split are sparse and collected for sorting; buckets < split are dense and
         // folded directly into the bit vector, where repeated buckets cancel via xor. The toggler
         // resolves the bit vector's owned storage once, keeping the per-bit work out of the loop.
-        let mut numbers = Vec::new();
+        let mut numbers = Vec::with_capacity(capacity);
         let mut bits = BitVec::default();
         bits.resize(split);
         {
@@ -479,23 +479,31 @@ pub(crate) fn xor<C: GeoConfig<Diff>>(
 }
 
 /// Estimates the bucket id that separates the sparse most-significant buckets ("numbers") from
-/// the dense least-significant buckets ("bits") for a filter built from `n` hashes.
+/// the dense least-significant buckets ("bits") for a filter built from `n` hashes, and a capacity
+/// to preallocate the `numbers` buffer with (the expected count at or above the split, plus
+/// headroom for variance).
 ///
-/// The expected number of hashes falling into buckets `>= s` is `n * phi^s`. We pick `s` such
-/// that this is a small multiple of the most-significant bucket budget, so that after parity
-/// reduction the most-significant buckets are almost always supplied by the collected numbers.
-/// Choosing a slightly lower split only makes the collected set a bit larger; correctness does
-/// not depend on the estimate, since [`GeoDiffCount::from_bit_chunks`] re-splits the combined
-/// stream regardless.
-fn estimate_split_bucket<C: GeoConfig<Diff>>(config: &C, n: usize) -> usize {
-    let target = 2 * config.max_msb_len();
+/// The expected number of hashes falling into buckets `>= s` is `n * phi^s`. We target about
+/// `max_msb_len / 2` such hashes: the most-significant buckets do *not* need to be fully supplied
+/// by the collected numbers, since [`GeoDiffCount::from_bit_chunks`] re-splits the combined stream
+/// and pulls the remainder from the dense bits. Because the buckets are geometric, raising the
+/// split by one `bits_per_level` roughly halves the collected set, so a small target keeps the
+/// sort cheap while only marginally enlarging the bit vector. Correctness does not depend on the
+/// estimate.
+fn estimate_split_bucket<C: GeoConfig<Diff>>(config: &C, n: usize) -> (usize, usize) {
+    let target = config.max_msb_len() / 2;
+    // The count at or above the split is ~`target` but varies (std ~sqrt(target)), so reserve
+    // twice as much to avoid reallocating `numbers` -- but never more than the total hash count.
+    let capacity = (2 * target).min(n);
     if n <= target {
-        return 0;
+        // Every hash ends up in `numbers` (split == 0).
+        return (0, capacity);
     }
     let ratio = target as f64 / n as f64;
-    let split = (ratio.ln() / config.phi_f64().ln()).floor() as usize;
-    // No bucket can ever exceed this bound, so never allocate a larger bit vector.
-    split.min(64 * config.bits_per_level())
+    let split = ((ratio.ln() / config.phi_f64().ln()).floor() as usize)
+        // No bucket can ever exceed this bound, so never allocate a larger bit vector.
+        .min(64 * config.bits_per_level());
+    (split, capacity)
 }
 
 /// Given a slice sorted in descending order, keeps a single copy of every value occurring an odd
