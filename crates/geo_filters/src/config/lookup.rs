@@ -2,22 +2,24 @@ use crate::config::phi_f64;
 
 pub(crate) struct HashToBucketLookup {
     b: usize,
-    buckets: Vec<(usize, usize)>,
+    buckets: Vec<(u32, u32)>,
 }
 
 impl HashToBucketLookup {
     pub(crate) fn new(b: usize) -> Self {
-        let mut buckets = vec![(0, 0); 2 << b];
+        let mut buckets = vec![(0u32, 0u32); 2 << b];
         let mut last_filled_bucket = buckets.len();
         let phi = phi_f64(b);
         for bucket in 0..(1 << b) {
             let lower_bucket_limit = phi.powf((bucket + 1) as f64);
+            // `lower_hash_limit` is a 32-bit hash threshold: `lower_bucket_limit` lies in
+            // `[0.5, 1)`, so this value is always in `[0, 2^32)` and fits losslessly into a `u32`.
             let lower_hash_limit = ((lower_bucket_limit - 0.5) * 2.0f64.powf(33.0)) as usize;
             let lower_hash_bucket = lower_hash_limit >> (32 - b - 1);
             assert!(lower_hash_bucket < last_filled_bucket);
             while last_filled_bucket > lower_hash_bucket {
                 last_filled_bucket -= 1;
-                buckets[last_filled_bucket] = (bucket, lower_hash_limit);
+                buckets[last_filled_bucket] = (bucket as u32, lower_hash_limit as u32);
             }
         }
         assert_eq!(last_filled_bucket, 0);
@@ -38,8 +40,12 @@ impl HashToBucketLookup {
         } & 0xFFFFFFFF) as usize;
         // From those, the first B bits determine the bucket index in our lookup table.
         let idx = hash >> (32 - self.b - 1);
-        let offset = (hash < self.buckets[idx].1) as usize;
-        offset + self.buckets[idx].0 + (1 << self.b) * levels
+        // SAFETY: `hash` was masked to 32 bits, so `idx = hash >> (31 - b)` holds at most `b + 1`
+        // significant bits and is therefore always `< 2^(b+1) == 2 << b == self.buckets.len()`.
+        debug_assert!(idx < self.buckets.len());
+        let (base, threshold) = *unsafe { self.buckets.get_unchecked(idx) };
+        let offset = (hash < threshold as usize) as usize;
+        offset + base as usize + (1 << self.b) * levels
     }
 }
 

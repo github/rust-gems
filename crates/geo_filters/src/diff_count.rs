@@ -120,6 +120,55 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         result
     }
 
+    /// Constructs a [`GeoDiffCount`] directly from an iterator of item hashes.
+    ///
+    /// Inserting hashes one by one via [`Count::push_hash`] repeatedly toggles individual bits
+    /// and rebalances the sparse/dense split, which is wasteful when the hashes are known up
+    /// front. Instead, this function uses the (exact) number of hashes to estimate the split
+    /// point between the sparsely stored most-significant buckets (the "numbers") and the densely
+    /// stored least-significant buckets (the "bits"):
+    ///
+    ///   * Buckets at or above the estimated split point are collected, sorted, and reduced
+    ///     modulo two so that buckets occurring an even number of times cancel out. This matches
+    ///     the symmetric-difference semantics of [`Diff`] and only sorts the comparatively few
+    ///     most-significant buckets.
+    ///   * Buckets below the split point are folded directly into a dense bit vector, where
+    ///     repeated buckets cancel out as well.
+    ///
+    /// Both pieces are then combined into a single descending stream of one bits and handed to
+    /// [`Self::from_bit_chunks`], which re-establishes the filter invariants. The resulting filter
+    /// is identical to the one produced by pushing the same hashes one by one.
+    pub fn from_hashes(config: C, hashes: impl ExactSizeIterator<Item = u64>) -> Self {
+        let split = estimate_split_bucket(&config, hashes.len());
+
+        // Buckets >= split are sparse and collected for sorting; buckets < split are dense and
+        // folded directly into the bit vector, where repeated buckets cancel via xor. The toggler
+        // resolves the bit vector's owned storage once, keeping the per-bit work out of the loop.
+        let mut numbers = Vec::new();
+        let mut bits = BitVec::default();
+        bits.resize(split);
+        {
+            let mut toggler = bits.toggler();
+            for hash in hashes {
+                let bucket = config.hash_to_bucket(hash).into_usize();
+                if bucket >= split {
+                    numbers.push(bucket);
+                } else {
+                    toggler.toggle(bucket);
+                }
+            }
+        }
+
+        // Sort the most-significant buckets and drop those occurring an even number of times.
+        numbers.sort_unstable_by(|a, b| b.cmp(a));
+        erase_even_occurrences(&mut numbers);
+
+        Self::from_bit_chunks(
+            config,
+            iter_bit_chunks(numbers.into_iter(), bits.bit_chunks()),
+        )
+    }
+
     /// Compare two geometric filters after applying the specified mask.
     ///
     /// To reduce the number of operations, the implementation first xors the bit chunks together,
@@ -429,6 +478,47 @@ pub(crate) fn xor<C: GeoConfig<Diff>>(
     )
 }
 
+/// Estimates the bucket id that separates the sparse most-significant buckets ("numbers") from
+/// the dense least-significant buckets ("bits") for a filter built from `n` hashes.
+///
+/// The expected number of hashes falling into buckets `>= s` is `n * phi^s`. We pick `s` such
+/// that this is a small multiple of the most-significant bucket budget, so that after parity
+/// reduction the most-significant buckets are almost always supplied by the collected numbers.
+/// Choosing a slightly lower split only makes the collected set a bit larger; correctness does
+/// not depend on the estimate, since [`GeoDiffCount::from_bit_chunks`] re-splits the combined
+/// stream regardless.
+fn estimate_split_bucket<C: GeoConfig<Diff>>(config: &C, n: usize) -> usize {
+    let target = 2 * config.max_msb_len();
+    if n <= target {
+        return 0;
+    }
+    let ratio = target as f64 / n as f64;
+    let split = (ratio.ln() / config.phi_f64().ln()).floor() as usize;
+    // No bucket can ever exceed this bound, so never allocate a larger bit vector.
+    split.min(64 * config.bits_per_level())
+}
+
+/// Given a slice sorted in descending order, keeps a single copy of every value occurring an odd
+/// number of times and drops every value occurring an even number of times. The retained values
+/// stay sorted in descending order.
+fn erase_even_occurrences(values: &mut Vec<usize>) {
+    let mut write = 0;
+    let mut read = 0;
+    while read < values.len() {
+        let value = values[read];
+        let mut count = 0;
+        while read < values.len() && values[read] == value {
+            read += 1;
+            count += 1;
+        }
+        if count % 2 == 1 {
+            values[write] = value;
+            write += 1;
+        }
+    }
+    values.truncate(write);
+}
+
 impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
     fn push_hash(&mut self, hash: u64) {
         self.xor_bit(self.config.hash_to_bucket(hash));
@@ -540,6 +630,40 @@ mod tests {
         assert_eq!(m.iter_ones().count(), 100);
         m.xor_bit(100);
         assert_eq!(m.iter_ones().count(), 101);
+    }
+
+    /// Building a filter from an iterator of hashes must produce exactly the same filter as
+    /// pushing those hashes one by one.
+    #[test]
+    fn test_from_hashes() {
+        fn assert_from_hashes_matches<C: GeoConfig<Diff> + Default>(hashes: &[u64], n: usize) {
+            let mut expected: GeoDiffCount<'_, C> = GeoDiffCount::new(C::default());
+            for &hash in hashes {
+                expected.push_hash(hash);
+            }
+            let actual: GeoDiffCount<'_, C> =
+                GeoDiffCount::from_hashes(C::default(), hashes.iter().copied());
+            assert_eq!(expected, actual, "filter mismatch for n = {n}");
+            assert_eq!(
+                expected.iter_ones().collect_vec(),
+                actual.iter_ones().collect_vec(),
+                "ones mismatch for n = {n}",
+            );
+        }
+
+        prng_test_harness(4, |rnd| {
+            for n in [0usize, 1, 5, 50, 500, 5000, 50000] {
+                // Draw from a smaller pool so that buckets are hit multiple times, exercising the
+                // even-occurrence cancellation on both the dense bits and the sparse numbers path.
+                let pool: Vec<u64> = (0..n.div_ceil(2).max(1)).map(|_| rnd.next_u64()).collect();
+                let hashes: Vec<u64> = (0..n)
+                    .map(|_| *pool.iter().choose(rnd).expect("pool is non-empty"))
+                    .collect();
+
+                assert_from_hashes_matches::<GeoDiffConfig7>(&hashes, n);
+                assert_from_hashes_matches::<GeoDiffConfig13>(&hashes, n);
+            }
+        });
     }
 
     #[test]

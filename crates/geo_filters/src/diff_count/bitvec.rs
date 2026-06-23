@@ -90,6 +90,17 @@ impl BitVec<'_> {
         self.blocks.to_mut()[block_idx] ^= bit_idx.into_block();
     }
 
+    /// Returns a [`BitToggler`] that toggles many bits without re-resolving the `Cow` on every
+    /// access. [`Self::toggle`] resolves `self.blocks.to_mut()` on every call, which keeps a
+    /// branch in the caller's hot loop even when the storage is already owned; resolving it once
+    /// up front avoids that overhead when toggling a large number of bits.
+    pub fn toggler(&mut self) -> BitToggler<'_> {
+        BitToggler {
+            num_bits: self.num_bits,
+            blocks: self.blocks.to_mut(),
+        }
+    }
+
     /// Returns an iterator over all blocks in reverse order.
     /// The blocks are represented as `BitChunk`s.
     pub fn bit_chunks(&self) -> impl Iterator<Item = BitChunk> + '_ {
@@ -197,6 +208,23 @@ impl Index<usize> for BitVec<'_> {
             true => &true,
             false => &false,
         }
+    }
+}
+
+/// Toggles bits in an already-owned [`BitVec`] without re-resolving the `Cow` on every call.
+/// Obtained via [`BitVec::toggler`].
+pub(crate) struct BitToggler<'a> {
+    num_bits: usize,
+    blocks: &'a mut [u64],
+}
+
+impl BitToggler<'_> {
+    /// Toggles the bit at the given zero-based position. The position must be `< num_bits`.
+    #[inline]
+    pub fn toggle(&mut self, index: usize) {
+        debug_assert!(index < self.num_bits);
+        let (block_idx, bit_idx) = index.into_index_and_bit();
+        self.blocks[block_idx] ^= bit_idx.into_block();
     }
 }
 

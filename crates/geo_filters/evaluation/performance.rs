@@ -1,9 +1,10 @@
+use std::hash::BuildHasher;
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use geo_filters::build_hasher::UnstableDefaultBuildHasher;
 use geo_filters::config::VariableConfig;
-use geo_filters::diff_count::{GeoDiffCount, GeoDiffCount13};
+use geo_filters::diff_count::{GeoDiffCount, GeoDiffCount13, GeoDiffCount7};
 use geo_filters::distinct_count::GeoDistinctCount13;
 use geo_filters::evaluation::hll::Hll14;
 use geo_filters::Count;
@@ -127,6 +128,50 @@ fn criterion_benchmark(c: &mut Criterion) {
                     gc2.push(i * 2 + 1);
                     black_box(gc1.size_with_sketch(&gc2));
                 }
+            })
+        });
+    }
+
+    // Compare building a diff filter from a precomputed slice of hashes one by one
+    // (`push_hash`) versus in a single batch (`from_hashes`). The hashes are precomputed so that
+    // only the construction cost is measured.
+    for size in [1000usize, 10000, 100000, 1000000] {
+        let mut group = c.benchmark_group(format!("construct:{size}"));
+        let build_hasher = UnstableDefaultBuildHasher::default();
+        let hashes: Vec<u64> = (0..size).map(|i| build_hasher.hash_one(i)).collect();
+
+        group.bench_function("geo_diff_count_7_push", |b| {
+            b.iter(|| {
+                let mut gc = GeoDiffCount7::default();
+                for &hash in &hashes {
+                    gc.push_hash(hash);
+                }
+                black_box(&gc);
+            })
+        });
+        group.bench_function("geo_diff_count_7_from_hashes", |b| {
+            b.iter(|| {
+                black_box(GeoDiffCount7::from_hashes(
+                    Default::default(),
+                    hashes.iter().copied(),
+                ));
+            })
+        });
+        group.bench_function("geo_diff_count_13_push", |b| {
+            b.iter(|| {
+                let mut gc = GeoDiffCount13::default();
+                for &hash in &hashes {
+                    gc.push_hash(hash);
+                }
+                black_box(&gc);
+            })
+        });
+        group.bench_function("geo_diff_count_13_from_hashes", |b| {
+            b.iter(|| {
+                black_box(GeoDiffCount13::from_hashes(
+                    Default::default(),
+                    hashes.iter().copied(),
+                ));
             })
         });
     }
