@@ -20,6 +20,11 @@ impl BitChunk {
     }
 }
 
+/// Merges a descending stream of distinct one-bit positions (`leading`) with a descending stream
+/// of `BitChunk`s (`trailing`) into a single descending `BitChunk` stream. All leading positions
+/// must be more significant than all trailing bits, except that the least-significant leading block
+/// may overlap the most-significant trailing block (the two are or-ed). Leading positions must be
+/// distinct.
 pub(crate) fn iter_bit_chunks(
     leading: impl Iterator<Item = usize>,
     trailing: impl Iterator<Item = BitChunk>,
@@ -55,8 +60,7 @@ impl<I: Iterator<Item = BitChunk>, J: Iterator<Item = usize>> Iterator for BitCh
                     _ => break,
                 }
             }
-            // All leading bits were consumed, test whether it can be merged with
-            // trailing bits.
+            // All leading bits were consumed, test whether it can be merged with trailing bits.
             match self.trailing.peek() {
                 Some(BitChunk {
                     index: other_index,
@@ -74,6 +78,39 @@ impl<I: Iterator<Item = BitChunk>, J: Iterator<Item = usize>> Iterator for BitCh
             Some(BitChunk::new(index, block))
         } else {
             self.trailing.next()
+        }
+    }
+}
+
+/// Turns a descending stream of one-bit positions into a descending `BitChunk` stream containing
+/// each position's parity. Unlike [`iter_bit_chunks`], positions may repeat: a position occurring
+/// an even number of times cancels out (xor), and a block that cancels out entirely is skipped.
+pub(crate) fn parity_bit_positions(
+    positions: impl Iterator<Item = usize>,
+) -> impl Iterator<Item = BitChunk> {
+    ParityBitPositions(positions.peekable())
+}
+
+struct ParityBitPositions<I: Iterator<Item = usize>>(Peekable<I>);
+
+impl<I: Iterator<Item = usize>> Iterator for ParityBitPositions<I> {
+    type Item = BitChunk;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (index, bit) = self.0.next()?.into_index_and_bit();
+            let mut block: u64 = bit.into_block();
+            while let Some(&other) = self.0.peek() {
+                if other.into_index() != index {
+                    break;
+                }
+                block ^= other.into_bit().into_block();
+                self.0.next();
+            }
+            // The block is empty only if its positions cancelled out entirely; skip it.
+            if block != 0 {
+                return Some(BitChunk::new(index, block));
+            }
         }
     }
 }
@@ -314,7 +351,7 @@ impl<T: IsBucketType, I: Iterator<Item = BitChunk>> Iterator for BitChunksOnes<T
 mod tests {
     use itertools::Itertools;
 
-    use super::{iter_ones, BitChunk};
+    use super::{iter_bit_chunks, iter_ones, parity_bit_positions, BitChunk};
 
     #[test]
     fn test_iter_ones() {
@@ -337,5 +374,41 @@ mod tests {
             expected.into_iter().collect_vec(),
             iter_ones::<usize, _>(chunks.into_iter().peekable()).collect_vec()
         );
+    }
+
+    #[test]
+    fn test_iter_bit_chunks() {
+        // Distinct leading bits merge within a block (via or) and merge with the trailing block at
+        // the boundary index.
+        let chunks = iter_bit_chunks(
+            vec![70, 67, 5].into_iter(),
+            vec![BitChunk::new(0, 1 << 2)].into_iter(),
+        )
+        .collect_vec();
+        assert_eq!(
+            chunks,
+            vec![
+                BitChunk::new(1, (1 << 6) | (1 << 3)), // 70, 67
+                BitChunk::new(0, (1 << 5) | (1 << 2)), // 5 (leading) and bit 2 (trailing)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parity_bit_positions() {
+        // Equal positions cancel (xor): 70 twice cancels, 67 stays; 5 three times stays, 3 once.
+        let chunks = parity_bit_positions(vec![70, 70, 67, 5, 5, 5, 3].into_iter()).collect_vec();
+        assert_eq!(
+            chunks,
+            vec![
+                BitChunk::new(1, 1 << 3),              // 67
+                BitChunk::new(0, (1 << 5) | (1 << 3)), // 5, 3
+            ]
+        );
+
+        // A block whose positions cancel out entirely is skipped.
+        assert!(parity_bit_positions(vec![5, 5].into_iter())
+            .collect_vec()
+            .is_empty());
     }
 }

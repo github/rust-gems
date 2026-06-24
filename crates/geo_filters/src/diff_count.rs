@@ -8,7 +8,8 @@ use std::ops::Deref as _;
 
 use crate::config::{
     count_ones_from_bitchunks, count_ones_from_msb_and_lsb, iter_bit_chunks, iter_ones,
-    mask_bit_chunks, take_ref, xor_bit_chunks, BitChunk, GeoConfig, IsBucketType,
+    mask_bit_chunks, parity_bit_positions, take_ref, xor_bit_chunks, BitChunk, GeoConfig,
+    IsBucketType,
 };
 use crate::{Count, Diff};
 
@@ -120,53 +121,105 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         result
     }
 
-    /// Constructs a [`GeoDiffCount`] directly from an iterator of item hashes.
+    /// Extends this filter by inserting (xor-ing in) a batch of item hashes in a single pass.
     ///
-    /// Inserting hashes one by one via [`Count::push_hash`] repeatedly toggles individual bits
-    /// and rebalances the sparse/dense split, which is wasteful when the hashes are known up
-    /// front. Instead, this function uses the (exact) number of hashes to estimate the split
-    /// point between the sparsely stored most-significant buckets (the "numbers") and the densely
-    /// stored least-significant buckets (the "bits"):
+    /// Instead of rebalancing the sparse/dense split after every hash (as a loop of
+    /// [`Count::push_hash`] calls would), it folds the dense low buckets directly into the existing
+    /// bit vector and merges the sparse high buckets with the current most-significant buckets,
+    /// re-establishing the invariants once at the end. The result is identical to pushing the
+    /// hashes one by one. To build a fresh filter, start from [`Self::new`] and extend it.
     ///
-    ///   * Buckets at or above the estimated split point are collected, sorted, and reduced
-    ///     modulo two so that buckets occurring an even number of times cancel out. This matches
-    ///     the symmetric-difference semantics of [`Diff`] and only sorts the comparatively few
-    ///     most-significant buckets.
-    ///   * Buckets below the split point are folded directly into a dense bit vector, where
-    ///     repeated buckets cancel out as well.
-    ///
-    /// Both pieces are then combined into a single descending stream of one bits and handed to
-    /// [`Self::from_bit_chunks`], which re-establishes the filter invariants. The resulting filter
-    /// is identical to the one produced by pushing the same hashes one by one.
-    pub fn from_hashes(config: C, hashes: impl ExactSizeIterator<Item = u64>) -> Self {
-        let (split, capacity) = estimate_split_bucket(&config, hashes.len());
+    /// The split between dense and sparse buckets is `max(boundary, estimated split for the batch
+    /// size)`: for a small batch this is just the current boundary, but for a batch larger than
+    /// the filter currently holds (including the empty-filter case) the bit vector is presized so
+    /// that only `~max_msb_len` buckets need sorting (rather than growing with the batch). Buckets
+    /// below the split — including the existing msb entries demoted by a larger split — are toggled
+    /// straight into the bit vector; the rest are xor-merged with the remaining msb. The top
+    /// `max_msb_len` of that merge become the new msb (its smallest entry is the new boundary); any
+    /// surplus is flipped into the bit vector. If cancellations leave the msb under-full, the
+    /// highest bits are pulled back out of the bit vector instead. Crucially, the existing dense
+    /// bits are never re-materialized.
+    pub fn extend_by_hashes(&mut self, hashes: impl ExactSizeIterator<Item = u64>) {
+        let max_msb_len = self.config.max_msb_len();
+        let boundary = self.lsb.num_bits();
+        // The estimated split exceeds the current boundary exactly when more items are inserted
+        // than the filter holds; presizing then keeps the collected set (and the sort) bounded.
+        // For a smaller batch this is just the boundary, leaving the existing dense bits in place.
+        let (estimate, capacity) = estimate_split_bucket(&self.config, hashes.len());
+        let split = estimate.max(boundary);
+        if split > boundary {
+            self.lsb.resize(split);
+        }
+        // The existing msb entries at or above the split stay sparse; those below it are demoted
+        // into the bit vector (the msb is stored in descending order).
+        let msb_split = self.msb.partition_point(|b| b.into_usize() >= split);
 
-        // Buckets >= split are sparse and collected for sorting; buckets < split are dense and
-        // folded directly into the bit vector, where repeated buckets cancel via xor. The toggler
-        // resolves the bit vector's owned storage once, keeping the per-bit work out of the loop.
-        let mut numbers = Vec::with_capacity(capacity);
-        let mut bits = BitVec::default();
-        bits.resize(split);
+        // Fold every bucket below the split into the bit vector (new lows and demoted msb entries);
+        // collect the buckets at or above the split to merge with the remaining msb.
+        let mut new_high = Vec::with_capacity(capacity);
         {
-            let mut toggler = bits.toggler();
+            let config = &self.config;
+            let mut toggler = self.lsb.toggler();
+            for bucket in self.msb[msb_split..].iter() {
+                toggler.toggle(bucket.into_usize());
+            }
             for hash in hashes {
                 let bucket = config.hash_to_bucket(hash).into_usize();
                 if bucket >= split {
-                    numbers.push(bucket);
+                    new_high.push(bucket);
                 } else {
                     toggler.toggle(bucket);
                 }
             }
         }
+        // Sort the collected buckets; duplicates cancel during the (xor-merging) chunk iteration
+        // below, so no separate parity pass is needed.
+        new_high.sort_unstable_by(|a, b| b.cmp(a));
 
-        // Sort the most-significant buckets and drop those occurring an even number of times.
-        numbers.sort_unstable_by(|a, b| b.cmp(a));
-        erase_even_occurrences(&mut numbers);
+        // Xor the remaining (>= split) msb with the collected buckets (even occurrences cancel).
+        // The descending result yields the new msb (its top `max_msb_len` entries); any remainder
+        // of the same iterator is folded straight into the bit vector without a separate buffer.
+        let mut new_msb: Vec<C::BucketType> = Vec::with_capacity(max_msb_len);
+        {
+            let msb = iter_bit_chunks(
+                self.msb[..msb_split].iter().map(|b| b.into_usize()),
+                std::iter::empty(),
+            );
+            let high = parity_bit_positions(new_high.iter().copied());
+            let mut buckets = iter_ones::<C::BucketType, _>(xor_bit_chunks(msb, high).peekable());
 
-        Self::from_bit_chunks(
-            config,
-            iter_bit_chunks(numbers.into_iter(), bits.bit_chunks()),
-        )
+            new_msb.extend(buckets.by_ref().take(max_msb_len));
+
+            if new_msb.len() == max_msb_len {
+                // The msb stays full: its smallest entry is the new boundary and the remaining
+                // buckets are folded into the (grown) bit vector.
+                let smallest = new_msb[max_msb_len - 1].into_usize();
+                self.lsb.resize(smallest);
+                let mut toggler = self.lsb.toggler();
+                for bucket in buckets {
+                    toggler.toggle(bucket.into_usize());
+                }
+            } else {
+                // The collected buckets did not fill the msb: refill it from the highest bits of
+                // the bit vector, then truncate the bit vector to the new boundary (empty if it
+                // could not be refilled).
+                let need = max_msb_len - new_msb.len();
+                let pulled: Vec<C::BucketType> =
+                    iter_ones::<C::BucketType, _>(self.lsb.bit_chunks().peekable())
+                        .take(need)
+                        .collect();
+                let smallest = if pulled.len() == need {
+                    pulled[need - 1].into_usize()
+                } else {
+                    0
+                };
+                new_msb.extend(pulled);
+                self.lsb.resize(smallest);
+            }
+        }
+
+        self.msb = Cow::from(new_msb);
+        self.debug_assert_invariants();
     }
 
     /// Compare two geometric filters after applying the specified mask.
@@ -506,27 +559,6 @@ fn estimate_split_bucket<C: GeoConfig<Diff>>(config: &C, n: usize) -> (usize, us
     (split, capacity)
 }
 
-/// Given a slice sorted in descending order, keeps a single copy of every value occurring an odd
-/// number of times and drops every value occurring an even number of times. The retained values
-/// stay sorted in descending order.
-fn erase_even_occurrences(values: &mut Vec<usize>) {
-    let mut write = 0;
-    let mut read = 0;
-    while read < values.len() {
-        let value = values[read];
-        let mut count = 0;
-        while read < values.len() && values[read] == value {
-            read += 1;
-            count += 1;
-        }
-        if count % 2 == 1 {
-            values[write] = value;
-            write += 1;
-        }
-    }
-    values.truncate(write);
-}
-
 impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
     fn push_hash(&mut self, hash: u64) {
         self.xor_bit(self.config.hash_to_bucket(hash));
@@ -640,17 +672,17 @@ mod tests {
         assert_eq!(m.iter_ones().count(), 101);
     }
 
-    /// Building a filter from an iterator of hashes must produce exactly the same filter as
-    /// pushing those hashes one by one.
+    /// Building a filter from an iterator of hashes (via [`GeoDiffCount::extend_by_hashes`] on an
+    /// empty filter) must produce exactly the same filter as pushing those hashes one by one.
     #[test]
-    fn test_from_hashes() {
-        fn assert_from_hashes_matches<C: GeoConfig<Diff> + Default>(hashes: &[u64], n: usize) {
+    fn test_extend_from_empty() {
+        fn assert_extend_matches<C: GeoConfig<Diff> + Default>(hashes: &[u64], n: usize) {
             let mut expected: GeoDiffCount<'_, C> = GeoDiffCount::new(C::default());
             for &hash in hashes {
                 expected.push_hash(hash);
             }
-            let actual: GeoDiffCount<'_, C> =
-                GeoDiffCount::from_hashes(C::default(), hashes.iter().copied());
+            let mut actual: GeoDiffCount<'_, C> = GeoDiffCount::new(C::default());
+            actual.extend_by_hashes(hashes.iter().copied());
             assert_eq!(expected, actual, "filter mismatch for n = {n}");
             assert_eq!(
                 expected.iter_ones().collect_vec(),
@@ -668,8 +700,73 @@ mod tests {
                     .map(|_| *pool.iter().choose(rnd).expect("pool is non-empty"))
                     .collect();
 
-                assert_from_hashes_matches::<GeoDiffConfig7>(&hashes, n);
-                assert_from_hashes_matches::<GeoDiffConfig13>(&hashes, n);
+                assert_extend_matches::<GeoDiffConfig7>(&hashes, n);
+                assert_extend_matches::<GeoDiffConfig13>(&hashes, n);
+            }
+        });
+    }
+
+    /// Extending an existing filter with a batch of hashes must produce exactly the same filter as
+    /// pushing the existing hashes and the batch one by one.
+    #[test]
+    fn test_extend_by_hashes() {
+        fn assert_extend_matches<C: GeoConfig<Diff> + Default>(existing: &[u64], batch: &[u64]) {
+            let mut expected: GeoDiffCount<'_, C> = GeoDiffCount::new(C::default());
+            for &hash in existing.iter().chain(batch) {
+                expected.push_hash(hash);
+            }
+
+            let mut actual: GeoDiffCount<'_, C> = GeoDiffCount::new(C::default());
+            for &hash in existing {
+                actual.push_hash(hash);
+            }
+            actual.extend_by_hashes(batch.iter().copied());
+
+            let label = (existing.len(), batch.len());
+            assert_eq!(expected, actual, "filter mismatch for {label:?}");
+            assert_eq!(
+                expected.iter_ones().collect_vec(),
+                actual.iter_ones().collect_vec(),
+                "ones mismatch for {label:?}",
+            );
+        }
+
+        prng_test_harness(4, |rnd| {
+            // Mix of: empty filter, empty batch, small/large existing, and inserting many more
+            // hashes than the filter currently holds (exercising the split-growth path).
+            for (e, b) in [
+                (0usize, 0usize),
+                (0, 500),
+                (500, 0),
+                (500, 500),
+                (5000, 200),
+                (200, 50000),
+                (100, 200000),
+                (5000, 5000),
+            ] {
+                // Draw existing and batch from a shared pool so they overlap, exercising the xor
+                // cancellation (removal) that insertion performs on already-set buckets.
+                let pool: Vec<u64> = (0..(e + b).div_ceil(2).max(1))
+                    .map(|_| rnd.next_u64())
+                    .collect();
+                let draw = |count: usize, rnd: &mut ChaCha12Rng| -> Vec<u64> {
+                    (0..count)
+                        .map(|_| *pool.iter().choose(rnd).expect("pool is non-empty"))
+                        .collect()
+                };
+                let existing = draw(e, rnd);
+                let batch = draw(b, rnd);
+
+                assert_extend_matches::<GeoDiffConfig7>(&existing, &batch);
+                assert_extend_matches::<GeoDiffConfig13>(&existing, &batch);
+
+                // Re-inserting (a prefix of) the existing hashes cancels those buckets, draining
+                // the msb below capacity and exercising the refill-from-bit-vector path.
+                let subset = &existing[..existing.len() / 2];
+                assert_extend_matches::<GeoDiffConfig7>(&existing, subset);
+                assert_extend_matches::<GeoDiffConfig13>(&existing, subset);
+                assert_extend_matches::<GeoDiffConfig7>(&existing, &existing);
+                assert_extend_matches::<GeoDiffConfig13>(&existing, &existing);
             }
         });
     }
