@@ -8,7 +8,7 @@ use std::ops::Deref as _;
 
 use crate::config::{
     count_ones_from_bitchunks, count_ones_from_msb_and_lsb, iter_bit_chunks, iter_ones,
-    mask_bit_chunks, take_ref, xor_bit_chunks, BitChunk, GeoConfig, IsBucketType,
+    mask_bit_chunks, take_ref, xor_bit_chunks, BitChunk, GeoConfig, IsBucketType, BITS_PER_BLOCK,
 };
 use crate::{Count, Diff};
 
@@ -429,6 +429,266 @@ pub(crate) fn xor<C: GeoConfig<Diff>>(
     )
 }
 
+/// Estimates the split bucket separating the sparse most-significant buckets ("numbers") from
+/// the dense least-significant buckets ("bits") for a filter built from `n` hashes.
+///
+/// The expected number of hashes falling into buckets `>= s` is `n * phi^s`. We target about
+/// `max_msb_len / 2` such hashes: the most-significant buckets do *not* need to be fully supplied
+/// by the collected numbers, since [`GeoDiffCount::from_bit_chunks`] re-splits the combined stream
+/// and pulls the remainder from the dense bits. Because the buckets are geometric, raising the
+/// split by one `bits_per_level` roughly halves the collected set, so a small target keeps the
+/// sort cheap while only marginally enlarging the bit vector. Correctness does not depend on the
+/// estimate.
+fn estimate_split_bucket<C: GeoConfig<Diff>>(config: &C, n: usize) -> usize {
+    let target = config.max_msb_len() / 2;
+    if n <= target {
+        // Every hash ends up in `numbers` (split == 0).
+        return 0;
+    }
+    let ratio = target as f64 / n as f64;
+    ((ratio.ln() / config.phi_f64().ln()).floor() as usize)
+        // No bucket can ever exceed this bound, so never allocate a larger bit vector.
+        .min(64 * config.bits_per_level())
+}
+
+/// Splits a descending stream of set buckets into the new msb (the top `max_msb_len`) and folds
+/// the remaining buckets into `lsb`, resizing it to the new boundary. If the stream is too short
+/// to fill the msb, the highest bits of `lsb` are pulled back out to refill it (and `lsb` is
+/// truncated accordingly, or emptied if it could not be refilled). Returns the new msb.
+fn split_into_msb<T: IsBucketType>(
+    mut buckets: impl Iterator<Item = T>,
+    lsb: &mut BitVec<'_>,
+    max_msb_len: usize,
+) -> Vec<T> {
+    let mut msb: Vec<T> = Vec::with_capacity(max_msb_len);
+    msb.extend(buckets.by_ref().take(max_msb_len));
+    if msb.len() == max_msb_len {
+        // The msb is full: its smallest entry is the new boundary, the rest folds into the bits.
+        let smallest = msb[max_msb_len - 1].into_usize();
+        lsb.resize(smallest);
+        let mut toggler = lsb.toggler();
+        for bucket in buckets {
+            toggler.toggle(bucket.into_usize());
+        }
+    } else {
+        // Refill the msb from the highest bits, then truncate the bits to the new boundary.
+        let need = max_msb_len - msb.len();
+        let pulled: Vec<T> = iter_ones::<T, _>(lsb.bit_chunks().peekable())
+            .take(need)
+            .collect();
+        let smallest = if pulled.len() == need {
+            pulled[need - 1].into_usize()
+        } else {
+            0
+        };
+        msb.extend(pulled);
+        lsb.resize(smallest);
+    }
+    msb
+}
+
+/// Incrementally builds a [`GeoDiffCount`] from a known number of pushes.
+///
+/// Hashes are added one at a time via [`Self::push_hash`] / [`Self::push`], or in bulk via
+/// [`Self::extend_by_hashes`]. Reserve the expected number of pushes with [`Self::with_capacity`]
+/// so the dense/sparse split can be estimated and the buffers presized. The most-significant
+/// buckets accumulate in a plain vector without enforcing the `max_msb_len` limit; that limit, and
+/// the filter invariants, are applied only once when [`Self::build`] turns the builder into a
+/// [`GeoDiffCount`]. Pushing more (or fewer) hashes than reserved stays correct — only the presizing
+/// is then less accurate. If the final count is not known up front, call [`Self::reserve`] as it
+/// grows.
+pub struct GeoDiffCountBuilder<C: GeoConfig<Diff>> {
+    config: C,
+    /// Running total of pushes reserved for; drives the split estimate.
+    expected: usize,
+    /// Buckets at or above `split` accumulate in `numbers` (with duplicates, and transiently some
+    /// below `split` after a [`GeoDiffCountBuilder::reserve`]); buckets below `split` are folded
+    /// (xor) into `blocks`. [`GeoDiffCountBuilder::cleanup`] reconciles the two.
+    split: usize,
+    numbers: Vec<usize>,
+    blocks: Vec<u64>,
+}
+
+impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
+    /// Creates a builder reserving space for roughly `expected` pushes.
+    ///
+    /// `expected` only positions the dense/sparse split; the `numbers` buffer is a fixed
+    /// `2 * max_msb_len` working set that is compacted in place once full (see [`Self::push_hash`]),
+    /// so it never needs to be sized to the number of pushes.
+    pub fn with_capacity(config: C, expected: usize) -> Self {
+        let split = estimate_split_bucket(&config, expected);
+        let capacity = 2 * config.max_msb_len();
+        Self {
+            config,
+            expected,
+            split,
+            numbers: Vec::with_capacity(capacity),
+            blocks: vec![0; split.div_ceil(BITS_PER_BLOCK)],
+        }
+    }
+
+    /// Reserves space for `additional` further pushes.
+    ///
+    /// This only advances the estimated split (growing the bit space to match) so that subsequent
+    /// pushes of low buckets fold straight into the bits. The numbers already collected below the
+    /// new split are *not* migrated here — they are folded in lazily the next time the buffer is
+    /// compacted or built (see [`Self::cleanup`]). The resulting filter is unaffected.
+    pub fn reserve(&mut self, additional: usize) {
+        self.expected = self.expected.saturating_add(additional);
+        let new_split = estimate_split_bucket(&self.config, self.expected);
+        if new_split > self.split {
+            self.split = new_split;
+            self.blocks.resize(new_split.div_ceil(BITS_PER_BLOCK), 0);
+        }
+    }
+
+    /// Sorts `numbers` and reduces it to the distinct buckets that still belong above the split:
+    /// even occurrences cancel (xor), and any bucket below the current split is folded into the bit
+    /// space. Afterwards `numbers` is sorted in descending order with no duplicates and no entries
+    /// below `split`. Shared by [`Self::compact`] and [`Self::build`].
+    fn cleanup(&mut self) {
+        self.numbers.sort_unstable_by(|a, b| b.cmp(a));
+        let split = self.split;
+        let blocks = &mut self.blocks;
+        let numbers = &mut self.numbers;
+        let mut write = 0;
+        let mut read = 0;
+        while read < numbers.len() {
+            let bucket = numbers[read];
+            let mut next = read + 1;
+            while next < numbers.len() && numbers[next] == bucket {
+                next += 1;
+            }
+            // An odd number of occurrences leaves the bucket set; an even number cancels.
+            if (next - read) % 2 == 1 {
+                if bucket < split {
+                    let (index, bit) = bucket.into_index_and_bit();
+                    blocks[index] ^= bit.into_block();
+                } else {
+                    numbers[write] = bucket;
+                    write += 1;
+                }
+            }
+            read = next;
+        }
+        numbers.truncate(write);
+    }
+
+    /// Processes a full `numbers` buffer in place rather than letting it grow. [`Self::cleanup`]
+    /// first collapses duplicates and any sub-split entries; if that already frees half the buffer
+    /// the split stays put. Otherwise the split is advanced in whole levels — each level halves the
+    /// expected number of buckets at or above it — until at most half the buffer remains, folding
+    /// the now-sub-split buckets into the bit space. The buffer is therefore never reallocated.
+    fn compact(&mut self) {
+        let target = self.numbers.capacity() / 2;
+        self.cleanup();
+        if self.numbers.len() <= target {
+            return;
+        }
+        // `numbers` is sorted descending, so the count at or above a split is a prefix length.
+        let bits_per_level = self.config.bits_per_level();
+        let mut new_split = self.split;
+        let mut keep = self.numbers.len();
+        while keep > target {
+            new_split += bits_per_level;
+            keep = self.numbers.partition_point(|&b| b >= new_split);
+        }
+        self.blocks.resize(new_split.div_ceil(BITS_PER_BLOCK), 0);
+        let blocks = &mut self.blocks;
+        for &bucket in &self.numbers[keep..] {
+            let (index, bit) = bucket.into_index_and_bit();
+            blocks[index] ^= bit.into_block();
+        }
+        self.numbers.truncate(keep);
+        self.split = new_split;
+    }
+
+    /// Adds the given hash to the filter being built.
+    #[inline]
+    pub fn push_hash(&mut self, hash: u64) {
+        let bucket = self.config.hash_to_bucket(hash).into_usize();
+        if bucket >= self.split {
+            // Compact the buffer in place once it is full rather than reallocating it. Compacting
+            // may advance the split past this bucket, in which case it lands in `numbers` below the
+            // split; the next `cleanup` simply folds it into the bits, so this stays correct.
+            if self.numbers.len() == self.numbers.capacity() {
+                self.compact();
+            }
+            self.numbers.push(bucket);
+        } else {
+            // `bucket < split`, so the block index is always in range; toggling cancels repeats.
+            let (index, bit) = bucket.into_index_and_bit();
+            self.blocks[index] ^= bit.into_block();
+        }
+    }
+
+    /// Adds the hash of the given item, computed with the configured hasher, to the filter.
+    pub fn push<I: std::hash::Hash>(&mut self, item: I) {
+        let build_hasher = C::BuildHasher::default();
+        self.push_hash(build_hasher.hash_one(item));
+    }
+
+    /// Inserts a batch of hashes, reserving room for them up front via the size estimator.
+    ///
+    /// Unlike a loop of [`Self::push_hash`] calls — which must re-resolve `self` on every call —
+    /// this folds the dense low buckets into the bit space in a tight loop that hoists the bit
+    /// storage out of the per-hash work, only re-acquiring it after the rare in-place compaction.
+    /// It can be mixed freely with [`Self::push_hash`], and further pushes remain possible after.
+    pub fn extend_by_hashes(&mut self, mut hashes: impl ExactSizeIterator<Item = u64>) {
+        self.reserve(hashes.len());
+        loop {
+            let split = self.split;
+            let filled = {
+                let config = &self.config;
+                let blocks = &mut self.blocks;
+                let numbers = &mut self.numbers;
+                let mut filled = false;
+                for hash in hashes.by_ref() {
+                    let bucket = config.hash_to_bucket(hash).into_usize();
+                    if bucket >= split {
+                        numbers.push(bucket);
+                        // Stop exactly at capacity so the buffer is never reallocated.
+                        if numbers.len() == numbers.capacity() {
+                            filled = true;
+                            break;
+                        }
+                    } else {
+                        let (index, bit) = bucket.into_index_and_bit();
+                        blocks[index] ^= bit.into_block();
+                    }
+                }
+                filled
+            };
+            // The iterator is either exhausted or the buffer filled; compact and continue if full.
+            if !filled {
+                break;
+            }
+            self.compact();
+        }
+    }
+
+    /// Finalizes the builder into a [`GeoDiffCount`], applying the `max_msb_len` constraint and
+    /// re-establishing the filter invariants.
+    pub fn build(mut self) -> GeoDiffCount<'static, C> {
+        let max_msb_len = self.config.max_msb_len();
+        // `cleanup` leaves `numbers` sorted descending, deduplicated, and free of sub-split entries.
+        self.cleanup();
+        let mut lsb = BitVec::from_blocks(self.blocks, self.split);
+        let msb = split_into_msb(
+            self.numbers.iter().map(|&b| C::BucketType::from_usize(b)),
+            &mut lsb,
+            max_msb_len,
+        );
+        let result = GeoDiffCount {
+            config: self.config,
+            msb: Cow::from(msb),
+            lsb,
+        };
+        result.debug_assert_invariants();
+        result
+    }
+}
+
 impl<C: GeoConfig<Diff>> Count<Diff> for GeoDiffCount<'_, C> {
     fn push_hash(&mut self, hash: u64) {
         self.xor_bit(self.config.hash_to_bucket(hash));
@@ -540,6 +800,107 @@ mod tests {
         assert_eq!(m.iter_ones().count(), 100);
         m.xor_bit(100);
         assert_eq!(m.iter_ones().count(), 101);
+    }
+
+    /// Building a filter via `GeoDiffCountBuilder` must produce exactly the same filter as pushing
+    /// the hashes one by one, regardless of how accurately the capacity was reserved.
+    #[test]
+    fn test_builder() {
+        fn assert_builder_matches<C: GeoConfig<Diff> + Default>(hashes: &[u64], reserve: usize) {
+            let mut expected: GeoDiffCount<'static, C> = GeoDiffCount::new(C::default());
+            for &hash in hashes {
+                expected.push_hash(hash);
+            }
+            let mut builder = GeoDiffCountBuilder::with_capacity(C::default(), reserve);
+            for &hash in hashes {
+                builder.push_hash(hash);
+            }
+            let actual = builder.build();
+            let label = (hashes.len(), reserve);
+            assert_eq!(expected, actual, "filter mismatch for {label:?}");
+            assert_eq!(
+                expected.iter_ones().collect_vec(),
+                actual.iter_ones().collect_vec(),
+                "ones mismatch for {label:?}",
+            );
+        }
+
+        // Starts with a tiny reservation and grows it while pushing, which moves the split forward
+        // and exercises the number-migration path in `reserve`.
+        fn assert_grown_builder_matches<C: GeoConfig<Diff> + Default>(hashes: &[u64]) {
+            let mut expected: GeoDiffCount<'static, C> = GeoDiffCount::new(C::default());
+            for &hash in hashes {
+                expected.push_hash(hash);
+            }
+            let mut builder = GeoDiffCountBuilder::with_capacity(C::default(), 1);
+            for (i, &hash) in hashes.iter().enumerate() {
+                if i % 64 == 0 {
+                    builder.reserve(64);
+                }
+                builder.push_hash(hash);
+            }
+            assert_eq!(expected, builder.build(), "grown builder mismatch");
+        }
+
+        prng_test_harness(4, |rnd| {
+            for n in [0usize, 1, 5, 50, 500, 5000, 50000] {
+                let pool: Vec<u64> = (0..n.div_ceil(2).max(1)).map(|_| rnd.next_u64()).collect();
+                let hashes: Vec<u64> = (0..n)
+                    .map(|_| *pool.iter().choose(rnd).expect("pool is non-empty"))
+                    .collect();
+                // Reserve exactly, far too little (split too low), and far too much (split too high).
+                assert_builder_matches::<GeoDiffConfig7>(&hashes, n);
+                assert_builder_matches::<GeoDiffConfig13>(&hashes, n);
+                assert_builder_matches::<GeoDiffConfig13>(&hashes, n / 4);
+                assert_builder_matches::<GeoDiffConfig13>(&hashes, n * 4);
+                // Reserve nothing so the split starts at 0 and every bucket initially lands in
+                // `numbers`, forcing repeated compaction once the fixed-size buffer fills. This
+                // hammers the lazy-flush path, including buckets that land below the split a
+                // compaction just advanced past.
+                assert_builder_matches::<GeoDiffConfig7>(&hashes, 0);
+                assert_builder_matches::<GeoDiffConfig13>(&hashes, 0);
+                assert_grown_builder_matches::<GeoDiffConfig7>(&hashes);
+                assert_grown_builder_matches::<GeoDiffConfig13>(&hashes);
+            }
+        });
+    }
+
+    /// `GeoDiffCountBuilder::extend_by_hashes` (alone, or mixed with `push_hash`) must produce
+    /// exactly the same filter as pushing every hash one by one.
+    #[test]
+    fn test_builder_extend() {
+        fn assert_extend_matches<C: GeoConfig<Diff> + Default>(hashes: &[u64]) {
+            let mut expected: GeoDiffCount<'static, C> = GeoDiffCount::new(C::default());
+            for &hash in hashes {
+                expected.push_hash(hash);
+            }
+
+            // Extend a fresh builder in one batch (auto-reserves for the batch size).
+            let mut batched = GeoDiffCountBuilder::with_capacity(C::default(), 0);
+            batched.extend_by_hashes(hashes.iter().copied());
+            assert_eq!(expected, batched.build(), "extend-from-empty mismatch");
+
+            // Push a prefix one by one, then extend with the remainder.
+            let mid = hashes.len() / 2;
+            let mut mixed = GeoDiffCountBuilder::with_capacity(C::default(), 0);
+            for &hash in &hashes[..mid] {
+                mixed.push_hash(hash);
+            }
+            mixed.extend_by_hashes(hashes[mid..].iter().copied());
+            assert_eq!(expected, mixed.build(), "push+extend mismatch");
+        }
+
+        prng_test_harness(4, |rnd| {
+            for n in [0usize, 1, 5, 50, 500, 5000, 50000] {
+                // Draw from a smaller pool so buckets repeat, exercising xor cancellation.
+                let pool: Vec<u64> = (0..n.div_ceil(2).max(1)).map(|_| rnd.next_u64()).collect();
+                let hashes: Vec<u64> = (0..n)
+                    .map(|_| *pool.iter().choose(rnd).expect("pool is non-empty"))
+                    .collect();
+                assert_extend_matches::<GeoDiffConfig7>(&hashes);
+                assert_extend_matches::<GeoDiffConfig13>(&hashes);
+            }
+        });
     }
 
     #[test]
