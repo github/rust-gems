@@ -4,7 +4,9 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, Criterion};
 use geo_filters::build_hasher::UnstableDefaultBuildHasher;
 use geo_filters::config::VariableConfig;
-use geo_filters::diff_count::{GeoDiffCount, GeoDiffCount13, GeoDiffCount7};
+use geo_filters::diff_count::{
+    GeoDiffConfig13, GeoDiffCount, GeoDiffCount13, GeoDiffCount7, GeoDiffCountBuilder,
+};
 use geo_filters::distinct_count::GeoDistinctCount13;
 use geo_filters::evaluation::hll::Hll14;
 use geo_filters::Count;
@@ -132,9 +134,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     }
 
-    // Compare building a diff filter from a precomputed slice of hashes one by one
-    // (`push_hash`) versus in a single batch (`extend_by_hashes` on an empty filter). The hashes
-    // are precomputed so that only the construction cost is measured.
+    // Compare building a diff filter from a precomputed slice of hashes one by one (`push_hash`)
+    // versus via the incremental `GeoDiffCountBuilder` (per-hash, and the batched
+    // `extend_by_hashes`). The hashes are precomputed so that only construction cost is measured.
     for size in [1000usize, 10000, 100000, 1000000] {
         let mut group = c.benchmark_group(format!("construct:{size}"));
         let build_hasher = UnstableDefaultBuildHasher::default();
@@ -149,13 +151,6 @@ fn criterion_benchmark(c: &mut Criterion) {
                 black_box(&gc);
             })
         });
-        group.bench_function("geo_diff_count_7_extend", |b| {
-            b.iter(|| {
-                let mut gc = GeoDiffCount7::default();
-                gc.extend_by_hashes(hashes.iter().copied());
-                black_box(&gc);
-            })
-        });
         group.bench_function("geo_diff_count_13_push", |b| {
             b.iter(|| {
                 let mut gc = GeoDiffCount13::default();
@@ -165,58 +160,42 @@ fn criterion_benchmark(c: &mut Criterion) {
                 black_box(&gc);
             })
         });
-        group.bench_function("geo_diff_count_13_extend", |b| {
+        group.bench_function("geo_diff_count_13_builder_extend", |b| {
             b.iter(|| {
-                let mut gc = GeoDiffCount13::default();
-                gc.extend_by_hashes(hashes.iter().copied());
-                black_box(&gc);
+                let mut builder = GeoDiffCountBuilder::with_capacity(
+                    GeoDiffConfig13::<UnstableDefaultBuildHasher>::default(),
+                    0,
+                );
+                builder.extend_by_hashes(hashes.iter().copied());
+                black_box(builder.build());
             })
         });
-    }
-
-    // Insert a batch of hashes into an existing filter: one-by-one `push_hash` vs the batched
-    // `extend_by_hashes`. The existing filter is cloned in the (untimed) batched setup so that only
-    // the insertion cost is measured, not the clone.
-    for (existing_n, batch_n) in [
-        (10000usize, 10000usize),
-        (100000, 10000),
-        (100000, 100000),
-        (1000, 100000),
-    ] {
-        let mut group = c.benchmark_group(format!("insert_batch:{existing_n}+{batch_n}"));
-        let build_hasher = UnstableDefaultBuildHasher::default();
-        let batch: Vec<u64> = (existing_n..existing_n + batch_n)
-            .map(|i| build_hasher.hash_one(i))
-            .collect();
-        let base = {
-            let mut gc = GeoDiffCount13::default();
-            for i in 0..existing_n {
-                gc.push_hash(build_hasher.hash_one(i));
-            }
-            gc
-        };
-
-        group.bench_function("push", |b| {
-            b.iter_batched(
-                || base.clone(),
-                |mut gc| {
-                    for &hash in &batch {
-                        gc.push_hash(hash);
-                    }
-                    gc
-                },
-                criterion::BatchSize::SmallInput,
-            )
+        group.bench_function("geo_diff_count_13_builder", |b| {
+            b.iter(|| {
+                let mut builder = GeoDiffCountBuilder::with_capacity(
+                    GeoDiffConfig13::<UnstableDefaultBuildHasher>::default(),
+                    size,
+                );
+                for &hash in &hashes {
+                    builder.push_hash(hash);
+                }
+                black_box(builder.build());
+            })
         });
-        group.bench_function("extend_by_hashes", |b| {
-            b.iter_batched(
-                || base.clone(),
-                |mut gc| {
-                    gc.extend_by_hashes(batch.iter().copied());
-                    gc
-                },
-                criterion::BatchSize::SmallInput,
-            )
+        // Reserve nothing so the split starts at 0 and every bucket initially lands in `numbers`,
+        // forcing the buffer to fill and compact (lazily flush) repeatedly as the split ramps up.
+        // This isolates the cost of the lazy-flush path versus a well-positioned builder.
+        group.bench_function("geo_diff_count_13_builder_unreserved", |b| {
+            b.iter(|| {
+                let mut builder = GeoDiffCountBuilder::with_capacity(
+                    GeoDiffConfig13::<UnstableDefaultBuildHasher>::default(),
+                    0,
+                );
+                for &hash in &hashes {
+                    builder.push_hash(hash);
+                }
+                black_box(builder.build());
+            })
         });
     }
 }

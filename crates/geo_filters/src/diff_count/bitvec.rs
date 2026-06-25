@@ -47,6 +47,18 @@ impl BitVec<'_> {
         result
     }
 
+    /// Wraps raw `blocks` covering `[0, num_bits)` into a `BitVec`. The number of blocks must match
+    /// `num_bits`, and any bits at or above `num_bits` are cleared.
+    pub fn from_blocks(blocks: Vec<u64>, num_bits: usize) -> BitVec<'static> {
+        debug_assert_eq!(blocks.len(), num_bits.div_ceil(BITS_PER_BLOCK));
+        let mut result = BitVec {
+            num_bits,
+            blocks: Cow::Owned(blocks),
+        };
+        result.clear_superfluous_bits();
+        result
+    }
+
     /// Resize the vector such that the top block contains the given bucket.
     pub fn resize(&mut self, num_bits: usize) {
         let num_blocks = num_bits.div_ceil(BITS_PER_BLOCK);

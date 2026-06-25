@@ -82,39 +82,6 @@ impl<I: Iterator<Item = BitChunk>, J: Iterator<Item = usize>> Iterator for BitCh
     }
 }
 
-/// Turns a descending stream of one-bit positions into a descending `BitChunk` stream containing
-/// each position's parity. Unlike [`iter_bit_chunks`], positions may repeat: a position occurring
-/// an even number of times cancels out (xor), and a block that cancels out entirely is skipped.
-pub(crate) fn parity_bit_positions(
-    positions: impl Iterator<Item = usize>,
-) -> impl Iterator<Item = BitChunk> {
-    ParityBitPositions(positions.peekable())
-}
-
-struct ParityBitPositions<I: Iterator<Item = usize>>(Peekable<I>);
-
-impl<I: Iterator<Item = usize>> Iterator for ParityBitPositions<I> {
-    type Item = BitChunk;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let (index, bit) = self.0.next()?.into_index_and_bit();
-            let mut block: u64 = bit.into_block();
-            while let Some(&other) = self.0.peek() {
-                if other.into_index() != index {
-                    break;
-                }
-                block ^= other.into_bit().into_block();
-                self.0.next();
-            }
-            // The block is empty only if its positions cancelled out entirely; skip it.
-            if block != 0 {
-                return Some(BitChunk::new(index, block));
-            }
-        }
-    }
-}
-
 /// Combine-s two `BitChunk` iterators using the given operator. Both iterators have to output
 /// `BitChunk`s from most to least significant and must not report duplicates!
 struct BinOpBitChunksIterator<
@@ -351,7 +318,7 @@ impl<T: IsBucketType, I: Iterator<Item = BitChunk>> Iterator for BitChunksOnes<T
 mod tests {
     use itertools::Itertools;
 
-    use super::{iter_bit_chunks, iter_ones, parity_bit_positions, BitChunk};
+    use super::{iter_bit_chunks, iter_ones, BitChunk};
 
     #[test]
     fn test_iter_ones() {
@@ -392,23 +359,5 @@ mod tests {
                 BitChunk::new(0, (1 << 5) | (1 << 2)), // 5 (leading) and bit 2 (trailing)
             ]
         );
-    }
-
-    #[test]
-    fn test_parity_bit_positions() {
-        // Equal positions cancel (xor): 70 twice cancels, 67 stays; 5 three times stays, 3 once.
-        let chunks = parity_bit_positions(vec![70, 70, 67, 5, 5, 5, 3].into_iter()).collect_vec();
-        assert_eq!(
-            chunks,
-            vec![
-                BitChunk::new(1, 1 << 3),              // 67
-                BitChunk::new(0, (1 << 5) | (1 << 3)), // 5, 3
-            ]
-        );
-
-        // A block whose positions cancel out entirely is skipped.
-        assert!(parity_bit_positions(vec![5, 5].into_iter())
-            .collect_vec()
-            .is_empty());
     }
 }
