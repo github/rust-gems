@@ -63,7 +63,7 @@ impl Lookups for Diff {
 // and the loop be aborted.
 // Note: Increasing the constant to switch earlier into approximation mode will mostly increase the
 // approximation error, but not reduce the runtime of the function by much.
-fn expected_diff_buckets(phi: f64, items: f64) -> (f64, f64) {
+pub(crate) fn expected_diff_buckets(phi: f64, items: f64) -> (f64, f64) {
     let mut sum = 0.0;
     let mut derivative = 0.0;
     for k in 0.. {
