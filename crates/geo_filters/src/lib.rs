@@ -17,6 +17,7 @@ pub mod evaluation;
 mod test_rng;
 
 use std::hash::Hash;
+use std::ops::Add;
 
 /// Marker trait to indicate the variant implemented by a [`Count`] instance.
 pub trait Method: Clone + Eq + PartialEq + Send + Sync {}
@@ -30,6 +31,39 @@ impl Method for Diff {}
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct Distinct {}
 impl Method for Distinct {}
+
+/// A comparable distance value with the few operations needed by nearest-neighbor search: addition,
+/// the zero distance, an "unreachable"/infinite value, the absolute difference of two values, and
+/// conversion to and from a floating-point value (the calibrated size the metric represents).
+pub trait Metric: Ord + Add<Output = Self> + Sized {
+    /// The zero distance.
+    fn zero() -> Self;
+    /// An unreachable distance, larger than any real one.
+    fn infinite() -> Self;
+    /// The absolute difference between two distances.
+    fn abs_diff(&self, other: &Self) -> Self;
+    /// The metric as a floating-point value.
+    fn as_f32(&self) -> f32;
+    /// The metric closest to the given floating-point value.
+    fn from_f32(value: f32) -> Self;
+}
+
+/// A type that can be measured (its [`size`](MetricSpace::size)) and compared to another value of
+/// the same type (their [`symmetric_diff_size`](MetricSpace::symmetric_diff_size)), both yielding a value of
+/// the associated [`Metric`] type. This abstracts the filter-based similarity metrics from the
+/// nearest-neighbor search that consumes them.
+pub trait MetricSpace {
+    /// The metric type produced by [`Self::size`] and [`Self::symmetric_diff_size`].
+    type Metric: Metric;
+
+    /// The size of this value.
+    fn size(&self) -> Self::Metric;
+
+    /// The symmetric difference between this value and `other`, abandoned once it reaches `bound`
+    /// (in which case a value `>= bound`, e.g. [`Metric::infinite`], is returned). Pass
+    /// [`Metric::infinite`] to always compute the exact value.
+    fn symmetric_diff_size(&self, other: &Self, bound: Self::Metric) -> Self::Metric;
+}
 
 /// Trait for types solving the set cardinality estimation problem.
 pub trait Count<M: Method> {
