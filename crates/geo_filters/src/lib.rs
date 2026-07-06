@@ -43,7 +43,7 @@ pub trait Metric: Ord + Add<Output = Self> + Sized {
     /// The absolute difference between two distances.
     fn abs_diff(&self, other: &Self) -> Self;
     /// The metric as a floating-point value.
-    fn as_f32(&self) -> f32;
+    fn to_f32(&self) -> f32;
     /// The metric closest to the given floating-point value.
     fn from_f32(value: f32) -> Self;
 }

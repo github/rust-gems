@@ -50,7 +50,7 @@ impl<C: GeoConfig<Diff> + Default> Metric for OnesMetric<C> {
     /// The calibrated size (item count) that this number of one-bits represents, obtained by
     /// inverting the expected-buckets function with the same Newton iteration used to build the
     /// estimation lookup table.
-    fn as_f32(&self) -> f32 {
+    fn to_f32(&self) -> f32 {
         if *self == Self::infinite() {
             return f32::INFINITY;
         }
@@ -289,22 +289,22 @@ mod tests {
         type M = OnesMetric<GeoDiffConfig7>;
 
         // `zero` and `infinite` map to the expected floating-point values, both ways.
-        assert_eq!(M::zero().as_f32(), 0.0);
-        assert_eq!(M::infinite().as_f32(), f32::INFINITY);
+        assert_eq!(M::zero().to_f32(), 0.0);
+        assert_eq!(M::infinite().to_f32(), f32::INFINITY);
         assert_eq!(M::from_f32(f32::INFINITY), M::infinite());
         assert_eq!(M::from_f32(f32::NAN), M::infinite());
         assert_eq!(M::from_f32(0.0), M::zero());
         assert_eq!(M::from_f32(-5.0), M::zero());
 
-        // `as_f32` (Newton inverse) matches the LUT-based calibrated estimate, and `from_f32` (the
+        // `to_f32` (Newton inverse) matches the LUT-based calibrated estimate, and `from_f32` (the
         // forward function) round-trips the bucket count.
         let config: GeoDiffConfig7 = Default::default();
         for &buckets in &[1usize, 5, 20, 50, 100, 300] {
-            let f = M::new(buckets).as_f32();
+            let f = M::new(buckets).to_f32();
             let lut = config.expected_items(buckets);
             assert!(
                 (f - lut).abs() <= 0.02 * lut.max(1.0) + 0.5,
-                "as_f32 {f} should match the LUT estimate {lut} for {buckets} buckets"
+                "to_f32 {f} should match the LUT estimate {lut} for {buckets} buckets"
             );
             let round_trip = M::from_f32(f).get();
             assert!(
@@ -313,7 +313,7 @@ mod tests {
             );
         }
 
-        // `as_f32` is monotonically increasing in the bucket count.
-        assert!(M::new(10).as_f32() < M::new(100).as_f32());
+        // `to_f32` is monotonically increasing in the bucket count.
+        assert!(M::new(10).to_f32() < M::new(100).to_f32());
     }
 }
