@@ -61,6 +61,51 @@ Our implementation is at least as fast as the HLL++ port for all sizes.
 The `GeoDistinctCount` solution only needs to count the number of occupied buckets and the offset of the first bucket.
 Both numbers are tracked during incremental updates, such that the distinct count can be computed in constant time.
 
+## Sorting filters by masked similarity
+
+`GeoDiffCount::cmp_masked` compares two filters after applying a repeated bit mask, a locality-sensitive projection that induces a total order in which similar filters end up close together.
+Sorting or bucketing a large collection this way is dominated by the cost of the pairwise `cmp_masked` calls.
+
+`GeoDiffCount::masked_sort_key` builds a compact `u64` sort key from the most significant masked bits of a filter.
+Comparing two keys numerically reproduces the `cmp_masked` order whenever the keys differ, so a sort only falls back to the (much slower) `cmp_masked` on the rare key ties:
+
+```rust
+use geo_filters::diff_count::GeoDiffCount7;
+use geo_filters::Count;
+
+// A repeated 20-bit mask with 3 bits set acts as a locality-sensitive projection.
+const MASK: u64 = 0b0000_0100_0000_1000_0001;
+const MASK_SIZE: usize = 20;
+
+let filters: Vec<_> = (0..5u64)
+    .map(|s| {
+        let mut f = GeoDiffCount7::default();
+        (0..1000).for_each(|i| f.push(s * 1000 + i));
+        f
+    })
+    .collect();
+
+// Precompute one key per filter, then sort by comparing keys, only using the exact
+// `cmp_masked` to break ties.
+let keys: Vec<u64> = filters.iter().map(|f| f.masked_sort_key(MASK, MASK_SIZE)).collect();
+let mut order: Vec<usize> = (0..filters.len()).collect();
+order.sort_by(|&i, &j| {
+    keys[i]
+        .cmp(&keys[j])
+        .then_with(|| filters[i].cmp_masked(&filters[j], MASK, MASK_SIZE))
+});
+assert_eq!(order.len(), filters.len());
+```
+
+Sorting 1,000 filters of 1,000 items each with the 20-bit mask above, measured with `cargo bench --bench masked_sort`:
+
+| operation | `GeoDiffConfig7` | `GeoDiffConfig13` |
+| --- | --- | --- |
+| sort via `cmp_masked` | 675 µs | 862 µs |
+| sort via `masked_sort_key` (incl. key construction) | 25 µs | 18 µs |
+| speed-up | ~27× | ~47× |
+| key construction only | 13 µs | 7 µs |
+
 ## Nearest-neighbor similarity metric
 
 `GeoDiffCount` also doubles as a compact similarity sketch. The number of differing one-bits between
