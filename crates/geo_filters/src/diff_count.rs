@@ -14,10 +14,12 @@ use crate::{Count, Diff};
 
 mod bitvec;
 mod config;
+mod metric;
 mod sim_hash;
 
 use bitvec::*;
 pub use config::{GeoDiffConfig10, GeoDiffConfig13, GeoDiffConfig7};
+pub use metric::{GeoDiffMetric, OnesMetric};
 pub use sim_hash::SimHash;
 
 /// Diff count filter with a relative error standard deviation of ~0.125.

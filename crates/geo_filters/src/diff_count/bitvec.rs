@@ -72,6 +72,19 @@ impl BitVec<'_> {
         self.num_bits
     }
 
+    /// The total number of one-bits set in the vector.
+    pub fn count_ones(&self) -> usize {
+        self.blocks
+            .iter()
+            .map(|block| block.count_ones() as usize)
+            .sum()
+    }
+
+    /// The raw 64-bit blocks backing the vector, from least to most significant.
+    pub fn blocks(&self) -> &[u64] {
+        self.blocks.deref()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.num_bits() == 0
     }
