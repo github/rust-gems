@@ -156,7 +156,11 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     ///
     /// Each position occupies `C::BucketType::BITS` bits, so the key holds
     /// `64 / C::BucketType::BITS` positions (4 for `u16`, 2 for `u32`).
-    pub fn masked_sort_key(&self, mask: u64, mask_size: usize) -> u64 {
+pub fn masked_sort_key(&self, mask: u64, mask_size: usize) -> u64 {
+        assert!(
+            (1..u64::BITS as usize).contains(&mask_size),
+            "mask_size must be in 1..=63 (got {mask_size})"
+        );
         let bits = C::BucketType::BITS;
         debug_assert!(
             (1..=32).contains(&bits) && u64::BITS % bits == 0,
