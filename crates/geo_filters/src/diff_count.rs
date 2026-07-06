@@ -145,6 +145,49 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         }
     }
 
+    /// Builds a sort key from the most significant bits of the masked filter.
+    ///
+    /// The key packs the largest bucket positions of the masked filter into a single `u64`,
+    /// most significant position first. Because masking distributes over the xor used by
+    /// [`Self::cmp_masked`], comparing two keys numerically yields the same ordering as
+    /// [`Self::cmp_masked`] whenever the keys differ. When two keys are equal the ordering is
+    /// undetermined and the caller must fall back to [`Self::cmp_masked`], e.g.
+    /// `a_key.cmp(&b_key).then_with(|| a.cmp_masked(b, mask, mask_size))`.
+    ///
+    /// Each position occupies `C::BucketType::BITS` bits, so the key holds
+    /// `64 / C::BucketType::BITS` positions (4 for `u16`, 2 for `u32`).
+    pub fn masked_sort_key(&self, mask: u64, mask_size: usize) -> u64 {
+        let bits = C::BucketType::BITS;
+        debug_assert!(
+            (1..=32).contains(&bits) && u64::BITS % bits == 0,
+            "sort key packing requires a bucket type of at most 32 bits"
+        );
+        let per_word = (u64::BITS / bits) as usize;
+
+        // The most significant bits are stored sparsely and sorted from largest to smallest, so we
+        // can test each of them against the periodic mask directly, avoiding the more expensive
+        // merge performed by `bit_chunks`. The least significant bits are dense and always below
+        // every most significant bit, so we mask whole 64-bit blocks at once. Chaining the two
+        // therefore yields the masked one-bit positions from largest to smallest.
+        let msb = self
+            .msb
+            .iter()
+            .map(|&p| p.into_usize())
+            .filter(move |&pos| (mask >> (pos % mask_size)) & 1 != 0)
+            .map(|pos| pos as u64);
+        let lsb = iter_ones::<C::BucketType, _>(
+            mask_bit_chunks(self.lsb.bit_chunks(), mask, mask_size).peekable(),
+        )
+        .map(|b| b.into_usize() as u64);
+        let mut positions = msb.chain(lsb);
+
+        let mut key = 0u64;
+        for _ in 0..per_word {
+            key = (key << bits) | positions.next().unwrap_or(0);
+        }
+        key
+    }
+
     fn test_bit(&self, index: C::BucketType) -> bool {
         if index.into_usize() < self.lsb.num_bits() {
             self.lsb.test_bit(index.into_usize())
@@ -647,6 +690,53 @@ mod tests {
                 let masked_expected = masked(&expected, mask, mask_size);
                 assert_eq!(masked_expected, xor(&masked_a, &masked_b));
             }
+        });
+    }
+
+    #[test]
+    fn test_masked_sort_key() {
+        let masks: &[(u64, usize)] = &[
+            (0b1, 1),   // keeps every bit, i.e. a full comparison
+            (0b10, 2),  // keeps every other bit
+            (0b110, 3), // keeps two out of every three bits
+            (0b110100, 6),
+            (0b100001100000, 12),
+        ];
+
+        fn check<C: GeoConfig<Diff> + Default>(rnd: &mut ChaCha12Rng, masks: &[(u64, usize)]) {
+            let mut build = || {
+                let mut f = GeoDiffCount::<C>::new(C::default());
+                for _ in 0..1000 {
+                    f.push_hash(rnd.next_u64());
+                }
+                f
+            };
+            let a = build();
+            let b = build();
+            for &(mask, mask_size) in masks {
+                let ka = a.masked_sort_key(mask, mask_size);
+                let kb = b.masked_sort_key(mask, mask_size);
+                let expected = a.cmp_masked(&b, mask, mask_size);
+                // The key comparison plus fall back must always agree with the exact comparison.
+                assert_eq!(
+                    ka.cmp(&kb).then_with(|| a.cmp_masked(&b, mask, mask_size)),
+                    expected,
+                    "keyed comparison mismatch for mask {mask:b}/{mask_size}",
+                );
+                // Whenever the keys already differ, they alone must yield the exact order.
+                if ka != kb {
+                    assert_eq!(
+                        ka.cmp(&kb),
+                        expected,
+                        "key ordering mismatch for mask {mask:b}/{mask_size}",
+                    );
+                }
+            }
+        }
+
+        prng_test_harness(20, |rnd| {
+            check::<GeoDiffConfig7>(rnd, masks);
+            check::<GeoDiffConfig13>(rnd, masks);
         });
     }
 

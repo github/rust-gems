@@ -49,6 +49,11 @@ path = "evaluation/performance.rs"
 harness = false
 required-features = ["evaluation"]
 
+[[bench]]
+name = "masked_sort"
+path = "evaluation/masked_sort.rs"
+harness = false
+
 [[bin]]
 name = "accuracy"
 path = "evaluation/accuracy.rs"
