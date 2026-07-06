@@ -57,7 +57,7 @@ fn bench_config<C: GeoConfig<Diff> + Default>(c: &mut Criterion, name: &str, ite
 
     // Each filter is owned by its metric, which caches the one-bit count, as a real index would.
     let query_m = GeoDiffMetric::new(build::<C>(&mut rng, items));
-    // A far-away candidate (disjoint set), and a near neighbor differing by ~10% of the base filter
+    // A far-away candidate (an independent random set), and a near neighbor differing by ~10% of the base filter
     // whose distance provides the prior bound.
     let far_m = GeoDiffMetric::new(build::<C>(&mut rng, items));
     let bound_m = GeoDiffMetric::new(near(&mut rng, query_m.filter(), (items / 10).max(1)));
