@@ -50,6 +50,11 @@ harness = false
 required-features = ["evaluation"]
 
 [[bench]]
+name = "nearest_neighbor"
+path = "evaluation/nearest_neighbor.rs"
+harness = false
+
+[[bench]]
 name = "masked_sort"
 path = "evaluation/masked_sort.rs"
 harness = false

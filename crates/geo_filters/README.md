@@ -106,6 +106,61 @@ Sorting 1,000 filters of 1,000 items each with the 20-bit mask above, measured w
 | speed-up | ~27× | ~47× |
 | key construction only | 13 µs | 7 µs |
 
+## Nearest-neighbor similarity metric
+
+`GeoDiffCount` also doubles as a compact similarity sketch. The number of differing one-bits between
+two filters — the Hamming distance of their bit representations — is a simple, uncalibrated distance
+that grows with the true symmetric-difference size. This is useful for nearest-neighbor search, e.g.
+to find the most similar repository or document.
+
+[`GeoDiffMetric`](https://docs.rs/geo_filters/latest/geo_filters/diff_count/struct.GeoDiffMetric.html)
+wraps a `GeoDiffCount`, caches its one-bit count, and implements the `MetricSpace` trait:
+
+- `size()` returns the filter's one-bit count as a `Metric` value;
+- `symmetric_diff_size(other, bound)` returns the exact one-bit distance to another filter, but
+  abandons the computation once it reaches `bound` (returning an "infinite" value), so far-away
+  candidates are rejected cheaply while scanning a candidate list;
+- `size().abs_diff(&other.size())` is an `O(1)` reverse-triangle lower bound on that distance.
+
+```rust
+use geo_filters::diff_count::{GeoDiffCount7, GeoDiffMetric, OnesMetric};
+use geo_filters::{Count, Metric, MetricSpace};
+
+let mut a = GeoDiffCount7::default();
+(0..1000u64).for_each(|i| a.push(i));
+let mut b = GeoDiffCount7::default();
+(500..1500u64).for_each(|i| b.push(i));
+
+let a = GeoDiffMetric::new(a);
+let b = GeoDiffMetric::new(b);
+
+// O(1) lower bound from the cached sizes, then the exact distance (unbounded).
+let lower_bound = a.size().abs_diff(&b.size());
+let distance = a.symmetric_diff_size(&b, OnesMetric::infinite());
+assert!(lower_bound <= distance);
+```
+
+Time to compare a query filter (1M items) with a candidate, given the distance to a known near
+neighbor as the pruning bound. A `far` candidate is disjoint (farther than the bound, so it is
+rejected), while a `near` candidate is a closer near-duplicate (below the bound, so it becomes the
+new best and is scanned in full). Release build; absolute numbers are hardware-dependent:
+
+| configuration     | candidate | `estimate` | `symmetric_diff_size` | `symmetric_diff_size` (capped) |
+| ----------------- | --------- | ---------- | --------------------- | ------------------------------ |
+| `GeoDiffConfig7`  | far       | 115 ns     | 60 ns                 | 12 ns                          |
+| `GeoDiffConfig7`  | near      | 149 ns     | 50 ns                 | 51 ns                          |
+| `GeoDiffConfig10` | far       | 633 ns     | 374 ns                | 74 ns                          |
+| `GeoDiffConfig10` | near      | 918 ns     | 298 ns                | 300 ns                         |
+| `GeoDiffConfig13` | far       | 4.69 µs    | 2.44 µs               | 337 ns                         |
+| `GeoDiffConfig13` | near      | 6.92 µs    | 1.90 µs               | 1.92 µs                        |
+
+`estimate` is the calibrated `size_with_sketch` estimate and `symmetric_diff_size` the exact bit
+distance; the capped variant abandons once the running distance reaches the bound. For a `far`
+candidate it abandons almost immediately (~7× faster than the exact distance, ~14× faster than the
+estimate), whereas a `near` candidate is below the bound and therefore scanned in full — the capped
+and exact costs match. Since a nearest-neighbor scan rejects far more candidates than it keeps, the
+early abandon dominates the search cost. Reproduce with `cargo bench --bench nearest_neighbor`.
+
 ## Evaluation
 
 Accuracy and performance evaluations for the predefined filter configurations are included in the repository:

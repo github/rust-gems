@@ -14,10 +14,12 @@ use crate::{Count, Diff};
 
 mod bitvec;
 mod config;
+mod metric;
 mod sim_hash;
 
 use bitvec::*;
 pub use config::{GeoDiffConfig10, GeoDiffConfig13, GeoDiffConfig7};
+pub use metric::{GeoDiffMetric, OnesMetric};
 pub use sim_hash::SimHash;
 
 /// Diff count filter with a relative error standard deviation of ~0.125.
@@ -156,7 +158,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     ///
     /// Each position occupies `C::BucketType::BITS` bits, so the key holds
     /// `64 / C::BucketType::BITS` positions (4 for `u16`, 2 for `u32`).
-pub fn masked_sort_key(&self, mask: u64, mask_size: usize) -> u64 {
+    pub fn masked_sort_key(&self, mask: u64, mask_size: usize) -> u64 {
         assert!(
             (1..u64::BITS as usize).contains(&mask_size),
             "mask_size must be in 1..=63 (got {mask_size})"
