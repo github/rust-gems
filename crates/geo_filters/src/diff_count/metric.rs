@@ -118,6 +118,12 @@ impl<C: GeoConfig<Diff>> fmt::Debug for OnesMetric<C> {
 /// search - and, given a bound, abandoned early. The cached count (see [`Self::size`]) also yields
 /// an O(1) reverse-triangle lower bound on the distance. Once the nearest neighbor is found,
 /// [`Self::filter`] gives access to the underlying filter for a calibrated size estimate.
+///
+/// The one-bit distance is a noisy estimate of the true difference size, so this metric is best
+/// used with `GeoDiffConfig10` or `GeoDiffConfig13` (`b >= 10`). The coarser `GeoDiffConfig7` can
+/// reorder candidates whose true distances are within roughly a factor of two of each other,
+/// returning an approximate rather than exact nearest neighbor; for an exact result, shortlist with
+/// this metric and re-rank the top candidates with [`Count::size_with_sketch`](crate::Count).
 pub struct GeoDiffMetric<'a, C: GeoConfig<Diff>> {
     filter: GeoDiffCount<'a, C>,
     ones: OnesMetric<C>,

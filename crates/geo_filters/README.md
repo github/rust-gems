@@ -161,6 +161,47 @@ estimate), whereas a `near` candidate is below the bound and therefore scanned i
 and exact costs match. Since a nearest-neighbor scan rejects far more candidates than it keeps, the
 early abandon dominates the search cost. Reproduce with `cargo bench --bench nearest_neighbor`.
 
+### Precision and configuration choice
+
+Ranking candidates by their one-bit distance is a *noisy* estimate of the true symmetric-difference
+size (calibrating it to an item count with `Metric::to_f32` is order-preserving, so it does not
+change the ranking). The **relative error** below is the standard deviation of `estimate / true − 1`
+— i.e. relative to the true number of differing items. It is smallest for small differences and grows
+**slowly, like √(ln n)**, as the difference size `n` increases: the dense low bits saturate to a
+random ½ (encoding only the *parity* of many items, so they add variance without carrying size
+information). Modelling the buckets as independent Bernoulli variables, the count's variance is
+exactly `½·expected_diff_buckets(2n)`, which is logarithmic in `n`; the resulting relative error is
+about `√((γ + ln(4·(1−φ)·n)) / (2·S))` with `S = 2^b / (2·ln 2)` and `γ` the Euler–Mascheroni
+constant. For `GeoDiffConfig7` that formula gives ~8.6% at `n = 100`, ~18% at `10⁴`, ~24% at `10⁶`,
+close to the measured ~8% / ~18% / ~27% (real-filter bucket correlations push it a little higher at
+the top end).
+
+| configuration     | relative error (1σ), small … 1M-item difference | may reorder candidates within |
+| ----------------- | ----------------------------------------------- | ----------------------------- |
+| `GeoDiffConfig7`  | ~8% … ~27%                                      | ~2.4×                         |
+| `GeoDiffConfig10` | ~2.5% … ~6%                                     | ~1.3×                         |
+| `GeoDiffConfig13` | ~0.8% … ~2%                                     | ~1.1×                         |
+
+The one-bit count is *not* exact even for a few items — two items can hash to the same bucket — but
+such collisions are rare while the difference is small, so it is a low-variance estimate there.
+Compared to the standard windowed estimator `GeoDiffCount::size()` (and `size_with_sketch`), the
+one-bit count matches it for small differences but is noisier for large ones: for `GeoDiffConfig7` at
+a one-million-item difference it is ~27% here versus ~14% for `size()`, which reads only a fixed
+window near the fringe and ignores the saturated bits. Use `size_with_sketch` when you need an
+accurate absolute difference size; the one-bit metric exists for fast *ranking* of near neighbors,
+where its early-abandon speed matters more than the last few percent of precision.
+
+Because of the coarse resolution, **the metric is best used with `GeoDiffConfig10` or
+`GeoDiffConfig13` (`b ≥ 10`)**. `GeoDiffConfig7` reorders candidates whose true distances lie within
+roughly a factor of two of each other, so over a large candidate set it returns an *approximate*
+nearest neighbor rather than the exact one — though it never promotes a genuinely far candidate over
+a close one, since the noise cannot bridge more than the factor in the last column, even across
+hundreds of millions of candidates.
+
+For an exact result, use the metric as a cheap first pass to shortlist the top *k* candidates, then
+re-rank the shortlist with the more robust `Count::size_with_sketch`, which does not accumulate this
+variance.
+
 ## Evaluation
 
 Accuracy and performance evaluations for the predefined filter configurations are included in the repository:
