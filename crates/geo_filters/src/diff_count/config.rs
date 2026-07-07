@@ -103,6 +103,79 @@ fn expected_diff_buckets_fast(phi: f64, items: f64) -> (f64, f64) {
     (sum, derivative)
 }
 
+/// Euler–Mascheroni constant.
+const GAMMA: f64 = 0.577_215_664_901_532_9;
+/// `e^gamma`, precomputed.
+const E_GAMMA: f64 = 1.781_072_417_990_198;
+
+// Closed-form approximation of [`expected_diff_buckets`] and its inverse that avoids the
+// per-bucket summation (and the Newton iteration on it). It is exact in both limits and stays
+// within ~0.35% of the exact model for the predefined configurations (b = 7, 10, 13).
+//
+// Writing `p_k = (1 - phi) phi^k`, the expected number of one-bits is
+//     E(N) = 1/2 sum_k (1 - (1 - 2 p_k)^N) ≈ S · Ein(x) + 1/4 (1 - e^-x),
+// with `x = 2(1 - phi) N`, `S = 1 / (2 ln(1/phi))`, and `Ein(x) = gamma + ln x + E1(x)` the
+// entire exponential-integral bridge (`Ein(x) ≈ x` near 0, `≈ gamma + ln x` for large x). The
+// special function `Ein` is replaced by a rational "scaling factor" `rho(x)` inside the logarithm,
+//     Ein(x) ≈ ln(1 + e^gamma x rho(x)),  rho(x) = (e^-gamma + A x + B x^2) / (1 + C x + B x^2),
+// where `rho(0) = e^-gamma` reproduces the linear small-N regime and `rho(inf) = 1` reproduces the
+// logarithmic asymptote. The coefficients are universal (independent of phi), fitted so the
+// rational matches `Ein` to < 0.07%.
+const RHO_A: f64 = 0.384_417;
+const RHO_B: f64 = 0.130_468;
+const RHO_C: f64 = 0.442_202;
+
+/// Closed-form approximation of [`expected_diff_buckets`]: the expected number of one-bits for
+/// `items` items, together with its derivative with respect to `items`. See the comment above for
+/// the derivation. Accurate to < 1% for the predefined configurations.
+pub(super) fn expected_diff_buckets_approx(phi: f64, items: f64) -> (f64, f64) {
+    if items <= 0.0 {
+        return (0.0, 1.0);
+    }
+    let s = 0.5 / -phi.ln(); // = 1 / (2 ln(1/phi))
+    let a = 2.0 * (1.0 - phi);
+    let x = a * items;
+    let e_neg_x = (-x).exp();
+
+    // Y = e^gamma x rho(x) = (x + e^gamma A x^2 + e^gamma B x^3) / (1 + C x + B x^2)
+    let num = x * (1.0 + E_GAMMA * RHO_A * x + E_GAMMA * RHO_B * x * x);
+    let den = 1.0 + RHO_C * x + RHO_B * x * x;
+    let y = num / den;
+    let value = s * (1.0 + y).ln() + 0.25 * (1.0 - e_neg_x);
+
+    // derivative w.r.t. items = a * d/dx [ s ln(1 + Y) + 1/4 (1 - e^-x) ]
+    let num_prime = 1.0 + 2.0 * E_GAMMA * RHO_A * x + 3.0 * E_GAMMA * RHO_B * x * x;
+    let den_prime = RHO_C + 2.0 * RHO_B * x;
+    let y_prime = (num_prime * den - num * den_prime) / (den * den);
+    let derivative = a * (s * y_prime / (1.0 + y) + 0.25 * e_neg_x);
+
+    (value, derivative)
+}
+
+/// Closed-form approximation of the inverse of [`expected_diff_buckets`]: the number of items that
+/// produce `ones` one-bits. Uses the analytic large-N seed of the model above followed by three
+/// Newton steps on the (cheap) closed-form forward, which converge to full `f64` precision.
+pub(super) fn estimate_count_approx(phi: f64, ones: f64) -> f64 {
+    if ones <= 0.0 {
+        return 0.0;
+    }
+    let s = 0.5 / -phi.ln();
+    let a = 2.0 * (1.0 - phi);
+    // Invert the large-N asymptote `m ≈ S (gamma + ln(a N)) + 1/4` for the initial guess.
+    let mut items = ((ones - 0.25) / s - GAMMA).exp() / a;
+    if !items.is_finite() || items <= 0.0 {
+        items = ones;
+    }
+    for _ in 0..3 {
+        let (m, dm) = expected_diff_buckets_approx(phi, items);
+        items -= (m - ones) / dm;
+        if items < f64::MIN_POSITIVE {
+            items = f64::MIN_POSITIVE;
+        }
+    }
+    items
+}
+
 static LOOKUPS: [Lazy<Lookup>; 16] = [
     Lazy::new(|| build_lookup(0)),
     Lazy::new(|| build_lookup(1)),
@@ -178,6 +251,52 @@ mod tests {
         println!("{:?}", expected_diff_buckets(phi, 100.0));
         println!("{:?}", expected_diff_buckets_fast(phi, 100.0));
         println!("{:?}", estimate_count(phi, 78.450, expected_diff_buckets));
+    }
+
+    #[test]
+    fn test_expected_diff_buckets_approx() {
+        // The closed-form forward stays within 1% of the exact model for the predefined configs.
+        for b in [7u32, 10, 13] {
+            let phi = 0.5f64.powf(1.0 / (1u64 << b) as f64);
+            let mut items = 1.0f64;
+            loop {
+                let exact = expected_diff_buckets(phi, items).0;
+                if exact > 2000.0 {
+                    break;
+                }
+                if exact > 0.3 {
+                    let approx = expected_diff_buckets_approx(phi, items).0;
+                    let rel = (approx - exact).abs() / exact;
+                    assert!(
+                        rel < 0.01,
+                        "b={b} items={items}: exact={exact} approx={approx} rel={rel}"
+                    );
+                }
+                items *= 1.5;
+            }
+        }
+    }
+
+    #[test]
+    fn test_estimate_count_approx() {
+        // The closed-form inverse recovers the item count within 1% of the exact model.
+        for b in [7u32, 10, 13] {
+            let phi = 0.5f64.powf(1.0 / (1u64 << b) as f64);
+            let mut items = 1.0f64;
+            loop {
+                let ones = expected_diff_buckets(phi, items).0;
+                if ones > 2000.0 {
+                    break;
+                }
+                let est = estimate_count_approx(phi, ones);
+                let rel = (est - items).abs() / items;
+                assert!(
+                    rel < 0.01,
+                    "b={b} items={items} ones={ones}: est={est} rel={rel}"
+                );
+                items *= 1.5;
+            }
+        }
     }
 
     #[test]

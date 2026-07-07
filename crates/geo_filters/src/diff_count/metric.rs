@@ -5,10 +5,8 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::ops::Add;
 
-use super::config::expected_diff_buckets;
-use crate::config::{
-    estimate_count, xor_bit_chunks, BitChunk, GeoConfig, IsBucketType, BITS_PER_BLOCK,
-};
+use super::config::{estimate_count_approx, expected_diff_buckets_approx};
+use crate::config::{xor_bit_chunks, BitChunk, GeoConfig, IsBucketType, BITS_PER_BLOCK};
 use crate::diff_count::GeoDiffCount;
 use crate::{Diff, Metric, MetricSpace};
 
@@ -48,24 +46,23 @@ impl<C: GeoConfig<Diff> + Default> Metric for OnesMetric<C> {
     }
 
     /// The calibrated size (item count) that this number of one-bits represents, obtained by
-    /// inverting the expected-buckets function with the same Newton iteration used to build the
-    /// estimation lookup table.
+    /// inverting the closed-form approximation of the expected-buckets function.
     fn to_f32(&self) -> f32 {
         if *self == Self::infinite() {
             return f32::INFINITY;
         }
         let phi = C::default().phi_f64();
-        estimate_count(phi, self.get() as f64, expected_diff_buckets).0 as f32
+        estimate_count_approx(phi, self.get() as f64) as f32
     }
 
     /// The number of one-bits expected for the given calibrated size, obtained by evaluating the
-    /// forward expected-buckets function.
+    /// closed-form approximation of the forward expected-buckets function.
     fn from_f32(value: f32) -> Self {
         if !value.is_finite() {
             return Self::infinite();
         }
         let phi = C::default().phi_f64();
-        let buckets = expected_diff_buckets(phi, value.max(0.0) as f64).0;
+        let buckets = expected_diff_buckets_approx(phi, value.max(0.0) as f64).0;
         Self::new(buckets.round() as usize)
     }
 }
@@ -121,6 +118,12 @@ impl<C: GeoConfig<Diff>> fmt::Debug for OnesMetric<C> {
 /// search - and, given a bound, abandoned early. The cached count (see [`Self::size`]) also yields
 /// an O(1) reverse-triangle lower bound on the distance. Once the nearest neighbor is found,
 /// [`Self::filter`] gives access to the underlying filter for a calibrated size estimate.
+///
+/// The one-bit distance is a noisy estimate of the true difference size, so this metric is best
+/// used with `GeoDiffConfig10` or `GeoDiffConfig13` (`b >= 10`). The coarser `GeoDiffConfig7` can
+/// reorder candidates whose true distances are within roughly a factor of two of each other,
+/// returning an approximate rather than exact nearest neighbor; for an exact result, shortlist with
+/// this metric and re-rank the top candidates with [`Count::size_with_sketch`](crate::Count).
 pub struct GeoDiffMetric<'a, C: GeoConfig<Diff>> {
     filter: GeoDiffCount<'a, C>,
     ones: OnesMetric<C>,
