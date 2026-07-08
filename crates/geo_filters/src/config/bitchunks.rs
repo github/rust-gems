@@ -20,6 +20,11 @@ impl BitChunk {
     }
 }
 
+/// Merges a descending stream of distinct one-bit positions (`leading`) with a descending stream
+/// of `BitChunk`s (`trailing`) into a single descending `BitChunk` stream. All leading positions
+/// must be more significant than all trailing bits, except that the least-significant leading block
+/// may overlap the most-significant trailing block (the two are or-ed). Leading positions must be
+/// distinct.
 pub(crate) fn iter_bit_chunks(
     leading: impl Iterator<Item = usize>,
     trailing: impl Iterator<Item = BitChunk>,
@@ -55,8 +60,7 @@ impl<I: Iterator<Item = BitChunk>, J: Iterator<Item = usize>> Iterator for BitCh
                     _ => break,
                 }
             }
-            // All leading bits were consumed, test whether it can be merged with
-            // trailing bits.
+            // All leading bits were consumed, test whether it can be merged with trailing bits.
             match self.trailing.peek() {
                 Some(BitChunk {
                     index: other_index,
@@ -314,7 +318,7 @@ impl<T: IsBucketType, I: Iterator<Item = BitChunk>> Iterator for BitChunksOnes<T
 mod tests {
     use itertools::Itertools;
 
-    use super::{iter_ones, BitChunk};
+    use super::{iter_bit_chunks, iter_ones, BitChunk};
 
     #[test]
     fn test_iter_ones() {
@@ -336,6 +340,24 @@ mod tests {
         assert_eq!(
             expected.into_iter().collect_vec(),
             iter_ones::<usize, _>(chunks.into_iter().peekable()).collect_vec()
+        );
+    }
+
+    #[test]
+    fn test_iter_bit_chunks() {
+        // Distinct leading bits merge within a block (via or) and merge with the trailing block at
+        // the boundary index.
+        let chunks = iter_bit_chunks(
+            vec![70, 67, 5].into_iter(),
+            vec![BitChunk::new(0, 1 << 2)].into_iter(),
+        )
+        .collect_vec();
+        assert_eq!(
+            chunks,
+            vec![
+                BitChunk::new(1, (1 << 6) | (1 << 3)), // 70, 67
+                BitChunk::new(0, (1 << 5) | (1 << 2)), // 5 (leading) and bit 2 (trailing)
+            ]
         );
     }
 }

@@ -47,6 +47,18 @@ impl BitVec<'_> {
         result
     }
 
+    /// Wraps raw `blocks` covering `[0, num_bits)` into a `BitVec`. The number of blocks must match
+    /// `num_bits`, and any bits at or above `num_bits` are cleared.
+    pub fn from_blocks(blocks: Vec<u64>, num_bits: usize) -> BitVec<'static> {
+        debug_assert_eq!(blocks.len(), num_bits.div_ceil(BITS_PER_BLOCK));
+        let mut result = BitVec {
+            num_bits,
+            blocks: Cow::Owned(blocks),
+        };
+        result.clear_superfluous_bits();
+        result
+    }
+
     /// Resize the vector such that the top block contains the given bucket.
     pub fn resize(&mut self, num_bits: usize) {
         let num_blocks = num_bits.div_ceil(BITS_PER_BLOCK);
@@ -101,6 +113,17 @@ impl BitVec<'_> {
         assert!(index < self.num_bits);
         let (block_idx, bit_idx) = index.into_index_and_bit();
         self.blocks.to_mut()[block_idx] ^= bit_idx.into_block();
+    }
+
+    /// Returns a [`BitToggler`] that toggles many bits without re-resolving the `Cow` on every
+    /// access. [`Self::toggle`] resolves `self.blocks.to_mut()` on every call, which keeps a
+    /// branch in the caller's hot loop even when the storage is already owned; resolving it once
+    /// up front avoids that overhead when toggling a large number of bits.
+    pub fn toggler(&mut self) -> BitToggler<'_> {
+        BitToggler {
+            num_bits: self.num_bits,
+            blocks: self.blocks.to_mut(),
+        }
     }
 
     /// Returns an iterator over all blocks in reverse order.
@@ -210,6 +233,23 @@ impl Index<usize> for BitVec<'_> {
             true => &true,
             false => &false,
         }
+    }
+}
+
+/// Toggles bits in an already-owned [`BitVec`] without re-resolving the `Cow` on every call.
+/// Obtained via [`BitVec::toggler`].
+pub(crate) struct BitToggler<'a> {
+    num_bits: usize,
+    blocks: &'a mut [u64],
+}
+
+impl BitToggler<'_> {
+    /// Toggles the bit at the given zero-based position. The position must be `< num_bits`.
+    #[inline]
+    pub fn toggle(&mut self, index: usize) {
+        debug_assert!(index < self.num_bits);
+        let (block_idx, bit_idx) = index.into_index_and_bit();
+        self.blocks[block_idx] ^= bit_idx.into_block();
     }
 }
 
