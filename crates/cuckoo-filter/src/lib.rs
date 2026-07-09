@@ -35,8 +35,8 @@ pub const WINDOW: usize = 4;
 /// retried with a fresh seed).
 const MAX_KICKS: usize = 500;
 
-/// Sentinel stored in the owner map for an empty slot during construction.
-const NO_KEY: u32 = u32::MAX;
+/// Sentinel stored in the working table for an empty slot during construction.
+const EMPTY: u64 = u64::MAX;
 
 /// A static windowed cuckoo filter mapping a fixed set of distinct `u64` keys to membership.
 #[derive(Clone, Debug)]
@@ -74,26 +74,19 @@ impl CuckooFilter {
         let total = num_windows + WINDOW - 1;
         let n = keys.len();
 
-        // Pre-compute both window starts and the fingerprint of every key.
-        let mut win0 = vec![0u32; n];
-        let mut win1 = vec![0u32; n];
-        let mut fps = vec![0u8; n];
-        for (i, &key) in keys.iter().enumerate() {
-            let (w0, w1, fp) = locate(key, seed, num_windows);
-            win0[i] = w0 as u32;
-            win1[i] = w1 as u32;
-            fps[i] = fp;
-        }
-
-        let mut owner = vec![NO_KEY; total];
-        if !fill_random_walk(&mut owner, &win0, &win1, n, seed) {
+        // The working table stores each key's mixed hash directly in its slot, so relocating an
+        // evicted key reads its hash straight from the slot being swapped — one random access per
+        // eviction, with no separate per-key window array. `EMPTY` marks a free slot.
+        let hashes: Vec<u64> = keys.iter().map(|&key| stored_hash(key, seed)).collect();
+        let mut table = vec![EMPTY; total];
+        if !fill_random_walk(&mut table, &hashes, num_windows, seed) {
             return None;
         }
 
         let mut slot_bytes = vec![0u8; total];
-        for (slot, &key) in owner.iter().enumerate() {
-            if key != NO_KEY {
-                slot_bytes[slot] = fps[key as usize];
+        for (slot, &hash) in table.iter().enumerate() {
+            if hash != EMPTY {
+                slot_bytes[slot] = fingerprint(hash, num_windows);
             }
         }
         Some(Self {
@@ -108,7 +101,9 @@ impl CuckooFilter {
     #[inline]
     pub fn contains(&self, key: u64) -> bool {
         let num_windows = self.slots.len() - WINDOW + 1;
-        let (w0, w1, fp) = locate(key, self.seed, num_windows);
+        let hash = stored_hash(key, self.seed);
+        let (w0, w1) = windows(hash, num_windows);
+        let fp = fingerprint(hash, num_windows);
         // Non-short-circuiting `|` so both window loads are issued together: the two cache lines are
         // fetched in parallel (memory-level parallelism), hiding latency at large, out-of-cache sizes.
         window_contains(&self.slots, w0, fp) | window_contains(&self.slots, w1, fp)
@@ -148,25 +143,27 @@ impl CuckooFilter {
     }
 }
 
-/// Computes a key's two window start indices and its fingerprint from a **single hash**, using the
-/// classic cuckoo-filter XOR addressing.
+/// The two window start indices for a mixed hash, via the classic cuckoo-filter XOR addressing.
 ///
-/// With `b = log2(num_windows)`, the first window is the low `b` bits of the hash and the alternate
-/// window is `w0 ^ (top b bits)`; the fingerprint is a byte from the middle bits. This requires
-/// `num_windows` to be a power of two so the XOR result stays in `[0, num_windows)`. It replaces the
-/// previous two independent hashes with one hash and a few bit ops — cheaper per lookup — at the
-/// cost of the power-of-two sizing (see `required_slots`).
+/// With `b = log2(num_windows)`, the first window is the low `b` bits and the alternate is
+/// `w0 ^ (top b bits)`. This requires `num_windows` to be a power of two so the XOR result stays in
+/// `[0, num_windows)`. Deriving both windows from one stored hash (rather than two independent
+/// hashes) is what lets construction and lookup keep a single `u64` per key.
 #[inline]
-fn locate(key: u64, seed: u64, num_windows: usize) -> (usize, usize, u8) {
+fn windows(hash: u64, num_windows: usize) -> (usize, usize) {
     debug_assert!(num_windows.is_power_of_two() && num_windows >= 2);
-    let h = mix(key, seed);
     let b = num_windows.trailing_zeros();
-    let mask = num_windows as u64 - 1;
-    let w0 = h & mask;
-    let w1 = w0 ^ (h >> (64 - b));
-    // Fingerprint from bits `[b, b + 8)`, disjoint from both the low `b` and top `b` position bits.
-    let fp = ((h >> b) as u8).max(1);
-    (w0 as usize, w1 as usize, fp)
+    let w0 = hash & (num_windows as u64 - 1);
+    let w1 = w0 ^ (hash >> (64 - b));
+    (w0 as usize, w1 as usize)
+}
+
+/// The 1-byte fingerprint of a mixed hash (never `0`), from bits `[b, b + 8)` — disjoint from both
+/// the low `b` and top `b` position bits.
+#[inline]
+fn fingerprint(hash: u64, num_windows: usize) -> u8 {
+    let b = num_windows.trailing_zeros();
+    ((hash >> b) as u8).max(1)
 }
 
 /// Branch-free test of whether the `WINDOW` slots starting at `w` hold the fingerprint `fp`.
@@ -184,65 +181,94 @@ fn window_contains(slots: &[u8], w: usize, fp: u8) -> bool {
 
 /// Tries to place `key` into the first free slot of either of its two windows.
 #[inline]
-fn place(owner: &mut [u32], w0: usize, w1: usize, key: u32) -> bool {
-    for slot in owner[w0..w0 + WINDOW].iter_mut() {
-        if *slot == NO_KEY {
-            *slot = key;
+fn place(table: &mut [u64], w0: usize, w1: usize, hash: u64) -> bool {
+    for slot in table[w0..w0 + WINDOW].iter_mut() {
+        if *slot == EMPTY {
+            *slot = hash;
             return true;
         }
     }
-    for slot in owner[w1..w1 + WINDOW].iter_mut() {
-        if *slot == NO_KEY {
-            *slot = key;
+    for slot in table[w1..w1 + WINDOW].iter_mut() {
+        if *slot == EMPTY {
+            *slot = hash;
             return true;
         }
     }
     false
 }
 
-/// Inserts one key by classic cuckoo random-walk: place it in a free slot of either window, else
-/// evict a random incumbent and relocate it, up to [`MAX_KICKS`] times. Returns `false` on failure.
+/// Inserts one key (given by its stored `hash`) by classic cuckoo random-walk: place it in a free
+/// slot of either window, else evict a random incumbent and relocate it, up to [`MAX_KICKS`] times.
+/// The victim's hash comes straight from the slot being swapped, so eviction needs no side array.
 #[inline]
-fn insert_key(owner: &mut [u32], win0: &[u32], win1: &[u32], rng: &mut u64, key: u32) -> bool {
-    if place(
-        owner,
-        win0[key as usize] as usize,
-        win1[key as usize] as usize,
-        key,
-    ) {
+fn insert_hash(table: &mut [u64], num_windows: usize, rng: &mut u64, hash: u64) -> bool {
+    let (w0, w1) = windows(hash, num_windows);
+    if place(table, w0, w1, hash) {
         return true;
     }
-    let mut cur = key;
+    let mut cur = hash;
     for _ in 0..MAX_KICKS {
-        let w0 = win0[cur as usize] as usize;
-        let w1 = win1[cur as usize] as usize;
+        let (w0, w1) = windows(cur, num_windows);
         let r = splitmix64(rng) as usize % (2 * WINDOW);
         let slot = if r < WINDOW {
             w0 + r
         } else {
             w1 + (r - WINDOW)
         };
-        std::mem::swap(&mut owner[slot], &mut cur);
-        if place(
-            owner,
-            win0[cur as usize] as usize,
-            win1[cur as usize] as usize,
-            cur,
-        ) {
+        std::mem::swap(&mut table[slot], &mut cur);
+        let (cw0, cw1) = windows(cur, num_windows);
+        if place(table, cw0, cw1, cur) {
             return true;
         }
     }
     false
 }
 
-/// Fills the filter by inserting every key with classic cuckoo random-walk.
+/// Number of consecutive slots grouped into one cache-locality segment, as a bit shift: a segment
+/// is `2^SEGMENT_SHIFT` slots — ~512 KiB of the `u64` working table, an L2-resident chunk.
+const SEGMENT_SHIFT: u32 = 16;
+
+/// Orders `(hash, index)` pairs by the segment of the key's primary window (a radix pass on just the
+/// bits above [`SEGMENT_SHIFT`]), so the random-walk's initial placements sweep the working table
+/// segment by segment instead of jumping across a multi-megabyte array.
 ///
-/// (Radix-partitioning the keys by window segment for cache locality was tried and made no
-/// difference even at tens of millions of keys: at these load factors most inserts evict, and the
-/// eviction chains jump across the table regardless of the order keys are fed in.)
-fn fill_random_walk(owner: &mut [u32], win0: &[u32], win1: &[u32], n: usize, seed: u64) -> bool {
+/// Returns `None` when the whole table is a single segment — i.e. the segment index has no bits, so
+/// there is nothing to sort. Small filters that fit in cache take this path with zero overhead.
+fn segment_order(hashes: &[u64], num_windows: usize, total: usize) -> Option<Vec<(u64, u32)>> {
+    let num_segments = (total >> SEGMENT_SHIFT) + 1;
+    if num_segments <= 1 {
+        return None;
+    }
+    let segment = |hash: u64| windows(hash, num_windows).0 >> SEGMENT_SHIFT;
+    let mut start = vec![0u32; num_segments + 1];
+    for &hash in hashes {
+        start[segment(hash) + 1] += 1;
+    }
+    for i in 0..num_segments {
+        start[i + 1] += start[i];
+    }
+    let mut order = vec![(0u64, 0u32); hashes.len()];
+    for (key, &hash) in hashes.iter().enumerate() {
+        let s = segment(hash);
+        order[start[s] as usize] = (hash, key as u32);
+        start[s] += 1;
+    }
+    Some(order)
+}
+
+/// Fills the filter by inserting every key with classic cuckoo random-walk. When the table spans
+/// several cache-sized segments the keys are inserted in segment order (see [`segment_order`]) so
+/// the initial placements are cache-local; smaller tables use their natural order with no overhead.
+fn fill_random_walk(table: &mut [u64], hashes: &[u64], num_windows: usize, seed: u64) -> bool {
     let mut rng = seed ^ 0xD1B5_4A32_D192_ED03;
-    (0..n as u32).all(|key| insert_key(owner, win0, win1, &mut rng, key))
+    match segment_order(hashes, num_windows, table.len()) {
+        Some(order) => order
+            .iter()
+            .all(|&(hash, _index)| insert_hash(table, num_windows, &mut rng, hash)),
+        None => hashes
+            .iter()
+            .all(|&hash| insert_hash(table, num_windows, &mut rng, hash)),
+    }
 }
 
 /// Total number of slots needed to reach roughly `target` load with `n` keys, sized so the window
@@ -272,6 +298,18 @@ fn murmur64(mut h: u64) -> u64 {
 #[inline]
 fn mix(key: u64, seed: u64) -> u64 {
     murmur64(key.wrapping_add(seed))
+}
+
+/// A key's mixed hash, remapped away from the `EMPTY` sentinel so it can be stored in a slot. The
+/// remap is applied identically on construction and lookup, so it never causes a false negative.
+#[inline]
+fn stored_hash(key: u64, seed: u64) -> u64 {
+    let h = mix(key, seed);
+    if h == EMPTY {
+        0
+    } else {
+        h
+    }
 }
 
 /// SplitMix64 PRNG step, used to pick eviction slots and construction seeds.
