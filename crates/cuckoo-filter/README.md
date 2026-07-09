@@ -11,17 +11,20 @@ crowded region can slide a few slots over.
 ## Addressing
 
 A **single hash** is split with the classic cuckoo-filter XOR trick: `w0` is the low `b` bits of the
-hash, the alternate window is `w1 = w0 ^ (top b bits)`, and the fingerprint is a middle byte
-(`b = log2(num_windows)`). This costs one hash and a few bit ops per lookup, but requires the window
-count to be a **power of two** so the XOR stays in range (see the sizing note below).
+hash and the alternate window is `w0 ^ offset` (`b = log2(num_windows)`, window count a power of
+two). The `offset` uses only the low `min(b, SEGMENT_SHIFT)` bits, so **both windows fall in the
+same `2^SEGMENT_SHIFT`-slot segment** — each segment is an independent windowed cuckoo. The
+fingerprint is a byte from the bits above the position bits.
 
 ## Construction
 
-Because the whole key set is known up front, the filter is built once by classic cuckoo
-**random-walk**: each key is placed into a free slot of one of its two windows, evicting and
-relocating incumbents on collision, up to a fixed kick limit. Construction tracks the owning key of
-every slot (so no partial-key relocation is needed) and retries with a fresh seed if an attempt
-fails, which is vanishingly unlikely below the load threshold.
+The key set is known up front, so construction radix-sorts the keys into their segments and fills
+each **cache-resident segment** with classic cuckoo **random-walk** (place into a free window slot,
+else evict and relocate, bounded by a kick limit; retried with a fresh seed on failure). Since a
+key's whole random walk stays inside one segment, the build touches only L2-resident memory and its
+throughput stays roughly **flat as the filter grows past cache** (~80 M keys/s even at 60 M+ keys,
+vs ~20 M/s for a global-table cuckoo or a fuse filter). The working table stores each key's hash
+directly in its slot, so a relocation reads the victim's hash straight from the slot it swaps.
 
 ## Properties
 
@@ -42,9 +45,11 @@ fails, which is vanishingly unlikely below the load threshold.
 keys, at power-of-two window counts filled to ~0.92 (so both are at a fair ~8.7 bits/key):
 `cargo bench -p cuckoo-filter-benchmarks`. Roughly, on random `u64` keys:
 
-* **Lookup**: the cuckoo filter beats the fuse filter at every size — from ~10% in-cache to ~1.8×
-  at 15 M keys (two parallel cache-line probes and one hash vs three scattered probes).
-* **Build**: random-walk is faster than the fuse filter until ~15 M keys, then a little slower.
+* **Lookup**: the cuckoo filter beats the fuse filter at large sizes (~2× at 15 M keys) and is
+  competitive in cache (two parallel cache-line probes and one hash vs three scattered probes).
+* **Build**: segment-local construction stays cache-resident, so throughput is roughly flat with
+  size (~80 M keys/s) — several times faster than the fuse filter at tens of millions of keys,
+  where a global-table cuckoo or fuse build falls to ~20 M/s on random DRAM access.
 
 ## Usage
 

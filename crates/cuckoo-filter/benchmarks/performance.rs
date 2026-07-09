@@ -14,6 +14,8 @@
 //! The fuse map is instantiated with a 1-byte value (`BinaryFuseMap<1>`) so both structures store a
 //! comparable amount per key; `get(k).is_some()` is used as the membership test.
 
+use std::collections::HashSet;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -24,6 +26,44 @@ use criterion::{
 };
 use cuckoo_filter::{CuckooFilter, WINDOW};
 use rand::{rngs::StdRng, RngExt, SeedableRng};
+
+/// The same 64-bit finalizer (`murmur64`) the cuckoo filter hashes keys with, so the `HashSet`
+/// baseline uses an identical hash function rather than the standard library's SipHash.
+fn murmur64(mut h: u64) -> u64 {
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    h ^= h >> 33;
+    h
+}
+
+/// A `Hasher` that maps a single `u64` key through `murmur64` (u64 keys go through `write_u64`).
+#[derive(Default)]
+struct MurmurHasher(u64);
+
+impl Hasher for MurmurHasher {
+    fn finish(&self) -> u64 {
+        murmur64(self.0)
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = self.0.rotate_left(8) ^ u64::from(b);
+        }
+    }
+    fn write_u64(&mut self, i: u64) {
+        self.0 = i;
+    }
+}
+
+/// A `HashSet<u64>` that hashes with the filter's `murmur64` — the "same hash function" baseline.
+type MurmurSet = HashSet<u64, BuildHasherDefault<MurmurHasher>>;
+
+fn build_hashset(keys: &[u64]) -> MurmurSet {
+    let mut set = MurmurSet::with_capacity_and_hasher(keys.len(), Default::default());
+    set.extend(keys.iter().copied());
+    set
+}
 
 /// Occupancy each power-of-two window table is filled to: the highest load the random-walk build
 /// reaches reliably in a single attempt, so the power-of-two filter is measured at its densest.
@@ -75,6 +115,9 @@ fn construct(c: &mut Criterion) {
                 )
             })
         });
+        group.bench_with_input(BenchmarkId::new("hashset", n), &n, |bn, _| {
+            bn.iter(|| black_box(build_hashset(black_box(&ks))))
+        });
     }
     group.finish();
 }
@@ -88,6 +131,7 @@ fn get(c: &mut Criterion) {
         let values = vec![[0u8; 1]; n];
         let cuckoo = build_cuckoo(&ks, slots);
         let fuse = BinaryFuseMap::<1>::try_construct(&ks, &values).unwrap();
+        let set = build_hashset(&ks);
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::new("cuckoo", n), &n, |bn, _| {
             bn.iter(|| {
@@ -105,6 +149,15 @@ fn get(c: &mut Criterion) {
                     if let Some(v) = fuse.get(black_box(k)) {
                         acc ^= v[0];
                     }
+                }
+                black_box(acc)
+            })
+        });
+        group.bench_with_input(BenchmarkId::new("hashset", n), &n, |bn, _| {
+            bn.iter(|| {
+                let mut acc = 0u64;
+                for &k in &ks {
+                    acc += set.contains(black_box(&k)) as u64;
                 }
                 black_box(acc)
             })

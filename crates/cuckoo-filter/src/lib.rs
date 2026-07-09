@@ -12,15 +12,20 @@
 //! # Addressing
 //!
 //! A single hash is split with the classic cuckoo-filter XOR trick: the first window start is the
-//! low `b` bits of the hash, the alternate is `w0 ^ (top b bits)`, and the fingerprint is a middle
-//! byte (`b = log2(num_windows)`). This requires the window count to be a power of two.
+//! low `b` bits of the hash and the alternate is `w0 ^ offset` (`b = log2(num_windows)`, window
+//! count a power of two). The `offset` uses only the low `min(b, SEGMENT_SHIFT)` bits, so **both
+//! windows of a key fall in the same `2^SEGMENT_SHIFT`-slot segment** — each segment is thus an
+//! independent windowed cuckoo. The fingerprint is a byte from the bits above the position bits.
 //!
 //! # Construction
 //!
-//! Because the key set is known up front, construction tracks the *owning key* of every slot. Keys
-//! are placed by classic cuckoo **random-walk**: put each key into a free slot of one of its
-//! windows, evicting and relocating incumbents on collision (bounded by a kick limit, and retried
-//! with a fresh seed on failure).
+//! The key set is known up front, so construction radix-sorts the keys into their segments and then
+//! fills each cache-resident segment with classic cuckoo **random-walk** (place into a free window
+//! slot, else evict and relocate, bounded by a kick limit; retried with a fresh seed on failure).
+//! Because a key's whole random walk stays inside one segment, the build touches only L2-resident
+//! memory and its throughput stays roughly flat as the filter grows past cache. The per-segment
+//! working table stores each key's hash directly in its slot, so a relocation reads the victim's
+//! hash straight from the slot it swaps — no side array.
 //!
 //! # Membership
 //!
@@ -42,8 +47,11 @@ const EMPTY: u64 = u64::MAX;
 #[derive(Clone, Debug)]
 pub struct CuckooFilter {
     seed: u64,
+    /// `log2` of the window count — the number of low hash bits used for the first window start.
+    /// Cached so lookups avoid recomputing it from the slot count.
+    b: u32,
     /// Fingerprint slots; `0` marks an empty slot. Each key has two windows of `WINDOW` consecutive
-    /// slots (from two hashes) that may start anywhere in the shared array and may overlap.
+    /// slots (from one hash) that share a segment and may overlap.
     slots: Vec<u8>,
     len: usize,
 }
@@ -71,6 +79,7 @@ impl CuckooFilter {
     pub fn try_construct(keys: &[u64], slots: usize, seed: u64) -> Option<Self> {
         // The XOR addressing needs a power-of-two number of windows; round the requested size up.
         let num_windows = slots.saturating_sub(WINDOW - 1).max(2).next_power_of_two();
+        let b = num_windows.trailing_zeros();
         let total = num_windows + WINDOW - 1;
         let n = keys.len();
 
@@ -79,18 +88,19 @@ impl CuckooFilter {
         // eviction, with no separate per-key window array. `EMPTY` marks a free slot.
         let hashes: Vec<u64> = keys.iter().map(|&key| stored_hash(key, seed)).collect();
         let mut table = vec![EMPTY; total];
-        if !fill_random_walk(&mut table, &hashes, num_windows, seed) {
+        if !fill_random_walk(&mut table, &hashes, b, seed) {
             return None;
         }
 
         let mut slot_bytes = vec![0u8; total];
         for (slot, &hash) in table.iter().enumerate() {
             if hash != EMPTY {
-                slot_bytes[slot] = fingerprint(hash, num_windows);
+                slot_bytes[slot] = fingerprint(hash, b);
             }
         }
         Some(Self {
             seed,
+            b,
             slots: slot_bytes,
             len: n,
         })
@@ -100,10 +110,10 @@ impl CuckooFilter {
     /// keys return `true` with probability about `2 * WINDOW / 255` (a fingerprint collision).
     #[inline]
     pub fn contains(&self, key: u64) -> bool {
-        let num_windows = self.slots.len() - WINDOW + 1;
+        let b = self.b;
         let hash = stored_hash(key, self.seed);
-        let (w0, w1) = windows(hash, num_windows);
-        let fp = fingerprint(hash, num_windows);
+        let (w0, w1) = windows(hash, b);
+        let fp = fingerprint(hash, b);
         // Non-short-circuiting `|` so both window loads are issued together: the two cache lines are
         // fetched in parallel (memory-level parallelism), hiding latency at large, out-of-cache sizes.
         window_contains(&self.slots, w0, fp) | window_contains(&self.slots, w1, fp)
@@ -143,27 +153,29 @@ impl CuckooFilter {
     }
 }
 
-/// The two window start indices for a mixed hash, via the classic cuckoo-filter XOR addressing.
+/// The two window start indices for a mixed hash, via the classic cuckoo-filter XOR addressing,
+/// constrained so **both windows fall in the same segment**.
 ///
-/// With `b = log2(num_windows)`, the first window is the low `b` bits and the alternate is
-/// `w0 ^ (top b bits)`. This requires `num_windows` to be a power of two so the XOR result stays in
-/// `[0, num_windows)`. Deriving both windows from one stored hash (rather than two independent
-/// hashes) is what lets construction and lookup keep a single `u64` per key.
+/// `b = log2(num_windows)`: the first window is the low `b` bits and the alternate is `w0 ^ offset`,
+/// where `offset` uses only the low `min(b, SEGMENT_SHIFT)` bits — so `w1` shares its high (segment)
+/// bits with `w0`. Each segment is therefore an independent windowed cuckoo, which is what lets
+/// construction resolve one cache-resident segment at a time (see [`fill_random_walk`]).
 #[inline]
-fn windows(hash: u64, num_windows: usize) -> (usize, usize) {
-    debug_assert!(num_windows.is_power_of_two() && num_windows >= 2);
-    let b = num_windows.trailing_zeros();
-    let w0 = hash & (num_windows as u64 - 1);
-    let w1 = w0 ^ (hash >> (64 - b));
+fn windows(hash: u64, b: u32) -> (usize, usize) {
+    debug_assert!((1..64).contains(&b));
+    let seg_bits = b.min(SEGMENT_SHIFT);
+    let w0 = hash & ((1u64 << b) - 1);
+    let offset = (hash >> b) & ((1u64 << seg_bits) - 1);
+    let w1 = w0 ^ offset;
     (w0 as usize, w1 as usize)
 }
 
-/// The 1-byte fingerprint of a mixed hash (never `0`), from bits `[b, b + 8)` — disjoint from both
-/// the low `b` and top `b` position bits.
+/// The 1-byte fingerprint of a mixed hash (never `0`), from the bits just above the window-index and
+/// segment-offset bits, so it is independent of both window positions.
 #[inline]
-fn fingerprint(hash: u64, num_windows: usize) -> u8 {
-    let b = num_windows.trailing_zeros();
-    ((hash >> b) as u8).max(1)
+fn fingerprint(hash: u64, b: u32) -> u8 {
+    let seg_bits = b.min(SEGMENT_SHIFT);
+    ((hash >> (b + seg_bits)) as u8).max(1)
 }
 
 /// Branch-free test of whether the `WINDOW` slots starting at `w` hold the fingerprint `fp`.
@@ -201,14 +213,14 @@ fn place(table: &mut [u64], w0: usize, w1: usize, hash: u64) -> bool {
 /// slot of either window, else evict a random incumbent and relocate it, up to [`MAX_KICKS`] times.
 /// The victim's hash comes straight from the slot being swapped, so eviction needs no side array.
 #[inline]
-fn insert_hash(table: &mut [u64], num_windows: usize, rng: &mut u64, hash: u64) -> bool {
-    let (w0, w1) = windows(hash, num_windows);
+fn insert_hash(table: &mut [u64], b: u32, rng: &mut u64, hash: u64) -> bool {
+    let (w0, w1) = windows(hash, b);
     if place(table, w0, w1, hash) {
         return true;
     }
     let mut cur = hash;
     for _ in 0..MAX_KICKS {
-        let (w0, w1) = windows(cur, num_windows);
+        let (w0, w1) = windows(cur, b);
         let r = splitmix64(rng) as usize % (2 * WINDOW);
         let slot = if r < WINDOW {
             w0 + r
@@ -216,7 +228,7 @@ fn insert_hash(table: &mut [u64], num_windows: usize, rng: &mut u64, hash: u64) 
             w1 + (r - WINDOW)
         };
         std::mem::swap(&mut table[slot], &mut cur);
-        let (cw0, cw1) = windows(cur, num_windows);
+        let (cw0, cw1) = windows(cur, b);
         if place(table, cw0, cw1, cur) {
             return true;
         }
@@ -234,12 +246,12 @@ const SEGMENT_SHIFT: u32 = 16;
 ///
 /// Returns `None` when the whole table is a single segment — i.e. the segment index has no bits, so
 /// there is nothing to sort. Small filters that fit in cache take this path with zero overhead.
-fn segment_order(hashes: &[u64], num_windows: usize, total: usize) -> Option<Vec<(u64, u32)>> {
+fn segment_order(hashes: &[u64], b: u32, total: usize) -> Option<Vec<(u64, u32)>> {
     let num_segments = (total >> SEGMENT_SHIFT) + 1;
     if num_segments <= 1 {
         return None;
     }
-    let segment = |hash: u64| windows(hash, num_windows).0 >> SEGMENT_SHIFT;
+    let segment = |hash: u64| windows(hash, b).0 >> SEGMENT_SHIFT;
     let mut start = vec![0u32; num_segments + 1];
     for &hash in hashes {
         start[segment(hash) + 1] += 1;
@@ -259,15 +271,15 @@ fn segment_order(hashes: &[u64], num_windows: usize, total: usize) -> Option<Vec
 /// Fills the filter by inserting every key with classic cuckoo random-walk. When the table spans
 /// several cache-sized segments the keys are inserted in segment order (see [`segment_order`]) so
 /// the initial placements are cache-local; smaller tables use their natural order with no overhead.
-fn fill_random_walk(table: &mut [u64], hashes: &[u64], num_windows: usize, seed: u64) -> bool {
+fn fill_random_walk(table: &mut [u64], hashes: &[u64], b: u32, seed: u64) -> bool {
     let mut rng = seed ^ 0xD1B5_4A32_D192_ED03;
-    match segment_order(hashes, num_windows, table.len()) {
+    match segment_order(hashes, b, table.len()) {
         Some(order) => order
             .iter()
-            .all(|&(hash, _index)| insert_hash(table, num_windows, &mut rng, hash)),
+            .all(|&(hash, _index)| insert_hash(table, b, &mut rng, hash)),
         None => hashes
             .iter()
-            .all(|&hash| insert_hash(table, num_windows, &mut rng, hash)),
+            .all(|&hash| insert_hash(table, b, &mut rng, hash)),
     }
 }
 
@@ -337,6 +349,19 @@ mod tests {
         let filter = CuckooFilter::construct(&keys).expect("construction succeeds");
         assert_eq!(filter.len(), keys.len());
         assert!(keys.iter().all(|&k| filter.contains(k)));
+    }
+
+    #[test]
+    fn roundtrip_multi_segment() {
+        // Large enough that the table spans many segments, exercising the blocked construction and
+        // the segment-local addressing (both windows in one segment).
+        let keys = distinct_keys(500_000, 5);
+        let filter = CuckooFilter::construct(&keys).expect("construction succeeds");
+        assert_eq!(filter.len(), keys.len());
+        assert!(keys.iter().all(|&k| filter.contains(k)));
+        let absent = distinct_keys(500_000, 6);
+        let hits = absent.iter().filter(|&&k| filter.contains(k)).count();
+        assert!(hits < absent.len() / 10, "too many false positives: {hits}");
     }
 
     #[test]
