@@ -1,6 +1,6 @@
 [package]
 name = "geo_filters"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Geometric filters for set cardinality estimation."
 repository = "https://github.com/github/rust-gems"
