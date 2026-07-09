@@ -2,6 +2,8 @@
 
 members = [
     "crates/*",
+    "crates/binary-fuse-map/benchmarks",
+    "crates/cuckoo-filter/benchmarks",
     "crates/bpe/benchmarks",
     "crates/bpe/tests",
     "crates/casefold/benchmarks",

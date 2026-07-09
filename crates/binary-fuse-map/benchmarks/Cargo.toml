@@ -1,0 +1,16 @@
+[package]
+name = "binary-fuse-map-benchmarks"
+edition = "2021"
+
+[[bench]]
+name = "performance"
+path = "performance.rs"
+harness = false
+test = false
+
+[dependencies]
+binary-fuse-map = { path = "../" }
+
+criterion = { version = "0.8", features = ["csv_output"] }
+foldhash = "0.2"
+rand = "0.10"

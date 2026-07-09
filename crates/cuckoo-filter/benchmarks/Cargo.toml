@@ -1,0 +1,16 @@
+[package]
+name = "cuckoo-filter-benchmarks"
+edition = "2021"
+
+[[bench]]
+name = "performance"
+path = "performance.rs"
+harness = false
+test = false
+
+[dependencies]
+cuckoo-filter = { path = "../" }
+binary-fuse-map = { path = "../../binary-fuse-map" }
+
+criterion = { version = "0.8", features = ["csv_output"] }
+rand = "0.10"

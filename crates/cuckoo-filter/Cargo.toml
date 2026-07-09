@@ -1,0 +1,20 @@
+[package]
+name = "cuckoo-filter"
+version = "0.1.0"
+edition = "2021"
+description = "A static windowed cuckoo filter over u64 keys, using single-hash XOR addressing and random-walk construction."
+repository = "https://github.com/github/rust-gems"
+homepage = "https://github.com/github/rust-gems/tree/main/crates/cuckoo-filter"
+documentation = "https://docs.rs/cuckoo-filter"
+readme = "README.md"
+license = "MIT"
+keywords = ["cuckoo", "filter", "membership", "approximate", "static"]
+categories = ["algorithms", "data-structures"]
+
+[lib]
+crate-type = ["lib", "staticlib"]
+bench = false
+
+[dependencies]
+
+[dev-dependencies]

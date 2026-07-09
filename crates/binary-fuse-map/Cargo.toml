@@ -1,0 +1,20 @@
+[package]
+name = "binary-fuse-map"
+version = "0.1.0"
+edition = "2021"
+description = "Binary fuse map: a static, space-efficient map from keys to fixed-size values."
+repository = "https://github.com/github/rust-gems"
+homepage = "https://github.com/github/rust-gems/tree/main/crates/binary-fuse-map"
+documentation = "https://docs.rs/binary-fuse-map"
+readme = "README.md"
+license = "MIT"
+keywords = ["binary-fuse", "filter", "map", "perfect-hash", "static"]
+categories = ["algorithms", "data-structures"]
+
+[lib]
+crate-type = ["lib", "staticlib"]
+bench = false
+
+[dependencies]
+
+[dev-dependencies]
