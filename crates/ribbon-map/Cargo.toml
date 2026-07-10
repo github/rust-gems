@@ -1,0 +1,20 @@
+[package]
+name = "ribbon-map"
+version = "0.1.0"
+edition = "2021"
+description = "Ribbon map: a static, space-efficient filter+map from u64 keys to fixed-size values, built on a ribbon retrieval structure that encodes each key's diagonal slot."
+repository = "https://github.com/github/rust-gems"
+homepage = "https://github.com/github/rust-gems/tree/main/crates/ribbon-map"
+documentation = "https://docs.rs/ribbon-map"
+readme = "README.md"
+license = "MIT"
+keywords = ["ribbon", "filter", "map", "retrieval", "static"]
+categories = ["algorithms", "data-structures"]
+
+[lib]
+crate-type = ["lib", "staticlib"]
+bench = false
+
+[dependencies]
+
+[dev-dependencies]
