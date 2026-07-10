@@ -1,10 +1,10 @@
 //! A *binary fuse map*: a static, immutable structure that maps a set of keys to fixed-size values
-//! using only ~1.13 slots per key, where each slot stores a value (up to 8 bytes) plus a one-byte
-//! membership fingerprint.
+//! using only ~1.13 slots per key, where each slot is a fixed 8-byte word holding a value (up to 6
+//! bytes) plus a two-byte membership fingerprint.
 //!
 //! It is the "map" generalisation of the [binary fuse
 //! filter](https://arxiv.org/abs/2201.01174) (Graf & Lemire, 2022): instead of storing only a small
-//! fingerprint per key, every slot stores an `N`-byte value *and* a fingerprint byte, and a key's
+//! fingerprint per key, every slot word packs an `N`-byte value *and* a fingerprint, and a key's
 //! payload is the XOR of its three slots. Construction "peels" the 3-uniform hypergraph induced by
 //! the keys and then assigns the slots in reverse peeling order so that, for every inserted key `k`,
 //!
@@ -17,9 +17,10 @@
 //!   keys; it transparently retries with a fresh seed otherwise.
 //! * Lookups are `O(1)`: three (segment-local) slot loads and a couple of XORs.
 //! * It is a filter *and* a map: [`BinaryFuseMap::get`] returns the stored value for inserted keys
-//!   and rejects absent keys via the fingerprint with probability `255/256` (so ~`1/256` of absent
-//!   keys are false positives that return an arbitrary value).
-//! * Values are at most 8 bytes (`N <= 8`); each slot is `N + 1` bytes (value + fingerprint).
+//!   and rejects absent keys via the fingerprint with probability `65535/65536` (so ~`1/65536` of
+//!   absent keys are false positives that return an arbitrary value).
+//! * Values are at most [`PAYLOAD_BYTES`] bytes (`N <= 6`); each slot is a fixed 8-byte word (value
+//!   plus a two-byte fingerprint).
 //!
 //! # Example
 //! ```
@@ -38,6 +39,16 @@
 /// Number of slots each key hashes to (the hypergraph is 3-uniform).
 const ARITY: u32 = 3;
 
+/// Bytes of each 8-byte slot word reserved for the fingerprint; the rest hold the value. Two bytes
+/// give a `~1/65535` false-positive rate for absent keys.
+const FP_BYTES: usize = 2;
+
+/// Bytes of each 8-byte slot word available for the value payload (`N` must not exceed this).
+pub const PAYLOAD_BYTES: usize = 8 - FP_BYTES;
+
+/// Bit offset of the fingerprint within a slot word (the value occupies the low bits below it).
+const FP_SHIFT: u32 = PAYLOAD_BYTES as u32 * 8;
+
 /// Maximum number of seeds tried before giving up. Each attempt succeeds with probability very
 /// close to 1, so reaching this bound is less likely than a hardware fault.
 const MAX_ITERATIONS: usize = 100;
@@ -53,11 +64,10 @@ pub struct BinaryFuseMap<const N: usize> {
     segment_count_length: u32,
     /// Number of keys the map was built from (for reporting; not needed for lookups).
     len: usize,
-    /// Flat slot storage: `array_length` slots of `N + 1` bytes each (`N` value bytes followed by a
-    /// fingerprint byte), plus [`READ_PADDING`] trailing bytes so a slot's value can always be read
-    /// with a single 8-byte unaligned load. For an inserted key the XOR of its three slots yields
-    /// its `N`-byte value and a fingerprint byte that confirms membership.
-    slots: Vec<u8>,
+    /// Flat slot storage: `array_length` aligned 8-byte words. Each word holds an `N`-byte value in
+    /// its low bytes and a [`FP_BYTES`]-byte fingerprint in its top bytes. For an inserted key the XOR
+    /// of its three slot words yields its value and a fingerprint that confirms membership.
+    slots: Vec<u64>,
 }
 
 impl<const N: usize> BinaryFuseMap<N> {
@@ -68,10 +78,13 @@ impl<const N: usize> BinaryFuseMap<N> {
     /// [`MAX_ITERATIONS`] seeds, which for distinct keys is astronomically unlikely.
     ///
     /// # Panics
-    /// Panics if `N > 8`, if `keys.len() != values.len()`, or if there are more than `u32::MAX`
-    /// keys.
+    /// Panics if `N > PAYLOAD_BYTES`, if `keys.len() != values.len()`, or if there are more than
+    /// `u32::MAX` keys.
     pub fn try_construct(keys: &[u64], values: &[[u8; N]]) -> Option<Self> {
-        assert!(N <= 8, "value width N must be at most 8 bytes");
+        assert!(
+            N <= PAYLOAD_BYTES,
+            "value width N must be at most PAYLOAD_BYTES ({PAYLOAD_BYTES})"
+        );
         assert_eq!(
             keys.len(),
             values.len(),
@@ -90,8 +103,8 @@ impl<const N: usize> BinaryFuseMap<N> {
             segment_length: params.segment_length,
             segment_count_length: params.segment_count_length,
             len: size,
-            // `N` value bytes + 1 fingerprint byte per slot, plus padding for the unaligned reads.
-            slots: vec![0u8; array_length * (N + 1) + READ_PADDING],
+            // One aligned 8-byte word per slot (value in the low bytes, fingerprint in the top).
+            slots: vec![0u64; array_length],
         };
 
         // One `Cell` per slot accumulates, for the keys currently touching the slot, the XOR of
@@ -148,26 +161,15 @@ impl<const N: usize> BinaryFuseMap<N> {
     /// Looks up `key`, returning `Some(value)` if it is (probably) present and `None` otherwise.
     ///
     /// For a key from the constructing set this always returns its stored value. For any other key
-    /// the embedded 1-byte fingerprint rejects it with probability `255/256`; the remaining `1/256`
-    /// are false positives that return an arbitrary value.
+    /// the embedded `FP_BYTES`-byte fingerprint rejects it with probability `65535/65536`; the
+    /// remaining `~1/65536` are false positives that return an arbitrary value.
     #[inline]
     pub fn get(&self, key: u64) -> Option<[u8; N]> {
         let hash = mix(key, self.seed);
         let h = self.hashes(hash);
-        let off = [h[0] * (N + 1), h[1] * (N + 1), h[2] * (N + 1)];
-        // One unaligned 64-bit load per slot.
-        let payload = read_value(&self.slots, off[0])
-            ^ read_value(&self.slots, off[1])
-            ^ read_value(&self.slots, off[2]);
-        let fp = if N < 8 {
-            // The fingerprint byte (byte `N`) is inside the word we already loaded. `N.min(7)` only
-            // keeps the dead `N == 8` instantiation in array bounds; it is `N` for every live case.
-            payload.to_le_bytes()[N.min(7)]
-        } else {
-            // An 8-byte value fills the whole word, so the fingerprint is the trailing 9th byte.
-            self.slots[off[0] + N] ^ self.slots[off[1] + N] ^ self.slots[off[2] + N]
-        };
-        (fp == fingerprint(hash)).then(|| value_from_u64::<N>(payload))
+        // One aligned 64-bit load per slot; the XOR reconstructs the value and fingerprint together.
+        let word = self.slots[h[0]] ^ self.slots[h[1]] ^ self.slots[h[2]];
+        ((word >> FP_SHIFT) as u16 == fingerprint(hash)).then(|| unpack_value::<N>(word))
     }
 
     /// The number of keys this map was built from.
@@ -182,12 +184,12 @@ impl<const N: usize> BinaryFuseMap<N> {
 
     /// The number of slots (`array_length`); always `>= len`.
     pub fn slot_count(&self) -> usize {
-        (self.slots.len() - READ_PADDING) / (N + 1)
+        self.slots.len()
     }
 
-    /// Heap memory used by the slot array, in bytes (`slot_count * (N + 1)`).
+    /// Heap memory used by the slot array, in bytes (`slot_count * 8`).
     pub fn memory_usage(&self) -> usize {
-        self.slot_count() * (N + 1)
+        self.slots.len() * 8
     }
 
     /// Average number of bits stored per key (slot array size in bits divided by key count).
@@ -240,11 +242,7 @@ impl Params {
 
 /// The three slot indices a (mixed) hash maps to: one slot in each of three consecutive segments.
 #[inline]
-fn hash_positions(
-    hash: u64,
-    segment_length: u32,
-    segment_count_length: u32,
-) -> [usize; 3] {
+fn hash_positions(hash: u64, segment_length: u32, segment_count_length: u32) -> [usize; 3] {
     let segment_length_mask = segment_length - 1;
     let hi = mulhi(hash, segment_count_length as u64) as u32;
     let h0 = hi;
@@ -316,76 +314,49 @@ fn peel(
 }
 
 /// Replays the peeling stack in reverse, fixing each key's owned slot so that the XOR of its three
-/// slots equals its `(value, fingerprint)` payload.
+/// slots equals its `(value, fingerprint)` payload word.
 fn assign<const N: usize>(
     params: &Params,
     values: &[[u8; N]],
     stack_hash: &[u64],
     stack_idx: &[u32],
     stack_slot: &[u32],
-    slots: &mut [u8],
+    slots: &mut [u64],
 ) {
     for s in (0..stack_hash.len()).rev() {
         let hash = stack_hash[s];
-        let off = stack_slot[s] as usize * (N + 1);
-        let mut value = value_to_u64(&values[stack_idx[s] as usize]);
-        let mut fingerprint = fingerprint(hash);
+        let off = stack_slot[s] as usize;
+        // The owned slot is set so the three slots XOR to this key's packed (value, fingerprint) word.
+        let mut word = pack_slot(fingerprint(hash), &values[stack_idx[s] as usize]);
         for other in params.hashes(hash) {
-            let other_off = other * (N + 1);
-            if other_off != off {
-                let word = read_value(slots, other_off);
-                value ^= word;
-                // For N < 8 the neighbour's fingerprint is byte N of the word we just loaded.
-                fingerprint ^= if N < 8 {
-                    word.to_le_bytes()[N.min(7)]
-                } else {
-                    slots[other_off + N]
-                };
+            if other != off {
+                word ^= slots[other];
             }
         }
-        // Only the low `N` value bytes are written, so the neighbouring slot is never clobbered.
-        slots[off..off + N].copy_from_slice(&value.to_le_bytes()[..N]);
-        slots[off + N] = fingerprint;
+        slots[off] = word;
     }
 }
 
-/// Trailing padding (bytes) kept after the slot array so an 8-byte unaligned read at the last slot's
-/// offset stays in bounds even when `N + 1 < 8`.
-const READ_PADDING: usize = 8;
-
-/// Reads the value bytes of the slot at byte offset `off` as a `u64` with one unaligned load.
-///
-/// Only the low `N` bytes are the value; for `N < 8` the higher bytes are the fingerprint and the
-/// start of the next slot, which callers ignore (value extraction keeps the low `N` bytes).
+/// Packs a fingerprint and value into one slot word: value in the low bytes, fingerprint above them.
 #[inline]
-fn read_value(slots: &[u8], off: usize) -> u64 {
-    debug_assert!(off + 8 <= slots.len());
-    // SAFETY: the slot array is allocated with `READ_PADDING == 8` trailing bytes, so reading 8
-    // bytes starting at any slot offset stays within the allocation.
-    let bytes = unsafe { std::ptr::read_unaligned(slots.as_ptr().add(off).cast::<[u8; 8]>()) };
-    u64::from_le_bytes(bytes)
-}
-
-/// Zero-extends an `N`-byte value (`N <= 8`) into a `u64`.
-#[inline]
-fn value_to_u64<const N: usize>(value: &[u8; N]) -> u64 {
+fn pack_slot<const N: usize>(fp: u16, value: &[u8; N]) -> u64 {
     let mut bytes = [0u8; 8];
     bytes[..N].copy_from_slice(value);
-    u64::from_le_bytes(bytes)
+    u64::from_le_bytes(bytes) | ((fp as u64) << FP_SHIFT)
 }
 
-/// Extracts the low `N` bytes of a `u64` as the stored value.
+/// Extracts the `N`-byte value from the low bytes of a slot word.
 #[inline]
-fn value_from_u64<const N: usize>(value: u64) -> [u8; N] {
+fn unpack_value<const N: usize>(word: u64) -> [u8; N] {
     let mut out = [0u8; N];
-    out.copy_from_slice(&value.to_le_bytes()[..N]);
+    out.copy_from_slice(&word.to_le_bytes()[..N]);
     out
 }
 
-/// The 1-byte membership fingerprint derived from a key's mixed hash.
+/// The [`FP_BYTES`]-byte membership fingerprint derived from a key's mixed hash.
 #[inline]
-fn fingerprint(hash: u64) -> u8 {
-    (hash ^ (hash >> 32)) as u8
+fn fingerprint(hash: u64) -> u16 {
+    (hash ^ (hash >> 32)) as u16
 }
 
 /// Segment length: a power of two chosen to keep peeling fast and the structure compact.
@@ -471,44 +442,50 @@ mod tests {
         for n in [0usize, 1, 2, 3, 5, 10, 50, 100, 1000] {
             assert_roundtrip::<1>(n);
             assert_roundtrip::<4>(n);
-            assert_roundtrip::<7>(n);
-            assert_roundtrip::<8>(n);
+            assert_roundtrip::<5>(n);
+            assert_roundtrip::<6>(n);
         }
     }
 
     #[test]
     fn roundtrip_medium_sizes() {
         for n in [10_000usize, 100_000, 1_000_000] {
-            assert_roundtrip::<8>(n);
+            assert_roundtrip::<6>(n);
         }
     }
 
     #[test]
     fn absent_keys_are_mostly_rejected() {
-        // The 1-byte fingerprint should reject ~255/256 of absent keys.
+        // The 2-byte fingerprint should reject ~65535/65536 of absent keys.
         let n = 200_000;
         let keys = distinct_keys(n, 11);
-        let values: Vec<[u8; 8]> = (0..n as u64).map(|i| i.to_le_bytes()).collect();
-        let map = BinaryFuseMap::<8>::try_construct(&keys, &values).unwrap();
+        let values: Vec<[u8; 6]> = (0..n as u64)
+            .map(|i| {
+                let mut v = [0u8; 6];
+                v.copy_from_slice(&i.to_le_bytes()[..6]);
+                v
+            })
+            .collect();
+        let map = BinaryFuseMap::<6>::try_construct(&keys, &values).unwrap();
 
         // Probe a disjoint key set; count how many slip through as false positives.
         let absent = distinct_keys(n, 0xABCD);
         let false_positives = absent.iter().filter(|&&k| map.get(k).is_some()).count();
         let rate = false_positives as f64 / n as f64;
         assert!(
-            rate < 0.02,
-            "false positive rate {rate} too high (expected ~1/256)"
+            rate < 0.001,
+            "false positive rate {rate} too high (expected ~1/65536)"
         );
     }
 
     #[test]
     fn bits_per_key_is_close_to_optimal() {
         let keys = distinct_keys(1_000_000, 7);
-        let values = vec![[0u8; 8]; keys.len()];
-        let map = BinaryFuseMap::<8>::try_construct(&keys, &values).unwrap();
-        // ~1.13 slots/key * 9 bytes (8 value + 1 fingerprint) * 8 bits ≈ 81 bits/key.
+        let values = vec![[0u8; 6]; keys.len()];
+        let map = BinaryFuseMap::<6>::try_construct(&keys, &values).unwrap();
+        // ~1.13 slots/key * 8 bytes per slot * 8 bits ≈ 72 bits/key.
         assert!(
-            map.bits_per_key() < 9.0 * 8.0 * 1.16,
+            map.bits_per_key() < 8.0 * 8.0 * 1.16,
             "bits_per_key={} too high",
             map.bits_per_key()
         );

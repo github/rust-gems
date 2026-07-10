@@ -14,3 +14,4 @@ binary-fuse-map = { path = "../../binary-fuse-map" }
 
 criterion = { version = "0.8", features = ["csv_output"] }
 rand = "0.10"
+cuckoofilter = "0.5"

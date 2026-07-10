@@ -1,20 +1,18 @@
-//! Construction and lookup throughput of the windowed [`CuckooFilter`] compared with the
-//! [`BinaryFuseMap`] (a binary fuse filter), on the same random `u64` keys.
+//! Construction and lookup throughput of the windowed [`CuckooFilter`] as a **value map**, compared
+//! with the [`BinaryFuseMap`] and a `std::HashMap` — all storing an `8`-byte value per key and using
+//! the **same** `murmur64` hash.
 //!
-//! Both are approximate-membership structures with a ~1-byte fingerprint per key. They make
-//! different trade-offs: the cuckoo filter probes two local windows (two cache lines) but relocates
-//! on insert, while the fuse filter probes three scattered slots (three cache lines) but is built by
-//! a single peeling pass.
+//! The three make different trade-offs. The cuckoo map probes two local windows (its fingerprints
+//! sit in two cache lines) then fetches the value from a parallel array; the fuse map probes three
+//! scattered slots but fuses each value into the word it already reads; the `HashMap` chases one
+//! bucket and compares the full key. The cuckoo and fuse maps are approximate (a ~1-byte fingerprint
+//! per key), while the `HashMap` is exact.
 //!
-//! The cuckoo filter's XOR addressing rounds the window count up to a power of two, so to compare it
-//! at a fair memory point (not a wasteful rounding boundary) the sizes here are chosen as
-//! **power-of-two window counts filled to [`FILL`]** — i.e. the power-of-two table at its maximal
-//! occupancy (~8.7 bits/key, matching an arbitrary-sized filter at the same load).
-//!
-//! The fuse map is instantiated with a 1-byte value (`BinaryFuseMap<1>`) so both structures store a
-//! comparable amount per key; `get(k).is_some()` is used as the membership test.
+//! The cuckoo map's XOR addressing rounds the window count up to a power of two, so to compare it at
+//! a fair memory point (not a wasteful rounding boundary) the sizes here are chosen as **power-of-two
+//! window counts filled to [`FILL`]** — i.e. the power-of-two table at its maximal occupancy.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::hint::black_box;
 use std::time::Duration;
@@ -25,9 +23,13 @@ use criterion::{
     Throughput,
 };
 use cuckoo_filter::{CuckooFilter, WINDOW};
+use cuckoofilter::CuckooFilter as CuckooCrate;
 use rand::{rngs::StdRng, RngExt, SeedableRng};
 
-/// The same 64-bit finalizer (`murmur64`) the cuckoo filter hashes keys with, so the `HashSet`
+/// Value size (bytes) stored per key by all three maps.
+const VAL: usize = 4;
+
+/// The same 64-bit finalizer (`murmur64`) the cuckoo filter hashes keys with, so the `HashMap`
 /// baseline uses an identical hash function rather than the standard library's SipHash.
 fn murmur64(mut h: u64) -> u64 {
     h ^= h >> 33;
@@ -56,18 +58,19 @@ impl Hasher for MurmurHasher {
     }
 }
 
-/// A `HashSet<u64>` that hashes with the filter's `murmur64` — the "same hash function" baseline.
-type MurmurSet = HashSet<u64, BuildHasherDefault<MurmurHasher>>;
+/// A `HashMap<u64, [u8; VAL]>` that hashes with the filter's `murmur64` — the "same hash" baseline.
+type MurmurMap = HashMap<u64, [u8; VAL], BuildHasherDefault<MurmurHasher>>;
 
-fn build_hashset(keys: &[u64]) -> MurmurSet {
-    let mut set = MurmurSet::with_capacity_and_hasher(keys.len(), Default::default());
-    set.extend(keys.iter().copied());
-    set
+fn build_hashmap(keys: &[u64], values: &[[u8; VAL]]) -> MurmurMap {
+    let mut map = MurmurMap::with_capacity_and_hasher(keys.len(), Default::default());
+    map.extend(keys.iter().copied().zip(values.iter().copied()));
+    map
 }
 
 /// Occupancy each power-of-two window table is filled to: the highest load the random-walk build
 /// reaches reliably in a single attempt, so the power-of-two filter is measured at its densest.
-const FILL: f64 = 0.92;
+/// `(2,2)` (`WINDOW == 2`) has a lower threshold than `(2,4)`, so it is filled less densely.
+const FILL: f64 = if WINDOW <= 2 { 0.88 } else { 0.92 };
 
 /// `log2` of the window counts to benchmark (~16 K, 128 K, 1 M, 16 M windows).
 const LOG2_WINDOWS: [u32; 4] = [14, 17, 20, 24];
@@ -87,11 +90,34 @@ fn keys(n: usize) -> Vec<u64> {
     (0..n).map(|_| rng.random()).collect()
 }
 
-/// Builds a cuckoo filter at the exact `slots` size (retrying a few seeds).
-fn build_cuckoo(keys: &[u64], slots: usize) -> CuckooFilter {
+/// A `VAL`-byte value per key (the low bytes of the key).
+fn values(keys: &[u64]) -> Vec<[u8; VAL]> {
+    keys.iter()
+        .map(|&k| {
+            let mut v = [0u8; VAL];
+            let bytes = k.to_le_bytes();
+            v.copy_from_slice(&bytes[..VAL]);
+            v
+        })
+        .collect()
+}
+
+/// Builds a cuckoo map at the exact `slots` size (retrying a few seeds).
+fn build_cuckoo(keys: &[u64], vals: &[[u8; VAL]], slots: usize) -> CuckooFilter<VAL> {
     (0..16)
-        .find_map(|s| CuckooFilter::try_construct(keys, slots, s))
+        .find_map(|s| CuckooFilter::try_construct(keys, vals, slots, s))
         .expect("construction succeeds")
+}
+
+/// Builds the reference `cuckoofilter` crate's filter — a classic `(2, 4)` cuckoo filter with a
+/// 1-byte fingerprint (membership only, no values) — from the same keys, hashing with the same
+/// `murmur64`. It is dynamic (one `add` at a time) and sizes to the same power-of-two load as ours.
+fn build_cuckoo_crate(keys: &[u64]) -> CuckooCrate<MurmurHasher> {
+    let mut cf = CuckooCrate::<MurmurHasher>::with_capacity(keys.len());
+    for &k in keys {
+        let _ = cf.add(&k);
+    }
+    cf
 }
 
 fn construct(c: &mut Criterion) {
@@ -102,21 +128,24 @@ fn construct(c: &mut Criterion) {
     for b in LOG2_WINDOWS {
         let (n, slots) = dims(b);
         let ks = keys(n);
-        let values = vec![[0u8; 1]; n];
+        let vs = values(&ks);
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::new("cuckoo", n), &n, |bn, _| {
-            bn.iter(|| black_box(build_cuckoo(black_box(&ks), slots)))
+            bn.iter(|| black_box(build_cuckoo(black_box(&ks), black_box(&vs), slots)))
         });
         group.bench_with_input(BenchmarkId::new("fuse_map", n), &n, |bn, _| {
             bn.iter(|| {
                 black_box(
-                    BinaryFuseMap::<1>::try_construct(black_box(&ks), black_box(&values))
+                    BinaryFuseMap::<VAL>::try_construct(black_box(&ks), black_box(&vs))
                         .expect("construction succeeds"),
                 )
             })
         });
-        group.bench_with_input(BenchmarkId::new("hashset", n), &n, |bn, _| {
-            bn.iter(|| black_box(build_hashset(black_box(&ks))))
+        group.bench_with_input(BenchmarkId::new("hashmap", n), &n, |bn, _| {
+            bn.iter(|| black_box(build_hashmap(black_box(&ks), black_box(&vs))))
+        });
+        group.bench_with_input(BenchmarkId::new("cuckoo_crate", n), &n, |bn, _| {
+            bn.iter(|| black_box(build_cuckoo_crate(black_box(&ks))))
         });
     }
     group.finish();
@@ -128,16 +157,18 @@ fn get(c: &mut Criterion) {
     for b in [14u32, 20, 24] {
         let (n, slots) = dims(b);
         let ks = keys(n);
-        let values = vec![[0u8; 1]; n];
-        let cuckoo = build_cuckoo(&ks, slots);
-        let fuse = BinaryFuseMap::<1>::try_construct(&ks, &values).unwrap();
-        let set = build_hashset(&ks);
+        let vs = values(&ks);
+        let cuckoo = build_cuckoo(&ks, &vs, slots);
+        let fuse = BinaryFuseMap::<VAL>::try_construct(&ks, &vs).unwrap();
+        let map = build_hashmap(&ks, &vs);
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::new("cuckoo", n), &n, |bn, _| {
             bn.iter(|| {
-                let mut acc = 0u64;
+                let mut acc = 0u8;
                 for &k in &ks {
-                    acc += cuckoo.contains(black_box(k)) as u64;
+                    if let Some(v) = cuckoo.get(black_box(k)) {
+                        acc ^= v[0];
+                    }
                 }
                 black_box(acc)
             })
@@ -153,11 +184,13 @@ fn get(c: &mut Criterion) {
                 black_box(acc)
             })
         });
-        group.bench_with_input(BenchmarkId::new("hashset", n), &n, |bn, _| {
+        group.bench_with_input(BenchmarkId::new("hashmap", n), &n, |bn, _| {
             bn.iter(|| {
-                let mut acc = 0u64;
+                let mut acc = 0u8;
                 for &k in &ks {
-                    acc += set.contains(black_box(&k)) as u64;
+                    if let Some(v) = map.get(black_box(&k)) {
+                        acc ^= v[0];
+                    }
                 }
                 black_box(acc)
             })
@@ -166,5 +199,39 @@ fn get(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, construct, get);
+/// Membership-only comparison against the `cuckoofilter` crate (which stores no values), using our
+/// [`CuckooFilter::contains`]. Both hold the same keys hashed with the same `murmur64`.
+fn contains(c: &mut Criterion) {
+    let mut group = c.benchmark_group("contains");
+    group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
+    for b in [14u32, 20, 24] {
+        let (n, slots) = dims(b);
+        let ks = keys(n);
+        let vs = values(&ks);
+        let cuckoo = build_cuckoo(&ks, &vs, slots);
+        let cuckoo_crate = build_cuckoo_crate(&ks);
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_with_input(BenchmarkId::new("cuckoo", n), &n, |bn, _| {
+            bn.iter(|| {
+                let mut acc = 0u64;
+                for &k in &ks {
+                    acc += cuckoo.contains(black_box(k)) as u64;
+                }
+                black_box(acc)
+            })
+        });
+        group.bench_with_input(BenchmarkId::new("cuckoo_crate", n), &n, |bn, _| {
+            bn.iter(|| {
+                let mut acc = 0u64;
+                for &k in &ks {
+                    acc += cuckoo_crate.contains(black_box(&k)) as u64;
+                }
+                black_box(acc)
+            })
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, construct, get, contains);
 criterion_main!(benches);
