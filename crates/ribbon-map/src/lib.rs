@@ -6,9 +6,10 @@
 //! # From a ribbon filter to a ribbon map
 //!
 //! A ribbon *filter* solves a banded linear system over GF(2): every key `k` hashes to a *start*
-//! column `s(k)`, a width-`W` *coefficient* row `c(k)` (a `W`-bit window that begins at column
-//! `s(k)`), and an `r`-bit *fingerprint*. Construction picks a solution vector `X` (one `r`-bit word
-//! per column) such that, for every key, the windowed dot product reproduces the fingerprint:
+//! column `s(k)`, a width-`W` *coefficient* row `c(k)` (a sparse `W`-bit window that begins at
+//! column `s(k)`), and an `r`-bit *fingerprint*. Construction picks a solution vector `X` (one
+//! `r`-bit word per column) such that, for every key, the windowed dot product reproduces the
+//! fingerprint:
 //!
 //! ```text
 //! XOR_{j : bit j of c(k) set} X[s(k) + j] == fingerprint(k)
@@ -48,6 +49,25 @@
 //! dependent* on earlier ones (its row eliminates to zero); that is handled by retrying with a fresh
 //! seed, exactly as an ordinary ribbon filter handles it.
 //!
+//! # Sparse coefficients
+//!
+//! Each coefficient is *sparse*: bit 0 plus [`COEFF_INDICES`] positions cut from the hash as 6-bit
+//! indices (~9 set bits). With the interleaved decode below a lookup's cost no longer depends on the
+//! coefficient weight, so sparsity is now a *construction* knob: it keeps elimination light, and
+//! fewer indices trade construction success against the maximum deviation (sparser rows cause longer
+//! elimination chains, pushing the deviation toward the `W`-bit ceiling).
+//!
+//! # Interleaved storage for `GF2P8AFFINEQB`
+//!
+//! The solution is stored bit-sliced and interleaved, as the Ribbon paper proposes for SIMD queries:
+//! the 8 bit-planes of every 64-column block sit in 8 consecutive `u64`s (one cache line), so bit
+//! `p` of the retrieval word is `parity(coeff & plane_p_window)`. On x86 with GFNI+AVX-512 all 8
+//! parities collapse into a single [`GF2P8AFFINEQB`] affine transform (fold each `coeff & plane`
+//! lane to a byte, then one affine against an all-ones vector); elsewhere a portable scalar
+//! reduction runs. The two paths are validated bit-for-bit against each other.
+//!
+//! [`GF2P8AFFINEQB`]: https://www.felixcloutier.com/x86/gf2p8affineqb
+//!
 //! # Properties
 //!
 //! * **Filter + map.** [`RibbonMap::get`] returns `Some(value)` for every inserted key and rejects
@@ -56,8 +76,8 @@
 //! * **Compact.** ~`1 / LOAD_FACTOR` slots per key; each slot costs one byte of retrieval data plus
 //!   `N` bytes of value, i.e. ~`(1 + N) * 8 / LOAD_FACTOR` bits per key. Unlike a binary fuse map the
 //!   value width `N` is unbounded (values live in their own array).
-//! * **`O(1)` lookups**: one windowed dot product over a 64-bit coefficient, a 2-bit fingerprint
-//!   check, and a single value load.
+//! * **`O(1)` lookups**: eight plane parities (one `GF2P8AFFINEQB` on x86, else a scalar reduction)
+//!   reconstruct the retrieval word, then a 2-bit zero-check and a single value load.
 //! * **Static**: built once from all keys; not modifiable afterwards.
 //!
 //! # Example
@@ -99,6 +119,34 @@ const _: () = assert!(
 /// Low-bit mask selecting the deviation from a retrieval word.
 const DEVIATION_MASK: u8 = (1u8 << DEVIATION_BITS) - 1;
 
+/// Number of bit-planes in the interleaved solution (one per retrieval-word bit). It equals
+/// `DEVIATION_BITS + CHECK_BITS = 8`, matching a byte and the 8 lanes of a `GF2P8AFFINEQB` affine
+/// transform, which is what a lookup uses to reconstruct the word on x86.
+const PLANES: usize = (DEVIATION_BITS + CHECK_BITS) as usize;
+
+const _: () = assert!(
+    PLANES == 8,
+    "the interleaved layout packs exactly 8 bit-planes"
+);
+
+/// Bits per window-position index; `log2(W) = 6` for `W = 64`. Each such index, cut from the key's
+/// hash, selects one set bit of the coefficient row.
+const INDEX_BITS: u32 = 6;
+
+/// Number of 6-bit position indices OR-ed into each coefficient row (on top of the always-set bit
+/// 0), giving at most `COEFF_INDICES + 1` set bits. With the interleaved plane-parity decode the
+/// lookup cost is independent of this weight; it governs construction instead. Fewer indices push
+/// construction toward failure and inflate the maximum deviation toward the `W` ceiling (sparser
+/// rows cause longer elimination chains); 8 keeps single-seed construction reliable to tens of
+/// millions of keys at [`LOAD_FACTOR`].
+const COEFF_INDICES: u32 = 8;
+
+const _: () = assert!(1usize << INDEX_BITS == W, "INDEX_BITS must equal log2(W)");
+const _: () = assert!(
+    COEFF_INDICES * INDEX_BITS <= 64,
+    "all position indices must fit in one 64-bit hash"
+);
+
 /// Target load factor (keys per slot). At ~0.85 the maximum deviation stays comfortably below `W`
 /// even for hundreds of millions of keys, and construction almost always succeeds on the first seed.
 /// Higher values are more compact but push deviations toward the `W`-bit ceiling and raise the
@@ -123,11 +171,13 @@ pub struct RibbonMap<const N: usize> {
     slots: usize,
     /// Number of keys the map was built from.
     len: usize,
-    /// Ribbon retrieval solution: one 8-bit word per slot. For an inserted key the windowed XOR of
-    /// these words yields the key's deviation in its low `DEVIATION_BITS` bits and zero in its top
-    /// `CHECK_BITS` bits. Free-variable slots (no key pivots on them) hold random values so absent
-    /// keys read pseudo-random words.
-    solution: Vec<u8>,
+    /// Ribbon retrieval solution in the Ribbon paper's *interleaved, bit-sliced* layout: the
+    /// [`PLANES`] bit-planes of each 64-column block are stored as [`PLANES`] consecutive `u64`s (a
+    /// 64-byte cache line). Block `g` occupies `planes[g * PLANES .. (g + 1) * PLANES]`, where
+    /// `planes[g * PLANES + p]` bit `o` is bit `p` of the solution word for column `W * g + o`. A
+    /// lookup loads one block plus the next and reconstructs the retrieval word with a single
+    /// `GF2P8AFFINEQB` on x86. Two trailing padding blocks let any window load block `g` and `g + 1`.
+    planes: Vec<u64>,
     /// Values indexed by diagonal (pivot) slot. Only the `len` pivot slots are meaningful; the rest
     /// are unused padding that absent-key false positives may return.
     values: Vec<[u8; N]>,
@@ -171,7 +221,7 @@ impl<const N: usize> RibbonMap<N> {
     /// Attempts a single construction with a fixed `seed`. Returns `None` if any key's row is
     /// linearly dependent on earlier ones (the caller then retries with a new seed).
     fn build(keys: &[u64], values: &[[u8; N]], slots: usize, seed: u64) -> Option<Self> {
-        // Derive each key's (start, coefficient, fingerprint) and sort by start. Processing keys in
+        // Derive each key's (start, coefficient) and sort by start. Processing keys in
         // start order is what confines every pivot to its own window (see the module docs).
         let mut infos: Vec<KeyInfo> = keys
             .iter()
@@ -256,7 +306,7 @@ impl<const N: usize> RibbonMap<N> {
             seed,
             slots,
             len: keys.len(),
-            solution,
+            planes: interleave(&solution),
             values: values_arr,
         })
     }
@@ -264,25 +314,87 @@ impl<const N: usize> RibbonMap<N> {
     /// Looks up `key`, returning `Some(value)` if it is (probably) present and `None` otherwise.
     ///
     /// For a key from the constructing set this always returns its stored value. For any other key
-    /// the 2-bit fingerprint rejects it with probability ~3/4; the rest are false positives that
+    /// the 2-bit zero-check rejects it with probability ~3/4; the rest are false positives that
     /// return an arbitrary value.
     #[inline]
     pub fn get(&self, key: u64) -> Option<[u8; N]> {
         let (start, coeff) = derive(key, self.seed, self.slots);
-        // Windowed dot product over the solution reconstructs the retrieval word: the deviation in
-        // the low bits and, for an inserted key, zero in the top CHECK_BITS bits.
-        let mut word = 0u8;
-        let mut bits = coeff;
-        while bits != 0 {
-            let j = bits.trailing_zeros() as usize;
-            word ^= self.solution[start + j];
-            bits &= bits - 1;
-        }
+        let word = self.retrieval_word(start, coeff);
         if (word >> DEVIATION_BITS) != 0 {
             return None;
         }
         let deviation = (word & DEVIATION_MASK) as usize;
         Some(self.values[start + deviation])
+    }
+
+    /// Reconstructs the 8-bit retrieval word for a key's window: bit `p` is the parity of the
+    /// coefficient AND-ed with plane `p`'s 64-bit window at `start`. Uses the `GF2P8AFFINEQB` kernel
+    /// where the CPU supports it, otherwise a portable scalar reduction.
+    #[inline]
+    fn retrieval_word(&self, start: usize, coeff: u64) -> u8 {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("gfni") {
+                // SAFETY: the required features were just detected at runtime.
+                return unsafe { self.retrieval_word_gfni(start, coeff) };
+            }
+        }
+        self.retrieval_word_scalar(start, coeff)
+    }
+
+    /// Portable reduction: the parity of `coeff & window` for each of the [`PLANES`] planes, where
+    /// each plane's window is the 64 bits starting at `start` (spanning two interleaved blocks).
+    #[inline]
+    fn retrieval_word_scalar(&self, start: usize, coeff: u64) -> u8 {
+        let base = (start / W) * PLANES;
+        let offset = start % W;
+        let mut word = 0u8;
+        for p in 0..PLANES {
+            let lo = self.planes[base + p];
+            let window = if offset == 0 {
+                lo
+            } else {
+                (lo >> offset) | (self.planes[base + PLANES + p] << (W - offset))
+            };
+            word |= (((coeff & window).count_ones() & 1) as u8) << p;
+        }
+        word
+    }
+
+    /// x86 kernel: the same reduction as [`Self::retrieval_word_scalar`] using one `GF2P8AFFINEQB`.
+    /// The algorithm (fold each `coeff & plane` lane to its byte parity, then an affine transform
+    /// against an all-ones vector) is validated bit-for-bit against the scalar path by an emulation
+    /// test, so this only needs the CPU to run the real instruction.
+    ///
+    /// # Safety
+    /// The caller must ensure the CPU supports the `avx512f` and `gfni` target features.
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx512f,gfni")]
+    unsafe fn retrieval_word_gfni(&self, start: usize, coeff: u64) -> u8 {
+        use std::arch::x86_64::*;
+        let base = (start / W) * PLANES;
+        let offset = (start % W) as i64;
+        let ptr = self.planes.as_ptr().add(base) as *const __m512i;
+        // Load the PLANES planes of block `g` and block `g + 1` (one 64-byte cache line each).
+        let lo = _mm512_loadu_si512(ptr);
+        let hi = _mm512_loadu_si512(ptr.add(1));
+        // window = (lo >> offset) | (hi << (64 - offset)); variable shifts of >= 64 produce 0, so an
+        // offset of 0 leaves exactly `lo`.
+        let window = _mm512_or_si512(
+            _mm512_srlv_epi64(lo, _mm512_set1_epi64(offset)),
+            _mm512_sllv_epi64(hi, _mm512_set1_epi64(64 - offset)),
+        );
+        // AND with the broadcast coefficient, then fold each 64-bit lane down to its low-byte parity.
+        let mut q = _mm512_and_si512(_mm512_set1_epi64(coeff as i64), window);
+        q = _mm512_xor_si512(q, _mm512_srli_epi64::<32>(q));
+        q = _mm512_xor_si512(q, _mm512_srli_epi64::<16>(q));
+        q = _mm512_xor_si512(q, _mm512_srli_epi64::<8>(q));
+        // Low byte of each lane -> the PLANES folded bytes packed into one __m128i.
+        let folded = _mm512_cvtepi64_epi8(q);
+        // GF2P8AFFINEQB against an all-ones vector maps folded byte `b` to `parity(folded[7 - b])`,
+        // producing the bit-reversed retrieval word; reverse it back.
+        let out = _mm_gf2p8affine_epi64_epi8::<0>(_mm_set1_epi8(-1), folded);
+        (_mm_cvtsi128_si32(out) as u8).reverse_bits()
     }
 
     /// The number of keys this map was built from.
@@ -300,9 +412,9 @@ impl<const N: usize> RibbonMap<N> {
         self.slots
     }
 
-    /// Heap memory used by the retrieval and value arrays, in bytes (`slot_count * (1 + N)`).
+    /// Heap memory used by the retrieval and value arrays, in bytes.
     pub fn memory_usage(&self) -> usize {
-        self.solution.len() + self.values.len() * N
+        self.planes.len() * 8 + self.values.len() * N
     }
 
     /// Average number of bits stored per key (total array size in bits divided by key count).
@@ -332,18 +444,51 @@ fn num_slots(n: usize) -> usize {
     (((n as f64) / LOAD_FACTOR).ceil() as usize).max(W)
 }
 
+/// Transposes the per-slot solution bytes into the interleaved, bit-sliced plane layout described on
+/// [`RibbonMap::planes`]. Two padding blocks are appended so a query can always load block `g` and
+/// `g + 1`.
+fn interleave(solution: &[u8]) -> Vec<u64> {
+    let num_blocks = solution.len().div_ceil(W) + 2;
+    let mut planes = vec![0u64; num_blocks * PLANES];
+    for (col, &byte) in solution.iter().enumerate() {
+        let base = (col / W) * PLANES;
+        let bit = 1u64 << (col % W);
+        let mut bits = byte;
+        while bits != 0 {
+            let plane = bits.trailing_zeros() as usize;
+            planes[base + plane] |= bit;
+            bits &= bits - 1;
+        }
+    }
+    planes
+}
+
 /// Derives a key's `(start, coefficient)` from `seed` and the slot count.
 ///
-/// `start` is drawn uniformly from `[0, slots - W]` (so the width-`W` window fits) and the
-/// coefficient is 64 independent bits with bit 0 forced to 1 (fixing the window's left edge as the
-/// pivot origin).
+/// `start` is drawn uniformly from `[0, slots - W]` (so the width-`W` window fits). The coefficient
+/// is *sparse*: bit 0 is always set (fixing the window's left edge as the pivot origin) and
+/// [`COEFF_INDICES`] further positions are chosen by cutting [`INDEX_BITS`]-bit indices out of an
+/// independent hash. Keeping the weight low is what makes lookups fast (see [`RibbonMap::get`]).
 #[inline]
 fn derive(key: u64, seed: u64, slots: usize) -> (usize, u64) {
     let a = mix(key, seed);
-    let b = mix(key, seed.wrapping_add(GOLDEN));
     let start = mulhi(a, (slots - W + 1) as u64) as usize;
-    let coeff = b | 1;
+    let coeff = sparse_coeff(mix(key, seed.wrapping_add(GOLDEN)));
     (start, coeff)
+}
+
+/// Turns a hash into a sparse width-`W` coefficient row: bit 0 (always set) plus [`COEFF_INDICES`]
+/// positions cut from `h` as [`INDEX_BITS`]-bit indices. Indices may collide, so the row has at most
+/// `COEFF_INDICES + 1` set bits.
+#[inline]
+fn sparse_coeff(mut h: u64) -> u64 {
+    const INDEX_MASK: u64 = W as u64 - 1;
+    let mut mask = 1u64;
+    for _ in 0..COEFF_INDICES {
+        mask |= 1u64 << (h & INDEX_MASK);
+        h >>= INDEX_BITS;
+    }
+    mask
 }
 
 /// A reversible 64-bit mix (the finalizer from MurmurHash3).
@@ -491,5 +636,82 @@ mod tests {
         let keys = vec![0x1111_2222_3333_4444u64; 100];
         let values = make_values::<4>(keys.len());
         assert!(RibbonMap::<4>::try_construct(&keys, &values).is_none());
+    }
+
+    #[test]
+    fn sparse_coeff_has_bit0_and_bounded_weight() {
+        // Bit 0 must always be set (the pivot origin), and the row is capped at COEFF_INDICES + 1
+        // set bits so a lookup's dot product stays short.
+        let mut state = 0x0777_0777_0777_0777u64;
+        for _ in 0..100_000 {
+            let coeff = sparse_coeff(splitmix64(&mut state));
+            assert_eq!(coeff & 1, 1, "bit 0 must always be set");
+            assert!(
+                coeff.count_ones() <= COEFF_INDICES + 1,
+                "weight {} exceeds COEFF_INDICES + 1",
+                coeff.count_ones()
+            );
+        }
+    }
+
+    /// Software model of `GF2P8AFFINEQB`'s per-byte affine transform: output bit `i` is
+    /// `parity(matrix.byte[7 - i] & x) ^ imm.bit[i]`. The well-known identity matrix constant
+    /// `0x0102040810204080` acts as the identity under this model (checked below), anchoring the bit
+    /// order to Intel's definition.
+    fn gf2p8affineqb(x: u8, matrix: u64, imm: u8) -> u8 {
+        let rows = matrix.to_le_bytes();
+        let mut out = 0u8;
+        for i in 0..8 {
+            let bit = ((rows[7 - i] & x).count_ones() & 1) as u8;
+            out |= (bit ^ ((imm >> i) & 1)) << i;
+        }
+        out
+    }
+
+    /// Reference retrieval word: bit `p` is `parity(coeff & plane_window[p])`.
+    fn word_reference(coeff: u64, window: &[u64; PLANES]) -> u8 {
+        let mut word = 0u8;
+        for (p, &plane) in window.iter().enumerate() {
+            word |= (((coeff & plane).count_ones() & 1) as u8) << p;
+        }
+        word
+    }
+
+    /// Scalar mirror of the `GF2P8AFFINEQB` kernel in [`RibbonMap::retrieval_word_gfni`], using the
+    /// emulated instruction. If this equals [`word_reference`], the real x86 kernel is correct too.
+    fn word_gfni_emulated(coeff: u64, window: &[u64; PLANES]) -> u8 {
+        let mut folded = [0u8; PLANES];
+        for (p, &plane) in window.iter().enumerate() {
+            let mut q = coeff & plane;
+            q ^= q >> 32;
+            q ^= q >> 16;
+            q ^= q >> 8;
+            folded[p] = q as u8;
+        }
+        gf2p8affineqb(0xFF, u64::from_le_bytes(folded), 0).reverse_bits()
+    }
+
+    #[test]
+    fn gf2p8affineqb_identity_constant() {
+        for x in 0u16..256 {
+            assert_eq!(gf2p8affineqb(x as u8, 0x0102_0408_1020_4080, 0), x as u8);
+        }
+    }
+
+    #[test]
+    fn gfni_kernel_matches_reference() {
+        // Proves the GF2P8AFFINEQB decode reproduces the scalar plane-parity word exactly.
+        let mut state = 0xF00D_BABE_1234_5678u64;
+        for _ in 0..2_000_000 {
+            let coeff = splitmix64(&mut state);
+            let mut window = [0u64; PLANES];
+            for w in &mut window {
+                *w = splitmix64(&mut state);
+            }
+            assert_eq!(
+                word_gfni_emulated(coeff, &window),
+                word_reference(coeff, &window)
+            );
+        }
     }
 }

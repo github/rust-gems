@@ -23,11 +23,20 @@ crate keeps that machinery but changes what those bits mean.
   variables — columns no key pivots on — are filled with **random values**. A present key always
   reads back zero there; an absent key reads pseudo-random bits and is rejected ~3/4 of the time,
   with no fingerprint hash to store.
+* **Sparse coefficients keep construction light.** Each coefficient is bit 0 plus a handful of
+  positions cut from the hash as 6-bit indices (~9 set bits). With the interleaved decode below the
+  lookup cost is independent of the weight, so this is a construction knob: fewer indices trade
+  construction success against the maximum deviation.
+* **Interleaved storage for `GF2P8AFFINEQB`.** The solution is stored bit-sliced, as the Ribbon
+  paper proposes: the 8 bit-planes of each 64-column block sit in 8 consecutive `u64`s (one cache
+  line), so retrieval-word bit `p` is `parity(coeff & plane_p_window)`. On x86 with GFNI+AVX-512 all
+  8 parities become a single `GF2P8AFFINEQB`; elsewhere a portable scalar reduction runs. Both paths
+  are validated bit-for-bit against each other.
 
 ```text
-word = XOR_{j : bit j of coeff(k) set} solution[start(k) + j]   // 8 bits
-        = deviation(k)                                          // top 2 bits are zero
-value = values[start(k) + (word & 0x3F)]
+word[p] = parity(coeff & plane_p_window(start))   // 8 planes -> 1 GF2P8AFFINEQB on x86
+        = deviation                               // top 2 bits are zero for present keys
+value   = values[start + (word & 0x3F)]
 ```
 
 ## Properties
@@ -38,8 +47,8 @@ value = values[start(k) + (word & 0x3F)]
 * **Compact**: ~`1.18` slots/key (load factor ~0.85); each slot costs one byte of retrieval data
   plus `N` bytes of value, i.e. ~`(1 + N) · 9.4` bits/key. The value width `N` is **unbounded** —
   values live in their own array.
-* **Fast `O(1)` lookups**: one windowed dot product over a 64-bit coefficient, a 2-bit fingerprint
-  check, and a single value load.
+* **Fast `O(1)` lookups**: eight plane parities (one `GF2P8AFFINEQB` on x86, else a scalar
+  reduction), a 2-bit zero-check, and a single value load.
 * **Static**: built once from all keys; not modifiable afterwards.
 
 ## Usage
