@@ -2,6 +2,7 @@
 //!
 //! Run with e.g. `cargo run --release --example bench -- 10000000`.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use ribbon_map::RibbonMap;
@@ -14,58 +15,115 @@ fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-fn bench(n: usize) {
-    let mut state = 0x1234_5678_9abc_def0 ^ n as u64;
-    let keys: Vec<u64> = (0..n).map(|_| splitmix64(&mut state)).collect();
-    let values: Vec<u32> = (0..n as u32)
+fn bench(num_keys: usize) {
+    let mut state = 0x1234_5678_9abc_def0 ^ num_keys as u64;
+    let keys: Vec<u64> = (0..num_keys).map(|_| splitmix64(&mut state)).collect();
+    let values: Vec<u32> = (0..num_keys as u32)
         .map(|i| i.wrapping_mul(31).wrapping_add(7))
         .collect();
 
     let t = Instant::now();
-    let map = RibbonMap::try_construct(&keys, &values).expect("construction succeeds");
-    let build_s = t.elapsed().as_secs_f64();
+    let ribbon = RibbonMap::try_construct(&keys, &values).expect("construction succeeds");
+    let ribbon_build_s = t.elapsed().as_secs_f64();
 
-    // Positive lookups (all keys present).
+    // Positive lookups (all keys present) for RibbonMap.
     let t = Instant::now();
-    let mut checksum = 0u64;
+    let mut ribbon_checksum = 0u64;
     for &k in &keys {
-        if let Some(v) = map.get(k) {
-            checksum = checksum.wrapping_add(*v as u64);
+        if let Some(v) = ribbon.get(k) {
+            ribbon_checksum = ribbon_checksum.wrapping_add(*v as u64);
         }
     }
-    let pos_s = t.elapsed().as_secs_f64();
+    let ribbon_pos_s = t.elapsed().as_secs_f64();
 
-    // Negative lookups (disjoint key set).
-    let absent: Vec<u64> = (0..n).map(|_| splitmix64(&mut state)).collect();
+    // Negative lookups (disjoint key set) for RibbonMap.
+    let absent: Vec<u64> = (0..num_keys).map(|_| splitmix64(&mut state)).collect();
     let t = Instant::now();
-    let mut hits = 0u64;
+    let mut ribbon_hits = 0u64;
     for &k in &absent {
-        if map.get(k).is_some() {
-            hits += 1;
+        if ribbon.get(k).is_some() {
+            ribbon_hits += 1;
         }
     }
-    let neg_s = t.elapsed().as_secs_f64();
+    let ribbon_neg_s = t.elapsed().as_secs_f64();
+
+    let t = Instant::now();
+    let mut hash = HashMap::with_capacity(num_keys);
+    for (&k, &v) in keys.iter().zip(&values) {
+        hash.insert(k, v);
+    }
+    let hash_build_s = t.elapsed().as_secs_f64();
+
+    // Positive lookups (all keys present) for HashMap.
+    let t = Instant::now();
+    let mut hash_checksum = 0u64;
+    for &k in &keys {
+        if let Some(v) = hash.get(&k) {
+            hash_checksum = hash_checksum.wrapping_add(*v as u64);
+        }
+    }
+    let hash_pos_s = t.elapsed().as_secs_f64();
+
+    // Negative lookups (disjoint key set) for HashMap.
+    let t = Instant::now();
+    let mut hash_hits = 0u64;
+    for &k in &absent {
+        if hash.get(&k).is_some() {
+            hash_hits += 1;
+        }
+    }
+    let hash_neg_s = t.elapsed().as_secs_f64();
+
+    let keys_f64 = num_keys as f64;
+    let ribbon_slots_per_key = if num_keys == 0 {
+        0.0
+    } else {
+        ribbon.slot_count() as f64 / keys_f64
+    };
 
     println!(
-        "u32 n={:>10}  build {:>6.2} Ms/s ({:>5.2}s)  pos {:>6.1} M/s  neg {:>6.1} M/s  \
+        "u32 keys={:>10}",
+        num_keys,
+    );
+    println!(
+        "  RibbonMap: build {:>6.2} Ms/s ({:>5.2}s)  pos {:>6.1} M/s  neg {:>6.1} M/s  \
          {:>4.1} bits/key  slots/key {:.3}  (checksum {}, neg_fp {:.3})",
-        n,
-        n as f64 / build_s / 1e6,
-        build_s,
-        n as f64 / pos_s / 1e6,
-        n as f64 / neg_s / 1e6,
-        map.bits_per_key(),
-        map.slot_count() as f64 / n as f64,
-        checksum,
-        hits as f64 / n as f64,
+        keys_f64 / ribbon_build_s / 1e6,
+        ribbon_build_s,
+        keys_f64 / ribbon_pos_s / 1e6,
+        keys_f64 / ribbon_neg_s / 1e6,
+        ribbon.bits_per_key(),
+        ribbon_slots_per_key,
+        ribbon_checksum,
+        if num_keys == 0 {
+            0.0
+        } else {
+            ribbon_hits as f64 / keys_f64
+        },
+    );
+    println!(
+        "  HashMap:  build {:>6.2} Ms/s ({:>5.2}s)  pos {:>6.1} M/s  neg {:>6.1} M/s  \
+         {:>4} bits/key  slots/key {:>5}  (checksum {}, neg_fp {:.3})",
+        keys_f64 / hash_build_s / 1e6,
+        hash_build_s,
+        keys_f64 / hash_pos_s / 1e6,
+        keys_f64 / hash_neg_s / 1e6,
+        "n/a",
+        "n/a",
+        hash_checksum,
+        if num_keys == 0 {
+            0.0
+        } else {
+            hash_hits as f64 / keys_f64
+        },
     );
 }
 
 fn main() {
-    let n: usize = std::env::args()
+    let num_keys: usize = std::env::args()
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(10_000_000);
 
-    bench(n);
+    bench(num_keys);
 }
