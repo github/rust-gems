@@ -134,6 +134,10 @@ const MAX_ITERATIONS: usize = 100;
 /// The golden-ratio odd constant used to derive a second, independent hash per key.
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
 
+/// Key stored in slots that no key pivots on. A pre-hashed key colliding with it is a `~2^-64`
+/// event, so an empty slot reliably rejects a lookup by key mismatch.
+const SENTINEL_KEY: u64 = 0;
+
 /// A static filter+map from `u64` keys to values of type `V` built as a ribbon map.
 ///
 /// Build one with [`RibbonMap::try_construct`] and query it with [`RibbonMap::get`]. See the
@@ -152,9 +156,11 @@ pub struct RibbonMap<V> {
     /// lookup loads one block plus the next and reconstructs the retrieval word with a single
     /// `GF2P8AFFINEQB` on x86. Two trailing padding blocks let any window load block `g` and `g + 1`.
     planes: Vec<u64>,
-    /// Entries indexed by diagonal (pivot) slot. A slot is `Some((key, value))` only when a key
-    /// pivots there; absent-key lookups that land on other slots are rejected by key mismatch.
-    entries: Vec<Option<(u64, V)>>,
+    /// Entries indexed by diagonal (pivot) slot: `(key, value)` for the key that pivots there, or
+    /// `(SENTINEL_KEY, filler)` for slots no key owns. Dropping the `Option` wrapper (which had no
+    /// niche for `(u64, V)` and cost 8 extra bytes per slot) roughly halves this array; absent-key
+    /// lookups that land on other slots are rejected by key mismatch.
+    entries: Vec<(u64, V)>,
 }
 
 impl<V: Clone> RibbonMap<V> {
@@ -216,7 +222,12 @@ impl<V: Clone> RibbonMap<V> {
         // value) pair of the key that landed on the diagonal at column `i`.
         let mut row_coeff = vec![0u64; slots];
         let mut row_rhs = vec![0u8; slots];
-        let mut entries: Vec<Option<(u64, V)>> = vec![None; slots];
+        // Empty slots hold the sentinel key plus a filler value (never read: an empty slot rejects by
+        // key mismatch). With no keys the map short-circuits in `get`, so an empty vec is fine.
+        let mut entries: Vec<(u64, V)> = match values.first() {
+            Some(filler) => vec![(SENTINEL_KEY, filler.clone()); slots],
+            None => Vec::new(),
+        };
 
         for ki in &infos {
             let start = ki.start as usize;
@@ -245,7 +256,7 @@ impl<V: Clone> RibbonMap<V> {
                     row_coeff[i] = coeff;
                     row_rhs[i] = word ^ acc;
                     let idx = ki.idx as usize;
-                    entries[i] = Some((keys[idx], values[idx].clone()));
+                    entries[i] = (keys[idx], values[idx].clone());
                     break;
                 }
                 // Eliminate against the row already on this diagonal and keep searching.
@@ -288,7 +299,6 @@ impl<V: Clone> RibbonMap<V> {
 }
 
 impl<V> RibbonMap<V> {
-
     /// Looks up `key`, returning `Some(value)` if it is present and `None` otherwise.
     ///
     /// For a key from the constructing set this returns its stored value. For any other key, the
@@ -306,7 +316,7 @@ impl<V> RibbonMap<V> {
         }
         let deviation = (word & DEVIATION_MASK) as usize;
         let idx = start + deviation;
-        let (stored_key, value) = self.entries[idx].as_ref()?;
+        let (stored_key, value) = &self.entries[idx];
         if *stored_key == key {
             Some(value)
         } else {
@@ -401,7 +411,7 @@ impl<V> RibbonMap<V> {
 
     /// Heap memory used by the retrieval and entry arrays, in bytes.
     pub fn memory_usage(&self) -> usize {
-        self.planes.len() * 8 + self.entries.len() * std::mem::size_of::<Option<(u64, V)>>()
+        self.planes.len() * 8 + self.entries.len() * std::mem::size_of::<(u64, V)>()
     }
 
     /// Average number of bits stored per key (total array size in bits divided by key count).
@@ -562,7 +572,10 @@ mod tests {
 
         let absent = distinct_keys(n, 0xABCD);
         let hits = absent.iter().filter(|&&k| map.get(k).is_some()).count();
-        assert_eq!(hits, 0, "absent keys must not match stored key+value entries");
+        assert_eq!(
+            hits, 0,
+            "absent keys must not match stored key+value entries"
+        );
     }
 
     #[test]

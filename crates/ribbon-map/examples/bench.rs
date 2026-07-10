@@ -117,10 +117,7 @@ fn bench(num_keys: usize) {
         ribbon.slot_count() as f64 / keys_f64
     };
 
-    println!(
-        "u32 keys={:>10}",
-        num_keys,
-    );
+    println!("u32 keys={:>10}", num_keys,);
     println!(
         "  RibbonMap: build {:>6.2} Ms/s ({:>5.2}s)  pos {:>6.1} M/s  neg {:>6.1} M/s  \
          {:>4.1} bits/key  slots/key {:.3}  (checksum {}, neg_hit {:.3})",
