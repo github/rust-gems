@@ -36,7 +36,7 @@
 //!   falls entirely on empty columns. Widen the zero-checked prefix for stronger rejection.
 //!
 //! A query therefore reads the 8-bit retrieval word `w = XOR of the windowed `X` slots`, rejects the
-//! key unless its top 2 bits are zero, then returns `values[s(k) + (w & 0x3F)]`.
+//! key unless its top 2 bits are zero, then checks whether slot `s(k) + (w & 0x3F)` stores that key.
 //!
 //! # Why the deviation fits in 6 bits
 //!
@@ -61,14 +61,15 @@
 //!
 //! # Properties
 //!
-//! * **Filter + map.** [`RibbonMap::get`] returns `Some(value)` for every inserted key and rejects
-//!   absent keys via the 2-bit zero-check with probability ~3/4 (the rest are false positives that
-//!   return an arbitrary value).
+//! * **Exact map semantics.** [`RibbonMap::get`] returns `Some(value)` for every inserted key and
+//!   `None` for absent keys by checking that the reconstructed slot stores the queried key.
+//! * **Fast early rejection.** The 2-bit zero-check still rejects ~3/4 of absent keys before the
+//!   key-compare/value path is touched.
 //! * **Compact.** ~`1 / LOAD_FACTOR` slots per key; each slot costs one byte of retrieval data plus
-//!   `size_of::<V>()` bytes of value, i.e.
-//!   ~`(1 + size_of::<V>()) * 8 / LOAD_FACTOR` bits per key.
+//!   8 bytes of stored key plus `size_of::<V>()` bytes of value (plus enum/layout overhead), i.e.
+//!   roughly `((1 + 8 + size_of::<V>()) * 8) / LOAD_FACTOR` bits per key.
 //! * **`O(1)` lookups**: eight plane parities (one `GF2P8AFFINEQB` on x86, else a scalar reduction)
-//!   reconstruct the retrieval word, then a 2-bit zero-check and a single value load.
+//!   reconstruct the retrieval word, then a 2-bit zero-check, key compare, and value load.
 //! * **Static**: built once from all keys; not modifiable afterwards.
 //!
 //! # Example
@@ -151,9 +152,9 @@ pub struct RibbonMap<V> {
     /// lookup loads one block plus the next and reconstructs the retrieval word with a single
     /// `GF2P8AFFINEQB` on x86. Two trailing padding blocks let any window load block `g` and `g + 1`.
     planes: Vec<u64>,
-    /// Values indexed by diagonal (pivot) slot. Only the `len` pivot slots are meaningful; the rest
-    /// are unused padding that absent-key false positives may return.
-    values: Vec<V>,
+    /// Entries indexed by diagonal (pivot) slot. A slot is `Some((key, value))` only when a key
+    /// pivots there; absent-key lookups that land on other slots are rejected by key mismatch.
+    entries: Vec<Option<(u64, V)>>,
 }
 
 impl<V: Clone> RibbonMap<V> {
@@ -211,15 +212,11 @@ impl<V: Clone> RibbonMap<V> {
         infos.sort_unstable_by_key(|ki| ki.start);
 
         // Incremental Gaussian elimination. `row_coeff[i] != 0` marks a slot whose pivot is column
-        // `i`; `row_rhs[i]` is that row's reduced retrieval word. `values_arr[i]` holds the value of
-        // the key that landed on the diagonal at column `i`.
+        // `i`; `row_rhs[i]` is that row's reduced retrieval word. `entries[i]` holds the (key,
+        // value) pair of the key that landed on the diagonal at column `i`.
         let mut row_coeff = vec![0u64; slots];
         let mut row_rhs = vec![0u8; slots];
-        let mut values_arr = if values.is_empty() {
-            Vec::new()
-        } else {
-            vec![values[0].clone(); slots]
-        };
+        let mut entries: Vec<Option<(u64, V)>> = vec![None; slots];
 
         for ki in &infos {
             let start = ki.start as usize;
@@ -247,7 +244,8 @@ impl<V: Clone> RibbonMap<V> {
                     let word = deviation as u8;
                     row_coeff[i] = coeff;
                     row_rhs[i] = word ^ acc;
-                    values_arr[i] = values[ki.idx as usize].clone();
+                    let idx = ki.idx as usize;
+                    entries[i] = Some((keys[idx], values[idx].clone()));
                     break;
                 }
                 // Eliminate against the row already on this diagonal and keep searching.
@@ -284,18 +282,18 @@ impl<V: Clone> RibbonMap<V> {
             slots,
             len: keys.len(),
             planes: interleave(&solution),
-            values: values_arr,
+            entries,
         })
     }
 }
 
 impl<V> RibbonMap<V> {
 
-    /// Looks up `key`, returning `Some(value)` if it is (probably) present and `None` otherwise.
+    /// Looks up `key`, returning `Some(value)` if it is present and `None` otherwise.
     ///
-    /// For a key from the constructing set this always returns its stored value. For any other key
-    /// the 2-bit zero-check rejects it with probability ~3/4; the rest are false positives that
-    /// return an arbitrary value.
+    /// For a key from the constructing set this returns its stored value. For any other key, the
+    /// 2-bit zero-check often rejects early; if not, the stored key at the reconstructed slot is
+    /// compared to guarantee exact membership semantics.
     #[inline]
     pub fn get(&self, key: u64) -> Option<&V> {
         if self.len == 0 {
@@ -307,7 +305,13 @@ impl<V> RibbonMap<V> {
             return None;
         }
         let deviation = (word & DEVIATION_MASK) as usize;
-        Some(&self.values[start + deviation])
+        let idx = start + deviation;
+        let (stored_key, value) = self.entries[idx].as_ref()?;
+        if *stored_key == key {
+            Some(value)
+        } else {
+            None
+        }
     }
 
     /// Reconstructs the 8-bit retrieval word for a key's window: bit `p` is the parity of the
@@ -395,9 +399,9 @@ impl<V> RibbonMap<V> {
         self.slots
     }
 
-    /// Heap memory used by the retrieval and value arrays, in bytes.
+    /// Heap memory used by the retrieval and entry arrays, in bytes.
     pub fn memory_usage(&self) -> usize {
-        self.planes.len() * 8 + self.values.len() * std::mem::size_of::<V>()
+        self.planes.len() * 8 + self.entries.len() * std::mem::size_of::<Option<(u64, V)>>()
     }
 
     /// Average number of bits stored per key (total array size in bits divided by key count).
@@ -550,20 +554,15 @@ mod tests {
     }
 
     #[test]
-    fn absent_keys_are_mostly_rejected() {
-        // The 2-bit zero-check should reject ~3/4 of absent keys.
+    fn absent_keys_are_rejected() {
         let n = 200_000;
         let keys = distinct_keys(n, 11);
         let values = make_values::<6>(n);
         let map = RibbonMap::try_construct(&keys, &values).unwrap();
 
         let absent = distinct_keys(n, 0xABCD);
-        let false_positives = absent.iter().filter(|&&k| map.get(k).is_some()).count();
-        let rate = false_positives as f64 / n as f64;
-        assert!(
-            (0.20..0.30).contains(&rate),
-            "false positive rate {rate} not close to 1/4"
-        );
+        let hits = absent.iter().filter(|&&k| map.get(k).is_some()).count();
+        assert_eq!(hits, 0, "absent keys must not match stored key+value entries");
     }
 
     #[test]
@@ -571,9 +570,9 @@ mod tests {
         let keys = distinct_keys(1_000_000, 7);
         let values = make_values::<4>(keys.len());
         let map = RibbonMap::try_construct(&keys, &values).unwrap();
-        // ~1/0.85 slots/key * (1 + 4) bytes * 8 bits ≈ 47 bits/key.
+        // With key+value entries, per-slot storage is significantly larger than value-only storage.
         assert!(
-            map.bits_per_key() < 50.0,
+            map.bits_per_key() < 300.0,
             "bits_per_key={} too high",
             map.bits_per_key()
         );

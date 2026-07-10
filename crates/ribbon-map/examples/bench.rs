@@ -3,6 +3,7 @@
 //! Run with e.g. `cargo run --release --example bench -- 10000000`.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::time::Instant;
 
 use ribbon_map::RibbonMap;
@@ -13,6 +14,40 @@ fn splitmix64(state: &mut u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
+}
+
+#[inline]
+fn murmur64(mut h: u64) -> u64 {
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    h ^= h >> 33;
+    h
+}
+
+#[derive(Default)]
+struct RibbonHasher {
+    hash: u64,
+}
+
+impl Hasher for RibbonHasher {
+    fn finish(&self) -> u64 {
+        self.hash
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        // Keys in this benchmark are always u64. Keep a deterministic fallback for safety.
+        let mut h = 0u64;
+        for &b in bytes {
+            h = h.wrapping_mul(0x100_0000_01B3).wrapping_add(b as u64);
+        }
+        self.hash = murmur64(h);
+    }
+
+    fn write_u64(&mut self, i: u64) {
+        self.hash = murmur64(i);
+    }
 }
 
 fn bench(num_keys: usize) {
@@ -48,7 +83,8 @@ fn bench(num_keys: usize) {
     let ribbon_neg_s = t.elapsed().as_secs_f64();
 
     let t = Instant::now();
-    let mut hash = HashMap::with_capacity(num_keys);
+    let mut hash: HashMap<u64, u32, BuildHasherDefault<RibbonHasher>> =
+        HashMap::with_capacity_and_hasher(num_keys, BuildHasherDefault::default());
     for (&k, &v) in keys.iter().zip(&values) {
         hash.insert(k, v);
     }
@@ -87,7 +123,7 @@ fn bench(num_keys: usize) {
     );
     println!(
         "  RibbonMap: build {:>6.2} Ms/s ({:>5.2}s)  pos {:>6.1} M/s  neg {:>6.1} M/s  \
-         {:>4.1} bits/key  slots/key {:.3}  (checksum {}, neg_fp {:.3})",
+         {:>4.1} bits/key  slots/key {:.3}  (checksum {}, neg_hit {:.3})",
         keys_f64 / ribbon_build_s / 1e6,
         ribbon_build_s,
         keys_f64 / ribbon_pos_s / 1e6,
@@ -103,7 +139,7 @@ fn bench(num_keys: usize) {
     );
     println!(
         "  HashMap:  build {:>6.2} Ms/s ({:>5.2}s)  pos {:>6.1} M/s  neg {:>6.1} M/s  \
-         {:>4} bits/key  slots/key {:>5}  (checksum {}, neg_fp {:.3})",
+         {:>4} bits/key  slots/key {:>5}  (checksum {}, neg_hit {:.3})",
         keys_f64 / hash_build_s / 1e6,
         hash_build_s,
         keys_f64 / hash_pos_s / 1e6,
