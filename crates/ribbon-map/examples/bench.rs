@@ -14,21 +14,15 @@ fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-fn bench<const N: usize>(n: usize) {
+fn bench(n: usize) {
     let mut state = 0x1234_5678_9abc_def0 ^ n as u64;
     let keys: Vec<u64> = (0..n).map(|_| splitmix64(&mut state)).collect();
-    let values: Vec<[u8; N]> = (0..n)
-        .map(|i| {
-            let mut v = [0u8; N];
-            for (j, b) in v.iter_mut().enumerate() {
-                *b = (i.wrapping_mul(31).wrapping_add(j)) as u8;
-            }
-            v
-        })
+    let values: Vec<u32> = (0..n as u32)
+        .map(|i| i.wrapping_mul(31).wrapping_add(7))
         .collect();
 
     let t = Instant::now();
-    let map = RibbonMap::<N>::try_construct(&keys, &values).expect("construction succeeds");
+    let map = RibbonMap::try_construct(&keys, &values).expect("construction succeeds");
     let build_s = t.elapsed().as_secs_f64();
 
     // Positive lookups (all keys present).
@@ -36,7 +30,7 @@ fn bench<const N: usize>(n: usize) {
     let mut checksum = 0u64;
     for &k in &keys {
         if let Some(v) = map.get(k) {
-            checksum = checksum.wrapping_add(v[0] as u64);
+            checksum = checksum.wrapping_add(*v as u64);
         }
     }
     let pos_s = t.elapsed().as_secs_f64();
@@ -53,9 +47,8 @@ fn bench<const N: usize>(n: usize) {
     let neg_s = t.elapsed().as_secs_f64();
 
     println!(
-        "N={:>2} n={:>10}  build {:>6.2} Ms/s ({:>5.2}s)  pos {:>6.1} M/s  neg {:>6.1} M/s  \
+        "u32 n={:>10}  build {:>6.2} Ms/s ({:>5.2}s)  pos {:>6.1} M/s  neg {:>6.1} M/s  \
          {:>4.1} bits/key  slots/key {:.3}  (checksum {}, neg_fp {:.3})",
-        N,
         n,
         n as f64 / build_s / 1e6,
         build_s,
@@ -74,7 +67,5 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10_000_000);
 
-    bench::<4>(n);
-    bench::<8>(n);
-    bench::<16>(n);
+    bench(n);
 }

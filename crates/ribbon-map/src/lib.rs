@@ -1,5 +1,5 @@
-//! A *ribbon map*: a static, immutable filter+map from a set of distinct `u64` keys to fixed-size
-//! `[u8; N]` values, built on top of a [ribbon
+//! A *ribbon map*: a static, immutable filter+map from a set of distinct `u64` keys to values of
+//! type `V`, built on top of a [ribbon
 //! retrieval](https://arxiv.org/abs/2103.02515) structure (Dillinger, Hübschle-Schneider, Sanders &
 //! Walzer, 2021).
 //!
@@ -65,8 +65,8 @@
 //!   absent keys via the 2-bit zero-check with probability ~3/4 (the rest are false positives that
 //!   return an arbitrary value).
 //! * **Compact.** ~`1 / LOAD_FACTOR` slots per key; each slot costs one byte of retrieval data plus
-//!   `N` bytes of value, i.e. ~`(1 + N) * 8 / LOAD_FACTOR` bits per key. Unlike a binary fuse map the
-//!   value width `N` is unbounded (values live in their own array).
+//!   `size_of::<V>()` bytes of value, i.e.
+//!   ~`(1 + size_of::<V>()) * 8 / LOAD_FACTOR` bits per key.
 //! * **`O(1)` lookups**: eight plane parities (one `GF2P8AFFINEQB` on x86, else a scalar reduction)
 //!   reconstruct the retrieval word, then a 2-bit zero-check and a single value load.
 //! * **Static**: built once from all keys; not modifiable afterwards.
@@ -80,9 +80,9 @@
 //! let keys: Vec<u64> = (0..1000u64).map(|i| i.wrapping_mul(0x9E3779B97F4A7C15)).collect();
 //! let values: Vec<[u8; 4]> = (0..1000u32).map(|i| i.to_le_bytes()).collect();
 //!
-//! let map = RibbonMap::<4>::try_construct(&keys, &values).expect("construction succeeds");
+//! let map = RibbonMap::try_construct(&keys, &values).expect("construction succeeds");
 //! for (k, v) in keys.iter().zip(&values) {
-//!     assert_eq!(map.get(*k), Some(*v));
+//!     assert_eq!(map.get(*k), Some(v));
 //! }
 //! ```
 
@@ -133,12 +133,12 @@ const MAX_ITERATIONS: usize = 100;
 /// The golden-ratio odd constant used to derive a second, independent hash per key.
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
 
-/// A static filter+map from `u64` keys to `[u8; N]` values built as a ribbon map.
+/// A static filter+map from `u64` keys to values of type `V` built as a ribbon map.
 ///
 /// Build one with [`RibbonMap::try_construct`] and query it with [`RibbonMap::get`]. See the
 /// [module documentation](crate) for the underlying algorithm and guarantees.
 #[derive(Clone, Debug)]
-pub struct RibbonMap<const N: usize> {
+pub struct RibbonMap<V> {
     seed: u64,
     /// Number of columns / slots (`m`); always `>= W` and `>= len`.
     slots: usize,
@@ -153,10 +153,10 @@ pub struct RibbonMap<const N: usize> {
     planes: Vec<u64>,
     /// Values indexed by diagonal (pivot) slot. Only the `len` pivot slots are meaningful; the rest
     /// are unused padding that absent-key false positives may return.
-    values: Vec<[u8; N]>,
+    values: Vec<V>,
 }
 
-impl<const N: usize> RibbonMap<N> {
+impl<V: Clone> RibbonMap<V> {
     /// Builds a map associating `keys[i]` with `values[i]`.
     ///
     /// `keys` must be *distinct* `u64`s (typically hashes of the real keys); duplicates make
@@ -165,7 +165,7 @@ impl<const N: usize> RibbonMap<N> {
     ///
     /// # Panics
     /// Panics if `keys.len() != values.len()` or if there are more than `u32::MAX` keys.
-    pub fn try_construct(keys: &[u64], values: &[[u8; N]]) -> Option<Self> {
+    pub fn try_construct(keys: &[u64], values: &[V]) -> Option<Self> {
         assert_eq!(
             keys.len(),
             values.len(),
@@ -193,7 +193,7 @@ impl<const N: usize> RibbonMap<N> {
 
     /// Attempts a single construction with a fixed `seed`. Returns `None` if any key's row is
     /// linearly dependent on earlier ones (the caller then retries with a new seed).
-    fn build(keys: &[u64], values: &[[u8; N]], slots: usize, seed: u64) -> Option<Self> {
+    fn build(keys: &[u64], values: &[V], slots: usize, seed: u64) -> Option<Self> {
         // Derive each key's (start, coefficient) and sort by start. Processing keys in
         // start order is what confines every pivot to its own window (see the module docs).
         let mut infos: Vec<KeyInfo> = keys
@@ -215,7 +215,11 @@ impl<const N: usize> RibbonMap<N> {
         // the key that landed on the diagonal at column `i`.
         let mut row_coeff = vec![0u64; slots];
         let mut row_rhs = vec![0u8; slots];
-        let mut values_arr = vec![[0u8; N]; slots];
+        let mut values_arr = if values.is_empty() {
+            Vec::new()
+        } else {
+            vec![values[0].clone(); slots]
+        };
 
         for ki in &infos {
             let start = ki.start as usize;
@@ -243,7 +247,7 @@ impl<const N: usize> RibbonMap<N> {
                     let word = deviation as u8;
                     row_coeff[i] = coeff;
                     row_rhs[i] = word ^ acc;
-                    values_arr[i] = values[ki.idx as usize];
+                    values_arr[i] = values[ki.idx as usize].clone();
                     break;
                 }
                 // Eliminate against the row already on this diagonal and keep searching.
@@ -283,6 +287,9 @@ impl<const N: usize> RibbonMap<N> {
             values: values_arr,
         })
     }
+}
+
+impl<V> RibbonMap<V> {
 
     /// Looks up `key`, returning `Some(value)` if it is (probably) present and `None` otherwise.
     ///
@@ -290,14 +297,17 @@ impl<const N: usize> RibbonMap<N> {
     /// the 2-bit zero-check rejects it with probability ~3/4; the rest are false positives that
     /// return an arbitrary value.
     #[inline]
-    pub fn get(&self, key: u64) -> Option<[u8; N]> {
+    pub fn get(&self, key: u64) -> Option<&V> {
+        if self.len == 0 {
+            return None;
+        }
         let (start, coeff) = derive(key, self.seed, self.slots);
         let word = self.retrieval_word(start, coeff);
         if (word >> DEVIATION_BITS) != 0 {
             return None;
         }
         let deviation = (word & DEVIATION_MASK) as usize;
-        Some(self.values[start + deviation])
+        Some(&self.values[start + deviation])
     }
 
     /// Reconstructs the 8-bit retrieval word for a key's window: bit `p` is the parity of the
@@ -387,7 +397,7 @@ impl<const N: usize> RibbonMap<N> {
 
     /// Heap memory used by the retrieval and value arrays, in bytes.
     pub fn memory_usage(&self) -> usize {
-        self.planes.len() * 8 + self.values.len() * N
+        self.planes.len() * 8 + self.values.len() * std::mem::size_of::<V>()
     }
 
     /// Average number of bits stored per key (total array size in bits divided by key count).
@@ -507,11 +517,11 @@ mod tests {
     fn assert_roundtrip<const N: usize>(n: usize) {
         let keys = distinct_keys(n, N as u64);
         let values = make_values::<N>(n);
-        let map = RibbonMap::<N>::try_construct(&keys, &values)
+        let map = RibbonMap::try_construct(&keys, &values)
             .unwrap_or_else(|| panic!("construction failed for n={n}, N={N}"));
         assert_eq!(map.len(), n);
         for (k, v) in keys.iter().zip(&values) {
-            assert_eq!(map.get(*k), Some(*v), "mismatch for n={n}, N={N}");
+            assert_eq!(map.get(*k), Some(v), "mismatch for n={n}, N={N}");
         }
     }
 
@@ -545,7 +555,7 @@ mod tests {
         let n = 200_000;
         let keys = distinct_keys(n, 11);
         let values = make_values::<6>(n);
-        let map = RibbonMap::<6>::try_construct(&keys, &values).unwrap();
+        let map = RibbonMap::try_construct(&keys, &values).unwrap();
 
         let absent = distinct_keys(n, 0xABCD);
         let false_positives = absent.iter().filter(|&&k| map.get(k).is_some()).count();
@@ -560,7 +570,7 @@ mod tests {
     fn bits_per_key_is_reasonable() {
         let keys = distinct_keys(1_000_000, 7);
         let values = make_values::<4>(keys.len());
-        let map = RibbonMap::<4>::try_construct(&keys, &values).unwrap();
+        let map = RibbonMap::try_construct(&keys, &values).unwrap();
         // ~1/0.85 slots/key * (1 + 4) bytes * 8 bits ≈ 47 bits/key.
         assert!(
             map.bits_per_key() < 50.0,
@@ -571,7 +581,7 @@ mod tests {
 
     #[test]
     fn empty_map_is_empty() {
-        let map = RibbonMap::<4>::try_construct(&[], &[]).unwrap();
+        let map: RibbonMap<[u8; 4]> = RibbonMap::try_construct(&[], &[]).unwrap();
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
         assert_eq!(map.bits_per_key(), 0.0);
@@ -581,8 +591,8 @@ mod tests {
     fn construction_is_deterministic() {
         let keys = distinct_keys(10_000, 1);
         let values: Vec<[u8; 4]> = (0..keys.len() as u32).map(|i| i.to_le_bytes()).collect();
-        let a = RibbonMap::<4>::try_construct(&keys, &values).unwrap();
-        let b = RibbonMap::<4>::try_construct(&keys, &values).unwrap();
+        let a = RibbonMap::try_construct(&keys, &values).unwrap();
+        let b = RibbonMap::try_construct(&keys, &values).unwrap();
         assert_eq!(a.seed, b.seed);
         for k in &keys {
             assert_eq!(a.get(*k), b.get(*k));
@@ -594,7 +604,7 @@ mod tests {
         // Repeated keys are linearly dependent for every seed, so construction cannot converge.
         let keys = vec![0x1111_2222_3333_4444u64; 100];
         let values = make_values::<4>(keys.len());
-        assert!(RibbonMap::<4>::try_construct(&keys, &values).is_none());
+        assert!(RibbonMap::try_construct(&keys, &values).is_none());
     }
 
     /// Software model of `GF2P8AFFINEQB`'s per-byte affine transform: output bit `i` is
