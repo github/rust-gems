@@ -6,10 +6,9 @@
 //! # From a ribbon filter to a ribbon map
 //!
 //! A ribbon *filter* solves a banded linear system over GF(2): every key `k` hashes to a *start*
-//! column `s(k)`, a width-`W` *coefficient* row `c(k)` (a sparse `W`-bit window that begins at
-//! column `s(k)`), and an `r`-bit *fingerprint*. Construction picks a solution vector `X` (one
-//! `r`-bit word per column) such that, for every key, the windowed dot product reproduces the
-//! fingerprint:
+//! column `s(k)`, a width-`W` *coefficient* row `c(k)` (a `W`-bit window that begins at column
+//! `s(k)`), and an `r`-bit *fingerprint*. Construction picks a solution vector `X` (one `r`-bit word
+//! per column) such that, for every key, the windowed dot product reproduces the fingerprint:
 //!
 //! ```text
 //! XOR_{j : bit j of c(k) set} X[s(k) + j] == fingerprint(k)
@@ -48,14 +47,6 @@
 //! `s + W - 1`. Hence `pivot - s < W`. Construction can still fail if a key's window is *linearly
 //! dependent* on earlier ones (its row eliminates to zero); that is handled by retrying with a fresh
 //! seed, exactly as an ordinary ribbon filter handles it.
-//!
-//! # Sparse coefficients
-//!
-//! Each coefficient is *sparse*: bit 0 plus [`COEFF_INDICES`] positions cut from the hash as 6-bit
-//! indices (~9 set bits). With the interleaved decode below a lookup's cost no longer depends on the
-//! coefficient weight, so sparsity is now a *construction* knob: it keeps elimination light, and
-//! fewer indices trade construction success against the maximum deviation (sparser rows cause longer
-//! elimination chains, pushing the deviation toward the `W`-bit ceiling).
 //!
 //! # Interleaved storage for `GF2P8AFFINEQB`
 //!
@@ -97,7 +88,7 @@
 
 /// Ribbon width: the number of columns a key's coefficient row spans, and the number of distinct
 /// deviations a key can have. It is fixed at 64 so a coefficient is a single `u64` and a deviation
-/// fits in [`DEVIATION_BITS`] bits.
+/// fits in `DEVIATION_BITS` (6) bits.
 pub const W: usize = 64;
 
 /// Bits needed to encode a deviation in `[0, W)`; `log2(W) = 6` for `W = 64`.
@@ -127,24 +118,6 @@ const PLANES: usize = (DEVIATION_BITS + CHECK_BITS) as usize;
 const _: () = assert!(
     PLANES == 8,
     "the interleaved layout packs exactly 8 bit-planes"
-);
-
-/// Bits per window-position index; `log2(W) = 6` for `W = 64`. Each such index, cut from the key's
-/// hash, selects one set bit of the coefficient row.
-const INDEX_BITS: u32 = 6;
-
-/// Number of 6-bit position indices OR-ed into each coefficient row (on top of the always-set bit
-/// 0), giving at most `COEFF_INDICES + 1` set bits. With the interleaved plane-parity decode the
-/// lookup cost is independent of this weight; it governs construction instead. Fewer indices push
-/// construction toward failure and inflate the maximum deviation toward the `W` ceiling (sparser
-/// rows cause longer elimination chains); 8 keeps single-seed construction reliable to tens of
-/// millions of keys at [`LOAD_FACTOR`].
-const COEFF_INDICES: u32 = 8;
-
-const _: () = assert!(1usize << INDEX_BITS == W, "INDEX_BITS must equal log2(W)");
-const _: () = assert!(
-    COEFF_INDICES * INDEX_BITS <= 64,
-    "all position indices must fit in one 64-bit hash"
 );
 
 /// Target load factor (keys per slot). At ~0.85 the maximum deviation stays comfortably below `W`
@@ -188,7 +161,7 @@ impl<const N: usize> RibbonMap<N> {
     ///
     /// `keys` must be *distinct* `u64`s (typically hashes of the real keys); duplicates make
     /// construction fail. Returns `None` only if construction did not converge within
-    /// [`MAX_ITERATIONS`] seeds, which for distinct keys is astronomically unlikely.
+    /// `MAX_ITERATIONS` (100) seeds, which for distinct keys is astronomically unlikely.
     ///
     /// # Panics
     /// Panics if `keys.len() != values.len()` or if there are more than `u32::MAX` keys.
@@ -465,30 +438,16 @@ fn interleave(solution: &[u8]) -> Vec<u64> {
 
 /// Derives a key's `(start, coefficient)` from `seed` and the slot count.
 ///
-/// `start` is drawn uniformly from `[0, slots - W]` (so the width-`W` window fits). The coefficient
-/// is *sparse*: bit 0 is always set (fixing the window's left edge as the pivot origin) and
-/// [`COEFF_INDICES`] further positions are chosen by cutting [`INDEX_BITS`]-bit indices out of an
-/// independent hash. Keeping the weight low is what makes lookups fast (see [`RibbonMap::get`]).
+/// `start` is drawn uniformly from `[0, slots - W]` (so the width-`W` window fits) and the
+/// coefficient is 64 independent hash bits with bit 0 forced to 1 (fixing the window's left edge as
+/// the pivot origin). The row is dense, but with the interleaved plane-parity decode the lookup cost
+/// does not depend on its weight.
 #[inline]
 fn derive(key: u64, seed: u64, slots: usize) -> (usize, u64) {
     let a = mix(key, seed);
     let start = mulhi(a, (slots - W + 1) as u64) as usize;
-    let coeff = sparse_coeff(mix(key, seed.wrapping_add(GOLDEN)));
+    let coeff = mix(key, seed.wrapping_add(GOLDEN)) | 1;
     (start, coeff)
-}
-
-/// Turns a hash into a sparse width-`W` coefficient row: bit 0 (always set) plus [`COEFF_INDICES`]
-/// positions cut from `h` as [`INDEX_BITS`]-bit indices. Indices may collide, so the row has at most
-/// `COEFF_INDICES + 1` set bits.
-#[inline]
-fn sparse_coeff(mut h: u64) -> u64 {
-    const INDEX_MASK: u64 = W as u64 - 1;
-    let mut mask = 1u64;
-    for _ in 0..COEFF_INDICES {
-        mask |= 1u64 << (h & INDEX_MASK);
-        h >>= INDEX_BITS;
-    }
-    mask
 }
 
 /// A reversible 64-bit mix (the finalizer from MurmurHash3).
@@ -636,22 +595,6 @@ mod tests {
         let keys = vec![0x1111_2222_3333_4444u64; 100];
         let values = make_values::<4>(keys.len());
         assert!(RibbonMap::<4>::try_construct(&keys, &values).is_none());
-    }
-
-    #[test]
-    fn sparse_coeff_has_bit0_and_bounded_weight() {
-        // Bit 0 must always be set (the pivot origin), and the row is capped at COEFF_INDICES + 1
-        // set bits so a lookup's dot product stays short.
-        let mut state = 0x0777_0777_0777_0777u64;
-        for _ in 0..100_000 {
-            let coeff = sparse_coeff(splitmix64(&mut state));
-            assert_eq!(coeff & 1, 1, "bit 0 must always be set");
-            assert!(
-                coeff.count_ones() <= COEFF_INDICES + 1,
-                "weight {} exceeds COEFF_INDICES + 1",
-                coeff.count_ones()
-            );
-        }
     }
 
     /// Software model of `GF2P8AFFINEQB`'s per-byte affine transform: output bit `i` is
