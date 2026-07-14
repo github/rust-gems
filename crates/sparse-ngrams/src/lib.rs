@@ -38,7 +38,6 @@
 //! }
 //! ```
 
-mod deque;
 mod extract;
 mod ngram;
 mod table;

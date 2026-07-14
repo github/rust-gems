@@ -1,6 +1,5 @@
 //! Core sparse n-gram extraction algorithm.
 
-use crate::deque::{FixedDeque, PosStateBytes};
 use crate::ngram::NGram;
 use crate::table::{bigram_h, bigram_priority_rolling};
 use crate::MAX_SPARSE_GRAM_SIZE;
@@ -33,8 +32,15 @@ pub fn collect_sparse_grams(content: &[u8]) -> Vec<NGram> {
     buf
 }
 
-/// Deque-based extraction. Writes n-grams into `out` (must have at least
-/// [`max_sparse_grams`]`(content.len())` slots). Returns the count written.
+/// Monotone-deque extraction, with the deque held in fixed ring buffers. Writes n-grams into `out`
+/// (must have at least [`max_sparse_grams`]`(content.len())` slots). Returns the count written.
+///
+/// The boundary candidates form a monotone run, kept in fixed `[_; MAX_SPARSE_GRAM_SIZE]` ring
+/// buffers addressed by a single running depth `tail` — there is no head. Rather than dropping the
+/// oldest candidate up front, the walk-back simply stops at the first candidate too far back to
+/// form a gram of at most `MAX_SPARSE_GRAM_SIZE` bytes; out-of-window candidates are never read and
+/// get overwritten by later pushes (the live window spans fewer than `MAX_SPARSE_GRAM_SIZE`
+/// candidates, so the ring never loses one it still needs).
 ///
 /// A rolling `u64` holds the last 8 bytes of `content` (newest byte in the low byte). A gram is at
 /// most [`MAX_SPARSE_GRAM_SIZE`] bytes and always ends at the current index, so it is exactly the
@@ -50,7 +56,21 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
         return 0;
     }
     assert!(out.len() >= max_sparse_grams(n));
-    let mut queue = FixedDeque::<MAX_SPARSE_GRAM_SIZE>::new();
+    const MASK: usize = MAX_SPARSE_GRAM_SIZE - 1;
+    // Sentinel index for empty ring slots. It is chosen so the "too-large gram" test in the
+    // walk-back (`idx - begin + 1 >= MAX_SPARSE_GRAM_SIZE`) fires for it at every `idx >= 1` — the
+    // subtraction wraps to `idx + MAX_SPARSE_GRAM_SIZE - 2` — so the walk terminates at the bottom
+    // of the stack purely from the stored values, with no separate emptiness check.
+    const EMPTY: u32 = 0u32.wrapping_sub(MAX_SPARSE_GRAM_SIZE as u32 - 2);
+    // Monotone deque of boundary candidates (position index + priority), strictly increasing in
+    // both, held in fixed ring buffers. Only `tail` (the running stack depth) is tracked; a
+    // candidate at depth `d` lives in slot `d & MASK`. The live window never spans
+    // `MAX_SPARSE_GRAM_SIZE` candidates, so overwriting slot `tail & MASK` only clobbers an
+    // out-of-window entry that the walk-back below never reaches.
+    let mut idx_buf = [EMPTY; MAX_SPARSE_GRAM_SIZE];
+    let mut val_buf = [0u32; MAX_SPARSE_GRAM_SIZE];
+    let mut tail = 0usize;
+
     // The rolling window starts holding the first two bytes (the first bigram).
     let mut window = ((content[0] as u64) << 8) | content[1] as u64;
     // `BIGRAM_H` of the most recent byte, carried between positions so consecutive bigrams (which
@@ -67,35 +87,39 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
         let (value, h_b) = bigram_priority_rolling((window >> 8) as u8, window as u8, h);
         h = h_b;
 
-        // Keep produced grams within `MAX_SPARSE_GRAM_SIZE` bytes by dropping the oldest boundary.
-        // To account for the full bigram of the begin state, the delta is incremented by one.
-        if let Some(begin) = queue.front() {
-            if idx - begin.index + 1 >= MAX_SPARSE_GRAM_SIZE as u32 {
-                queue.pop_front();
-            }
-        }
-
         // The bigram (length 2) is always emitted.
         out[w] = window_to_gram(window, 2);
         w += 1;
 
-        // Longer grams: emit one gram per boundary candidate from the back. Stop once a
-        // candidate's priority is not greater than the current bigram's: a strictly smaller
-        // candidate becomes the new left boundary, while an equal one is dropped (a boundary must
-        // be strictly below the interior, so the tied longer gram is redundant).
-        while let Some(begin) = queue.back() {
-            let len = (idx - begin.index + 2) as usize;
-            out[w] = window_to_gram(window, len);
-            w += 1;
-            if begin.value == value {
-                queue.pop_back();
-                break;
-            } else if begin.value < value {
+        // Walk back over the candidates from the tail, emitting one gram each. Stop at the first
+        // candidate too far back to form a gram of at most `MAX_SPARSE_GRAM_SIZE` bytes (this
+        // replaces the front-drop and, via the `EMPTY` sentinel, also terminates at the stack
+        // bottom), or one whose priority is < the current bigram's (it stays as the new left
+        // boundary). Equal-or-larger priorities are dropped, and the current position overwrites
+        // the first dropped slot.
+        let mut t = tail;
+        loop {
+            let slot = t.wrapping_sub(1) & MASK;
+            let begin = idx_buf[slot];
+            if idx.wrapping_sub(begin) + 1 >= MAX_SPARSE_GRAM_SIZE as u32 {
                 break;
             }
-            queue.pop_back();
+            out[w] = window_to_gram(window, (idx.wrapping_sub(begin) + 2) as usize);
+            w += 1;
+            let bval = val_buf[slot];
+            if bval < value {
+                break;
+            }
+            t -= 1;
+            if bval == value {
+                break;
+            }
         }
-        queue.push_back(PosStateBytes { index: idx, value });
+
+        // Push the current position by overwriting the first dropped (or next free) slot.
+        idx_buf[t & MASK] = idx;
+        val_buf[t & MASK] = value;
+        tail = t + 1;
     }
     w
 }
@@ -376,6 +400,20 @@ mod tests {
     fn test_brute_force_diverse() {
         let input: Vec<u8> = (0..200).map(|i| (i % 256) as u8).collect();
         assert_matches_brute_force(&input);
+    }
+
+    #[test]
+    fn test_brute_force_long_ascending() {
+        // Long ascending ASCII runs create monotone priority stretches that grow the deque's
+        // `tail` counter far beyond the ring size, exercising the `EMPTY` sentinel that lets the
+        // walk-back terminate at the stack bottom without a `t > 0` check. Also runs a scan/deque
+        // cross-check on the same input.
+        let input: Vec<u8> = (0..3000u32).map(|i| 33 + (i % 90) as u8).collect();
+        assert_matches_brute_force(&input);
+        assert_eq!(
+            collect_to_vec(&input, collect_sparse_grams_deque),
+            collect_to_vec(&input, collect_sparse_grams_scan),
+        );
     }
 
     #[test]
