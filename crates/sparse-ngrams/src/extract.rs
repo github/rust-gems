@@ -71,17 +71,15 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
     let mut val_buf = [0u32; MAX_SPARSE_GRAM_SIZE];
     let mut tail = 0usize;
 
-    // The rolling window starts holding the first two bytes (the first bigram).
-    let mut window = ((content[0] as u64) << 8) | content[1] as u64;
+    // The rolling window starts with the first byte; each loop iteration shifts in `content[idx]`.
+    let mut window = content[0] as u64;
     // `BIGRAM_H` of the most recent byte, carried between positions so consecutive bigrams (which
     // overlap by one byte) only load one new H value each. Seeded with the first byte's H.
     let mut h = bigram_h(content[0]);
     let mut w = 0usize;
 
     for idx in 1..n as u32 {
-        if idx >= 2 {
-            window = (window << 8) | content[idx as usize] as u64;
-        }
+        window = (window << 8) | content[idx as usize] as u64;
         // The bigram for this position is the low two bytes of the rolling window. `h` is the H
         // value of its first byte, carried over from the previous position; `h_b` feeds the next.
         let (value, h_b) = bigram_priority_rolling((window >> 8) as u8, window as u8, h);
@@ -143,14 +141,12 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
 
     const MASK: usize = MAX_SPARSE_GRAM_SIZE - 1;
     let mut w = 0usize;
-    let mut window = ((content[0] as u64) << 8) | content[1] as u64;
+    let mut window = content[0] as u64;
     let mut h = bigram_h(content[0]);
     // Ring buffer of the most recent bigram priorities, indexed by `idx & MASK`.
     let mut priorities = [0u32; MAX_SPARSE_GRAM_SIZE];
     for idx in 1..n as u32 {
-        if idx >= 2 {
-            window = (window << 8) | content[idx as usize] as u64;
-        }
+        window = (window << 8) | content[idx as usize] as u64;
         let (v1, h_b) = bigram_priority_rolling((window >> 8) as u8, window as u8, h);
         h = h_b;
         priorities[idx as usize & MASK] = v1;
