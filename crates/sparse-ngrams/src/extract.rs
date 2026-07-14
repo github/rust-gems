@@ -1,8 +1,8 @@
 //! Core sparse n-gram extraction algorithm.
 
 use crate::deque::{FixedDeque, PosStateBytes};
-use crate::ngram::{NGram, POLY_HASH_PRIME, POLY_POWERS};
-use crate::table::get_bigram_table;
+use crate::ngram::NGram;
+use crate::table::{bigram_h, bigram_priority_rolling};
 use crate::MAX_SPARSE_GRAM_SIZE;
 
 /// Returns the maximum number of sparse n-grams that can be produced from
@@ -16,9 +16,18 @@ pub const fn max_sparse_grams(content_len: usize) -> usize {
     }
 }
 
+/// Builds the `len`-byte gram ending at the current position from the rolling `window` (newest byte
+/// in the low byte). The gram is the `len` low bytes of `window`; shifting them into the
+/// most-significant bytes gives the big-endian layout [`NGram::from_window`] consumes.
+#[inline]
+fn window_to_gram(window: u64, len: usize) -> NGram {
+    debug_assert!(len <= MAX_SPARSE_GRAM_SIZE);
+    NGram::from_window(window << ((MAX_SPARSE_GRAM_SIZE - len) * 8), len)
+}
+
 /// Collect all sparse n-grams from the input byte slice into a new [`Vec`].
 pub fn collect_sparse_grams(content: &[u8]) -> Vec<NGram> {
-    let mut buf = vec![NGram::from_rolling_hash(0, 0); max_sparse_grams(content.len())];
+    let mut buf = vec![NGram::default(); max_sparse_grams(content.len())];
     let count = collect_sparse_grams_deque(content, &mut buf);
     buf.truncate(count);
     buf
@@ -26,6 +35,11 @@ pub fn collect_sparse_grams(content: &[u8]) -> Vec<NGram> {
 
 /// Deque-based extraction. Writes n-grams into `out` (must have at least
 /// [`max_sparse_grams`]`(content.len())` slots). Returns the count written.
+///
+/// A rolling `u64` holds the last 8 bytes of `content` (newest byte in the low byte). A gram is at
+/// most [`MAX_SPARSE_GRAM_SIZE`] bytes and always ends at the current index, so it is exactly the
+/// `len` low bytes of the window; `window_to_gram` shifts those up to build it straight from
+/// registers, without re-slicing `content`.
 ///
 /// # Panics
 ///
@@ -36,51 +50,47 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
         return 0;
     }
     assert!(out.len() >= max_sparse_grams(n));
-    let table = get_bigram_table();
     let mut queue = FixedDeque::<MAX_SPARSE_GRAM_SIZE>::new();
-    let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE];
-    prefix_hashes[1] = content[0] as u32;
+    // The rolling window starts holding the first two bytes (the first bigram).
+    let mut window = ((content[0] as u64) << 8) | content[1] as u64;
+    // `BIGRAM_H` of the most recent byte, carried between positions so consecutive bigrams (which
+    // overlap by one byte) only load one new H value each. Seeded with the first byte's H.
+    let mut h = bigram_h(content[0]);
     let mut w = 0usize;
 
     for idx in 1..n as u32 {
-        let mask = MAX_SPARSE_GRAM_SIZE - 1;
-        let end_hash = prefix_hashes[idx as usize & mask]
-            .wrapping_mul(POLY_HASH_PRIME)
-            .wrapping_add(content[idx as usize] as u32);
+        if idx >= 2 {
+            window = (window << 8) | content[idx as usize] as u64;
+        }
+        // The bigram for this position is the low two bytes of the rolling window. `h` is the H
+        // value of its first byte, carried over from the previous position; `h_b` feeds the next.
+        let (value, h_b) = bigram_priority_rolling((window >> 8) as u8, window as u8, h);
+        h = h_b;
 
-        // Bigram
-        let bigram_hash = end_hash
-            .wrapping_sub(prefix_hashes[(idx as usize - 1) & mask].wrapping_mul(POLY_POWERS[2]));
-        out[w] = NGram::from_rolling_hash(bigram_hash, 2);
-        w += 1;
-
-        let v1 = table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
-
+        // Keep produced grams within `MAX_SPARSE_GRAM_SIZE` bytes by dropping the oldest boundary.
+        // To account for the full bigram of the begin state, the delta is incremented by one.
         if let Some(begin) = queue.front() {
             if idx - begin.index + 1 >= MAX_SPARSE_GRAM_SIZE as u32 {
                 queue.pop_front();
             }
         }
+
+        // The bigram (length 2) is always emitted.
+        out[w] = window_to_gram(window, 2);
+        w += 1;
+
+        // Longer grams: one per boundary candidate from the back. We emit each, then stop once the
+        // candidate's priority is below the current bigram's (it becomes the new left boundary).
         while let Some(begin) = queue.back() {
-            let start = begin.index as usize - 1;
             let len = (idx - begin.index + 2) as usize;
-            let hash =
-                end_hash.wrapping_sub(prefix_hashes[start & mask].wrapping_mul(POLY_POWERS[len]));
-            out[w] = NGram::from_rolling_hash(hash, len);
+            out[w] = window_to_gram(window, len);
             w += 1;
-            if begin.value == v1 {
-                queue.pop_back();
-                break;
-            } else if begin.value <= v1 {
+            if begin.value < value {
                 break;
             }
             queue.pop_back();
         }
-        queue.push_back(PosStateBytes {
-            index: idx,
-            value: v1,
-        });
-        prefix_hashes[(idx as usize + 1) & mask] = end_hash;
+        queue.push_back(PosStateBytes { index: idx, value });
     }
     w
 }
@@ -88,7 +98,9 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
 /// Queue-free scan-based extraction. Writes n-grams into `out` (must have at least
 /// [`max_sparse_grams`]`(content.len())` slots). Returns the count written.
 ///
-/// Produces identical output (same order) as [`collect_sparse_grams_deque`].
+/// Produces identical output (same order) as [`collect_sparse_grams_deque`]: the boundary
+/// candidates are exactly the positions where a backward scan hits a new suffix minimum, so a
+/// fixed-size ring of recent priorities replaces the monotone deque.
 ///
 /// # Panics
 ///
@@ -100,44 +112,43 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
     }
     assert!(out.len() >= max_sparse_grams(n));
 
-    let table = get_bigram_table();
     const MASK: usize = MAX_SPARSE_GRAM_SIZE - 1;
     let mut w = 0usize;
-    let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE];
-    prefix_hashes[1] = content[0] as u32;
-    let mut priorities = [u16::MAX; MAX_SPARSE_GRAM_SIZE];
+    let mut window = ((content[0] as u64) << 8) | content[1] as u64;
+    let mut h = bigram_h(content[0]);
+    // Ring buffer of the most recent bigram priorities, indexed by `idx & MASK`.
+    let mut priorities = [0u32; MAX_SPARSE_GRAM_SIZE];
     for idx in 1..n as u32 {
-        let end_hash = prefix_hashes[idx as usize & MASK]
-            .wrapping_mul(POLY_HASH_PRIME)
-            .wrapping_add(content[idx as usize] as u32);
-        // Bigram
-        let bigram_hash = end_hash
-            .wrapping_sub(prefix_hashes[(idx as usize - 1) & MASK].wrapping_mul(POLY_POWERS[2]));
-        out[w] = NGram::from_rolling_hash(bigram_hash, 2);
-        w += 1;
-        let v1 = table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
+        if idx >= 2 {
+            window = (window << 8) | content[idx as usize] as u64;
+        }
+        let (v1, h_b) = bigram_priority_rolling((window >> 8) as u8, window as u8, h);
+        h = h_b;
         priorities[idx as usize & MASK] = v1;
-        let mut running_min = u16::MAX;
+
+        // The bigram (length 2) is always emitted.
+        out[w] = window_to_gram(window, 2);
+        w += 1;
+
+        // Scan backwards, tracking the minimum interior priority seen so far. Each new strict
+        // minimum is a boundary candidate; emit its gram while the right boundary `v1` does not
+        // exceed the interior minimum, then stop.
+        let mut running_min = u32::MAX;
         for d in 1..=(MAX_SPARSE_GRAM_SIZE as u32 - 2) {
             if d >= idx {
                 break;
             }
-            let p = idx.wrapping_sub(d) as usize & MASK;
-            let v_p = priorities[p];
+            let v_p = priorities[(idx - d) as usize & MASK];
             if v_p < running_min {
-                running_min = v_p;
-                let start = p.wrapping_sub(1) & MASK;
-                let len = d as usize + 2;
-                let hash =
-                    end_hash.wrapping_sub(prefix_hashes[start].wrapping_mul(POLY_POWERS[len]));
-                out[w] = NGram::from_rolling_hash(hash, len);
-                w += 1;
-                if v_p <= v1 {
+                if running_min < v1 {
                     break;
                 }
+                let len = d as usize + 2;
+                out[w] = window_to_gram(window, len);
+                w += 1;
+                running_min = v_p;
             }
         }
-        prefix_hashes[(idx as usize + 1) & MASK] = end_hash;
     }
     w
 }
@@ -145,11 +156,11 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::table::get_bigram_table;
+    use crate::table::bigram_priority;
     use std::collections::HashSet;
 
     fn collect_to_vec(content: &[u8], f: fn(&[u8], &mut [NGram]) -> usize) -> Vec<NGram> {
-        let mut buf = vec![NGram::from_rolling_hash(0, 0); max_sparse_grams(content.len())];
+        let mut buf = vec![NGram::default(); max_sparse_grams(content.len())];
         let count = f(content, &mut buf);
         buf.truncate(count);
         buf
@@ -157,11 +168,12 @@ mod tests {
 
     /// Brute-force reference implementation.
     ///
-    /// Enumerates all substrings of length 2..=MAX_SPARSE_GRAM_SIZE and emits those
-    /// where every interior bigram priority is strictly greater than `max(left, right)`
-    /// boundary bigram priority. All bigrams (len=2) are always emitted.
+    /// Enumerates all substrings of length 2..=MAX_SPARSE_GRAM_SIZE and emits those where the left
+    /// boundary bigram priority is strictly less than every interior priority and the right
+    /// boundary priority is at most every interior priority. All bigrams (len=2) are always
+    /// emitted. The left/right asymmetry mirrors the extraction algorithm, which processes bigrams
+    /// left to right and treats the current (right) position as the incoming boundary.
     fn brute_force_sparse_grams(content: &[u8]) -> HashSet<NGram> {
-        let table = get_bigram_table();
         let n = content.len();
         let mut result = HashSet::new();
         if n < 2 {
@@ -173,23 +185,22 @@ mod tests {
         }
         // Longer grams: length 3..=MAX_SPARSE_GRAM_SIZE.
         for len in 3..=MAX_SPARSE_GRAM_SIZE {
-            'outer: for start in 0..=n.saturating_sub(len) {
+            for start in 0..=n.saturating_sub(len) {
                 if start + len > n {
                     break;
                 }
-                let left = table[content[start] as usize * 256 + content[start + 1] as usize];
-                let right = table
-                    [content[start + len - 2] as usize * 256 + content[start + len - 1] as usize];
-                let boundary = left.max(right);
-                // Inner bigrams: bytes [start+1,start+2], ..., [start+len-3,start+len-2]
+                let left = bigram_priority(content[start], content[start + 1]);
+                let right =
+                    bigram_priority(content[start + len - 2], content[start + len - 1]);
+                // Interior bigrams: (start+1,start+2), ..., (start+len-3,start+len-2).
+                let mut min_interior = u32::MAX;
                 for k in 1..len - 2 {
-                    let p =
-                        table[content[start + k] as usize * 256 + content[start + k + 1] as usize];
-                    if p <= boundary {
-                        continue 'outer;
-                    }
+                    let p = bigram_priority(content[start + k], content[start + k + 1]);
+                    min_interior = min_interior.min(p);
                 }
-                result.insert(NGram::from_bytes(&content[start..start + len]));
+                if left < min_interior && right <= min_interior {
+                    result.insert(NGram::from_bytes(&content[start..start + len]));
+                }
             }
         }
         result
@@ -226,10 +237,7 @@ mod tests {
         let grams = collect_sparse_grams(input);
         for gram in &grams {
             assert!(gram.len() >= 2, "gram too short: {gram:?}");
-            assert!(
-                gram.len() <= MAX_SPARSE_GRAM_SIZE,
-                "gram too long: {gram:?}"
-            );
+            assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE, "gram too long: {gram:?}");
         }
     }
 
@@ -295,7 +303,7 @@ mod tests {
 
     #[test]
     fn test_scan_equivalence_source_code() {
-        let input = include_bytes!("lib.rs");
+        let input = include_bytes!("extract.rs");
         assert_eq!(
             collect_to_vec(input, collect_sparse_grams_deque),
             collect_to_vec(input, collect_sparse_grams_scan),
@@ -351,6 +359,16 @@ mod tests {
     }
 
     #[test]
+    fn test_brute_force_tie_break() {
+        // Repeated bigrams create exact ties between an interior priority and a boundary; this
+        // exercises the `L < interior && R <= interior` asymmetry where deque, scan and brute
+        // force must agree.
+        assert_matches_brute_force(b"ababababab");
+        assert_matches_brute_force(b"the the the the");
+        assert_matches_brute_force(b"a.b.a.b.a.b.");
+    }
+
+    #[test]
     fn test_brute_force_diverse() {
         let input: Vec<u8> = (0..200).map(|i| (i % 256) as u8).collect();
         assert_matches_brute_force(&input);
@@ -358,7 +376,7 @@ mod tests {
 
     #[test]
     fn test_brute_force_source_code() {
-        let input = include_bytes!("lib.rs");
+        let input = include_bytes!("extract.rs");
         assert_matches_brute_force(input);
     }
 }

@@ -7,12 +7,22 @@
 //! # How it works
 //!
 //! Each consecutive byte pair (bigram) is assigned a priority based on how frequently it occurs
-//! in a large code corpus. A monotone deque tracks potential n-gram boundaries: an n-gram
-//! boundary occurs wherever a bigram has lower priority than all bigrams between it and the
-//! previous boundary.
+//! in a large code corpus (see [`bigram_priority`]). A monotone deque tracks potential n-gram
+//! boundaries: an n-gram boundary occurs wherever a bigram has lower priority than the bigrams
+//! between it and the previous boundary.
+//!
+//! A substring of length 3..=[`MAX_SPARSE_GRAM_SIZE`] is emitted as a sparse n-gram when its left
+//! boundary bigram has a priority strictly below every interior bigram, and its right boundary
+//! bigram has a priority at most every interior bigram. All bigrams are always emitted.
 //!
 //! For a document of N bytes, this produces at most 3(N-1) n-grams: all bigrams plus algorithmically
 //! selected longer n-grams (up to [`MAX_SPARSE_GRAM_SIZE`] bytes).
+//!
+//! # Normalization
+//!
+//! The bigram priority model only scores ASCII byte pairs; any byte with the high bit set resolves
+//! to priority `0`. Callers building a case-insensitive index should normalize input first (fold
+//! uppercase to lowercase, map multi-byte UTF-8 to high-bit-set bytes) before extraction.
 //!
 //! # Example
 //!
@@ -34,11 +44,7 @@ mod ngram;
 mod table;
 
 pub use ngram::NGram;
-
-/// Number of high-frequency bigrams used to build the priority table.
-/// We reserve u16::MAX (65535), since some algorithms need a max value.
-/// We also reserve 0 for all non-frequent bigrams.
-pub const NUM_FREQUENT_BIGRAMS: usize = 65534;
+pub use table::bigram_priority;
 
 /// Maximum length (in bytes) of a sparse n-gram.
 pub const MAX_SPARSE_GRAM_SIZE: usize = 8;
