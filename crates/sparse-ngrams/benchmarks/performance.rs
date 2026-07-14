@@ -15,8 +15,8 @@ fn bench_collect(c: &mut Criterion) {
                 .into_bytes(),
         ),
         (
-            "large_13KB",
-            include_str!("../src/extract.rs").as_bytes().to_vec(),
+            "large_15KB",
+            include_bytes!("fixtures/sample_code.txt").to_vec(),
         ),
     ];
 

@@ -79,13 +79,18 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
         out[w] = window_to_gram(window, 2);
         w += 1;
 
-        // Longer grams: one per boundary candidate from the back. We emit each, then stop once the
-        // candidate's priority is below the current bigram's (it becomes the new left boundary).
+        // Longer grams: emit one gram per boundary candidate from the back. Stop once a
+        // candidate's priority is not greater than the current bigram's: a strictly smaller
+        // candidate becomes the new left boundary, while an equal one is dropped (a boundary must
+        // be strictly below the interior, so the tied longer gram is redundant).
         while let Some(begin) = queue.back() {
             let len = (idx - begin.index + 2) as usize;
             out[w] = window_to_gram(window, len);
             w += 1;
-            if begin.value < value {
+            if begin.value == value {
+                queue.pop_back();
+                break;
+            } else if begin.value < value {
                 break;
             }
             queue.pop_back();
@@ -131,8 +136,8 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
         w += 1;
 
         // Scan backwards, tracking the minimum interior priority seen so far. Each new strict
-        // minimum is a boundary candidate; emit its gram while the right boundary `v1` does not
-        // exceed the interior minimum, then stop.
+        // minimum is a boundary candidate; emit its gram while the right boundary `v1` is strictly
+        // below the interior minimum, then stop.
         let mut running_min = u32::MAX;
         for d in 1..=(MAX_SPARSE_GRAM_SIZE as u32 - 2) {
             if d >= idx {
@@ -140,7 +145,7 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
             }
             let v_p = priorities[(idx - d) as usize & MASK];
             if v_p < running_min {
-                if running_min < v1 {
+                if running_min <= v1 {
                     break;
                 }
                 let len = d as usize + 2;
@@ -168,11 +173,9 @@ mod tests {
 
     /// Brute-force reference implementation.
     ///
-    /// Enumerates all substrings of length 2..=MAX_SPARSE_GRAM_SIZE and emits those where the left
-    /// boundary bigram priority is strictly less than every interior priority and the right
-    /// boundary priority is at most every interior priority. All bigrams (len=2) are always
-    /// emitted. The left/right asymmetry mirrors the extraction algorithm, which processes bigrams
-    /// left to right and treats the current (right) position as the incoming boundary.
+    /// Enumerates all substrings of length 2..=MAX_SPARSE_GRAM_SIZE and emits those where both the
+    /// left and right boundary bigram priorities are strictly less than every interior priority.
+    /// All bigrams (len=2) are always emitted.
     fn brute_force_sparse_grams(content: &[u8]) -> HashSet<NGram> {
         let n = content.len();
         let mut result = HashSet::new();
@@ -198,7 +201,7 @@ mod tests {
                     let p = bigram_priority(content[start + k], content[start + k + 1]);
                     min_interior = min_interior.min(p);
                 }
-                if left < min_interior && right <= min_interior {
+                if left < min_interior && right < min_interior {
                     result.insert(NGram::from_bytes(&content[start..start + len]));
                 }
             }
@@ -361,8 +364,9 @@ mod tests {
     #[test]
     fn test_brute_force_tie_break() {
         // Repeated bigrams create exact ties between an interior priority and a boundary; this
-        // exercises the `L < interior && R <= interior` asymmetry where deque, scan and brute
-        // force must agree.
+        // exercises the both-strict `max(L, R) < interior` rule where deque, scan and brute force
+        // must agree (a gram whose right boundary only ties the smallest interior priority is
+        // dropped as redundant).
         assert_matches_brute_force(b"ababababab");
         assert_matches_brute_force(b"the the the the");
         assert_matches_brute_force(b"a.b.a.b.a.b.");

@@ -22,7 +22,7 @@ Each n-gram is returned as an opaque 32-bit `NGram` key that packs the byte leng
 
 ### Selection criterion
 
-A substring of length 3–8 is emitted as a sparse n-gram when its left boundary bigram priority is strictly less than every interior bigram priority, and its right boundary bigram priority is at most every interior bigram priority. (The left/right asymmetry mirrors the left-to-right extraction, where the current position acts as the incoming right boundary.)
+A substring of length 3–8 is emitted as a sparse n-gram when both its left and right boundary bigram priorities are strictly less than every interior bigram priority.
 
 ## Usage
 
@@ -39,12 +39,12 @@ for gram in &grams {
 
 ## Performance
 
-Throughput on an Apple M4 Max (900 B input):
+Throughput on an Apple M4 Max (the ~15 KB `benchmarks/fixtures/sample_code.txt` corpus):
 
 | Variant | Throughput |
 |---------|-----------|
-| `deque` | ~225 MiB/s |
-| `scan`  | ~329 MiB/s |
+| `deque` | ~220 MiB/s |
+| `scan`  | ~320 MiB/s |
 
 The `scan` variant is ~45% faster than the deque variant by replacing the monotone deque with a fixed-size circular buffer and a suffix-minimum scan.
 

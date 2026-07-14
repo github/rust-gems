@@ -11,9 +11,9 @@
 //! boundaries: an n-gram boundary occurs wherever a bigram has lower priority than the bigrams
 //! between it and the previous boundary.
 //!
-//! A substring of length 3..=[`MAX_SPARSE_GRAM_SIZE`] is emitted as a sparse n-gram when its left
-//! boundary bigram has a priority strictly below every interior bigram, and its right boundary
-//! bigram has a priority at most every interior bigram. All bigrams are always emitted.
+//! A substring of length 3..=[`MAX_SPARSE_GRAM_SIZE`] is emitted as a sparse n-gram when both its
+//! left and right boundary bigrams have a priority strictly below every interior bigram. All
+//! bigrams are always emitted.
 //!
 //! For a document of N bytes, this produces at most 3(N-1) n-grams: all bigrams plus algorithmically
 //! selected longer n-grams (up to [`MAX_SPARSE_GRAM_SIZE`] bytes).
