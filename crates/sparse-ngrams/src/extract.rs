@@ -59,9 +59,9 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
     const MASK: usize = MAX_SPARSE_GRAM_SIZE - 1;
     // Sentinel index for empty ring slots. It is chosen so the "too-large gram" test in the
     // walk-back (`idx - begin + 1 >= MAX_SPARSE_GRAM_SIZE`) fires for it at every `idx >= 1` — the
-    // subtraction wraps to `idx + MAX_SPARSE_GRAM_SIZE - 2` — so the walk terminates at the bottom
+    // subtraction wraps to `idx + MAX_SPARSE_GRAM_SIZE + 1` — so the walk terminates at the bottom
     // of the stack purely from the stored values, with no separate emptiness check.
-    const EMPTY: u32 = 0u32.wrapping_sub(MAX_SPARSE_GRAM_SIZE as u32 - 2);
+    const EMPTY: u32 = 0u32.wrapping_sub(MAX_SPARSE_GRAM_SIZE as u32);
     // Monotone deque of boundary candidates (position index + priority), strictly increasing in
     // both, held in fixed ring buffers. Only `tail` (the running stack depth) is tracked; a
     // candidate at depth `d` lives in slot `d & MASK`. The live window never spans

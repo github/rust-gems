@@ -10,7 +10,7 @@ For background, see:
 
 ## Caveats
 
-The bigram priority model only scores lowercase ASCII byte pairs; any byte with the high bit set resolves to priority `0`. Callers should lowercase and normalize input before extraction (e.g. fold uppercase to lowercase, map non-ASCII bytes to high-bit-set bytes). This makes the implementation suitable for case-insensitive search indexes.
+The bigram priority model only scores index-folded ASCII byte pairs; any byte with the high bit set resolves to priority `0`. Correct output requires index-folding and normalization with the [casefold](../casefold) crate in this workspace before extraction (including folding uppercase to lowercase and mapping non-ASCII bytes to high-bit-set bytes). This makes the implementation suitable for case-insensitive search indexes.
 
 ## How it works
 
