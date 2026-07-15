@@ -239,7 +239,11 @@ mod tests {
     fn test_from_bytes_roundtrip() {
         for len in 2..=MAX_SPARSE_GRAM_SIZE {
             let bytes = vec![b'a'; len];
-            assert_eq!(NGram::from_bytes(&bytes).len(), len, "len mismatch for {len}");
+            assert_eq!(
+                NGram::from_bytes(&bytes).len(),
+                len,
+                "len mismatch for {len}"
+            );
         }
     }
 
@@ -258,7 +262,10 @@ mod tests {
             for b in 0u8..64 {
                 assert!(seen.insert(NGram::from_bytes(&[a, b])), "bigram collision");
                 for c in 0u8..8 {
-                    assert!(seen.insert(NGram::from_bytes(&[a, b, c])), "trigram collision");
+                    assert!(
+                        seen.insert(NGram::from_bytes(&[a, b, c])),
+                        "trigram collision"
+                    );
                 }
             }
         }

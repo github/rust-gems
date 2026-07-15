@@ -26,7 +26,8 @@ const BIGRAM_CODE_SHIFT: u32 = 8;
 
 /// 4-bit correction code per ascii bigram, packed two codes per byte (the even index in the low
 /// nibble). Scaled by `1 << BIGRAM_CODE_SHIFT` and added to the shared per-byte weights.
-static BIGRAM_CODE: &[u8; BIGRAM_ALPHABET * BIGRAM_ALPHABET / 2] = include_bytes!("bigram_code.bin");
+static BIGRAM_CODE: &[u8; BIGRAM_ALPHABET * BIGRAM_ALPHABET / 2] =
+    include_bytes!("bigram_code.bin");
 
 /// Shared per-byte weight. `BIGRAM_H[b]` contributes to the priority of every bigram containing
 /// byte `b`; `3134` is the filler weight for bytes absent from the training data.

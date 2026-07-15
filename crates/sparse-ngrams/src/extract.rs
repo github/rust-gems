@@ -213,8 +213,7 @@ mod tests {
                     break;
                 }
                 let left = bigram_priority(content[start], content[start + 1]);
-                let right =
-                    bigram_priority(content[start + len - 2], content[start + len - 1]);
+                let right = bigram_priority(content[start + len - 2], content[start + len - 1]);
                 // Interior bigrams: (start+1,start+2), ..., (start+len-3,start+len-2).
                 let mut min_interior = u32::MAX;
                 for k in 1..len - 2 {
@@ -260,7 +259,10 @@ mod tests {
         let grams = collect_sparse_grams(input);
         for gram in &grams {
             assert!(gram.len() >= 2, "gram too short: {gram:?}");
-            assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE, "gram too long: {gram:?}");
+            assert!(
+                gram.len() <= MAX_SPARSE_GRAM_SIZE,
+                "gram too long: {gram:?}"
+            );
         }
     }
 
