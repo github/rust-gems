@@ -52,7 +52,7 @@ The factored bigram model computes each priority (instead of reading a large loo
 
 ## Bigram priority model
 
-Priorities come from a compact factored model (~8.5 KB) rather than a full 256×256 lookup table (~64 KB in memory). The ASCII bigram `(a, b)` is scored as `H[a] + H[b] + (code << 8) + 1`, where `H` is a shared 128-entry per-byte weight and `code` is a 4-bit per-bigram correction; a per-bigram index folded into the low bits makes every priority unique while a higher score still means a more frequent bigram. The model was tuned offline against a frequency ranking from a large code corpus (~1.9% inversions vs. the exact ranking).
+Priorities come from a compact factored model (~8.5 KB) rather than a full 256×256 lookup table (~64 KB in memory). The ASCII bigram `(a, b)` is scored as `H[a] + H[b] + (code << 10) + 1`, where `H` is a shared 128-entry per-byte weight and `code` is a 4-bit per-bigram correction; a per-bigram index folded into the low bits makes every priority unique while a higher score still means a more frequent bigram. The model was trained offline against a frequency ranking from a large code corpus (~1.4% inversions vs. the exact ranking).
 
 ## Maximum n-gram length
 
