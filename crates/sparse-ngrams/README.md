@@ -37,6 +37,22 @@ for gram in &grams {
 }
 ```
 
+`collect_sparse_grams` is a convenience wrapper that collects into a `Vec`. To avoid the
+intermediate allocation — streaming grams straight into an index, deduplicating, or filtering —
+call `collect_sparse_grams_deque` (or `collect_sparse_grams_scan`) with your own closure, which is
+invoked once per n-gram in emission order:
+
+```rust
+use sparse_ngrams::{collect_sparse_grams_deque, NGram};
+
+let mut count = 0;
+collect_sparse_grams_deque(b"hello world", |gram: NGram| {
+    count += 1;
+    // ... insert `gram` into an index, hash it, etc.
+});
+assert!(count > 0);
+```
+
 ## Performance
 
 Throughput on an Apple M4 Max (the ~15 KB `benchmarks/fixtures/sample_code.txt` corpus):

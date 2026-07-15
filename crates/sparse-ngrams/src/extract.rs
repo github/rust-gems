@@ -5,7 +5,8 @@ use crate::table::{bigram_h, bigram_priority_rolling};
 use crate::MAX_SPARSE_GRAM_SIZE;
 
 /// Returns the maximum number of sparse n-grams that can be produced from
-/// `content_len` bytes of input. Use this to pre-allocate the output slice.
+/// `content_len` bytes of input. Use this to reserve capacity for the output (e.g. a `Vec` the
+/// emit closure pushes into, or a pre-sized slice it writes).
 #[inline]
 pub const fn max_sparse_grams(content_len: usize) -> usize {
     if content_len < 2 {
@@ -25,15 +26,34 @@ fn window_to_gram(window: u64, len: usize) -> NGram {
 }
 
 /// Collect all sparse n-grams from the input byte slice into a new [`Vec`].
+///
+/// Convenience wrapper over [`collect_sparse_grams_deque`]. For custom output — streaming into a
+/// search index, deduplicating, or filtering without building an intermediate `Vec` — call
+/// [`collect_sparse_grams_deque`] or [`collect_sparse_grams_scan`] directly with your own closure.
 pub fn collect_sparse_grams(content: &[u8]) -> Vec<NGram> {
-    let mut buf = vec![NGram::default(); max_sparse_grams(content.len())];
-    let count = collect_sparse_grams_deque(content, &mut buf);
-    buf.truncate(count);
-    buf
+    // Reserve the exact worst case up front and have the emit closure write straight into the
+    // uninitialized spare capacity, then fix up the length once at the end. This avoids both the
+    // per-gram `push` bookkeeping (capacity check + length bump) and the `truncate`/default-fill of
+    // a pre-sized `vec![_; max]`.
+    let mut out = Vec::with_capacity(max_sparse_grams(content.len()));
+    let spare = out.spare_capacity_mut();
+    let mut w = 0;
+    collect_sparse_grams_deque(content, |gram| {
+        spare[w].write(gram);
+        w += 1;
+    });
+    // SAFETY: `collect_sparse_grams_deque` emits at most `max_sparse_grams(content.len())` grams —
+    // exactly the capacity reserved above — so every write above landed within `spare`, and the
+    // first `w` elements of the allocation are now initialized.
+    unsafe { out.set_len(w) };
+    out
 }
 
-/// Monotone-deque extraction, with the deque held in fixed ring buffers. Writes n-grams into `out`
-/// (must have at least [`max_sparse_grams`]`(content.len())` slots). Returns the count written.
+/// Monotone-deque extraction, with the deque held in fixed ring buffers. Calls `emit` once for
+/// every sparse n-gram, in emission order (all bigrams, plus algorithmically selected longer
+/// grams). `emit` decides what to do with each gram — push it into a `Vec`, write it into a
+/// pre-sized slice, feed it straight into an index, etc. — so no output buffer needs to be sized
+/// or allocated up front.
 ///
 /// The boundary candidates form a monotone run, kept in fixed `[_; MAX_SPARSE_GRAM_SIZE]` ring
 /// buffers addressed by a single running depth `tail` — there is no head. Rather than dropping the
@@ -47,15 +67,18 @@ pub fn collect_sparse_grams(content: &[u8]) -> Vec<NGram> {
 /// `len` low bytes of the window; `window_to_gram` shifts those up to build it straight from
 /// registers, without re-slicing `content`.
 ///
-/// # Panics
+/// ```
+/// use sparse_ngrams::{collect_sparse_grams_deque, NGram};
 ///
-/// Panics if `out` is too small.
-pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
+/// let mut count = 0;
+/// collect_sparse_grams_deque(b"hello world", |_gram: NGram| count += 1);
+/// assert!(count > 0);
+/// ```
+pub fn collect_sparse_grams_deque(content: &[u8], mut emit: impl FnMut(NGram)) {
     let n = content.len();
     if n < 2 {
-        return 0;
+        return;
     }
-    assert!(out.len() >= max_sparse_grams(n));
     const MASK: usize = MAX_SPARSE_GRAM_SIZE - 1;
     // Sentinel index for empty ring slots. It is chosen so the "too-large gram" test in the
     // walk-back (`idx - begin + 1 >= MAX_SPARSE_GRAM_SIZE`) fires for it at every `idx >= 1` — the
@@ -76,7 +99,6 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
     // `BIGRAM_H` of the most recent byte, carried between positions so consecutive bigrams (which
     // overlap by one byte) only load one new H value each. Seeded with the first byte's H.
     let mut h = bigram_h(content[0]);
-    let mut w = 0usize;
 
     for idx in 1..n as u32 {
         window = (window << 8) | content[idx as usize] as u64;
@@ -86,8 +108,7 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
         h = h_b;
 
         // The bigram (length 2) is always emitted.
-        out[w] = window_to_gram(window, 2);
-        w += 1;
+        emit(window_to_gram(window, 2));
 
         // Walk back over the candidates from the tail, emitting one gram each. Stop at the first
         // candidate too far back to form a gram of at most `MAX_SPARSE_GRAM_SIZE` bytes (this
@@ -102,8 +123,10 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
             if idx.wrapping_sub(begin) + 1 >= MAX_SPARSE_GRAM_SIZE as u32 {
                 break;
             }
-            out[w] = window_to_gram(window, (idx.wrapping_sub(begin) + 2) as usize);
-            w += 1;
+            emit(window_to_gram(
+                window,
+                (idx.wrapping_sub(begin) + 2) as usize,
+            ));
             let bval = val_buf[slot];
             if bval < value {
                 break;
@@ -119,28 +142,21 @@ pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
         val_buf[t & MASK] = value;
         tail = t + 1;
     }
-    w
 }
 
-/// Queue-free scan-based extraction. Writes n-grams into `out` (must have at least
-/// [`max_sparse_grams`]`(content.len())` slots). Returns the count written.
+/// Queue-free scan-based extraction. Calls `emit` once for every sparse n-gram, in the same order
+/// as [`collect_sparse_grams_deque`].
 ///
 /// Produces identical output (same order) as [`collect_sparse_grams_deque`]: the boundary
 /// candidates are exactly the positions where a backward scan hits a new suffix minimum, so a
 /// fixed-size ring of recent priorities replaces the monotone deque.
-///
-/// # Panics
-///
-/// Panics if `out` is too small.
-pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
+pub fn collect_sparse_grams_scan(content: &[u8], mut emit: impl FnMut(NGram)) {
     let n = content.len();
     if n < 2 {
-        return 0;
+        return;
     }
-    assert!(out.len() >= max_sparse_grams(n));
 
     const MASK: usize = MAX_SPARSE_GRAM_SIZE - 1;
-    let mut w = 0usize;
     let mut window = content[0] as u64;
     let mut h = bigram_h(content[0]);
     // Ring buffer of the most recent bigram priorities, indexed by `idx & MASK`.
@@ -152,8 +168,7 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
         priorities[idx as usize & MASK] = v1;
 
         // The bigram (length 2) is always emitted.
-        out[w] = window_to_gram(window, 2);
-        w += 1;
+        emit(window_to_gram(window, 2));
 
         // Scan backwards, tracking the minimum interior priority seen so far. Each new strict
         // minimum is a boundary candidate; emit its gram while the right boundary `v1` is strictly
@@ -169,13 +184,11 @@ pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
                     break;
                 }
                 let len = d as usize + 2;
-                out[w] = window_to_gram(window, len);
-                w += 1;
+                emit(window_to_gram(window, len));
                 running_min = v_p;
             }
         }
     }
-    w
 }
 
 #[cfg(test)]
@@ -184,11 +197,10 @@ mod tests {
     use crate::table::bigram_priority;
     use std::collections::HashSet;
 
-    fn collect_to_vec(content: &[u8], f: fn(&[u8], &mut [NGram]) -> usize) -> Vec<NGram> {
-        let mut buf = vec![NGram::default(); max_sparse_grams(content.len())];
-        let count = f(content, &mut buf);
-        buf.truncate(count);
-        buf
+    fn collect_to_vec(run: impl FnOnce(&mut dyn FnMut(NGram))) -> Vec<NGram> {
+        let mut out = Vec::new();
+        run(&mut |gram| out.push(gram));
+        out
     }
 
     /// Brute-force reference implementation.
@@ -300,8 +312,8 @@ mod tests {
     fn test_scan_equivalence_small() {
         for input in [b"" as &[u8], b"x", b"ab", b"abc", b"abcdefgh", b"abcdefghi"] {
             assert_eq!(
-                collect_to_vec(input, collect_sparse_grams_deque),
-                collect_to_vec(input, collect_sparse_grams_scan),
+                collect_to_vec(|emit| collect_sparse_grams_deque(input, emit)),
+                collect_to_vec(|emit| collect_sparse_grams_scan(input, emit)),
                 "mismatch on {:?}",
                 std::str::from_utf8(input).unwrap_or("?")
             );
@@ -312,8 +324,8 @@ mod tests {
     fn test_scan_equivalence_hello_world() {
         let input = b"hello world";
         assert_eq!(
-            collect_to_vec(input, collect_sparse_grams_deque),
-            collect_to_vec(input, collect_sparse_grams_scan),
+            collect_to_vec(|emit| collect_sparse_grams_deque(input, emit)),
+            collect_to_vec(|emit| collect_sparse_grams_scan(input, emit)),
         );
     }
 
@@ -321,8 +333,8 @@ mod tests {
     fn test_scan_equivalence_large() {
         let input: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
         assert_eq!(
-            collect_to_vec(&input, collect_sparse_grams_deque),
-            collect_to_vec(&input, collect_sparse_grams_scan),
+            collect_to_vec(|emit| collect_sparse_grams_deque(&input, emit)),
+            collect_to_vec(|emit| collect_sparse_grams_scan(&input, emit)),
         );
     }
 
@@ -330,8 +342,8 @@ mod tests {
     fn test_scan_equivalence_source_code() {
         let input = include_bytes!("extract.rs");
         assert_eq!(
-            collect_to_vec(input, collect_sparse_grams_deque),
-            collect_to_vec(input, collect_sparse_grams_scan),
+            collect_to_vec(|emit| collect_sparse_grams_deque(input, emit)),
+            collect_to_vec(|emit| collect_sparse_grams_scan(input, emit)),
         );
     }
 
@@ -409,8 +421,8 @@ mod tests {
         let input: Vec<u8> = (0..3000u32).map(|i| 33 + (i % 90) as u8).collect();
         assert_matches_brute_force(&input);
         assert_eq!(
-            collect_to_vec(&input, collect_sparse_grams_deque),
-            collect_to_vec(&input, collect_sparse_grams_scan),
+            collect_to_vec(|emit| collect_sparse_grams_deque(&input, emit)),
+            collect_to_vec(|emit| collect_sparse_grams_scan(&input, emit)),
         );
     }
 
