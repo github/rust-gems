@@ -46,6 +46,7 @@ const MULTIPLICATIVE_HASH: u64 = 0x9E37_79B9_7F4A_7C15;
 /// Use [`NGram::from_bytes`] for one-off hashing, or the rolling 8-byte window helper inside the
 /// extraction loop for amortised O(1) computation per n-gram.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
 pub struct NGram(pub(crate) u32);
 
