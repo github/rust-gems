@@ -68,8 +68,8 @@ pub(crate) fn bigram_priority_rolling(a: u8, b: u8, h_a: u32) -> (u32, u32) {
 
 /// The `BIGRAM_H` weight of a single byte, used to seed [`bigram_priority_rolling`].
 #[inline]
-pub(crate) fn bigram_h(a: u8) -> u32 {
-    BIGRAM_H[(a & (BIGRAM_ALPHABET as u8 - 1)) as usize] as u32
+pub(crate) fn bigram_h(byte: u8) -> u32 {
+    BIGRAM_H[(byte & (BIGRAM_ALPHABET as u8 - 1)) as usize] as u32
 }
 
 /// Reconstructs the frequency-ranking priority of the ascii bigram `(a, b)`. Absent or non-ascii
