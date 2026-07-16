@@ -14,7 +14,7 @@
 //! * **Length** (`len - 2`, bits 24..27): substring byte-lengths range from 2 (bigrams) to
 //!   [`MAX_SPARSE_GRAM_SIZE`] (8), so biasing by 2 fits the 7 possible values into 3 bits.
 //! * **Payload** (bits 0..24): for substrings of at most 3 bytes the bytes are packed
-//!   losslessly (left-aligned, so distinct short grams never collide); longer substrings are
+//!   losslessly (right-aligned in the low bits, most-significant byte first); longer substrings are
 //!   hashed down to 24 bits with a multiplicative hash.
 //!
 //! Because the length lives in its own field, an `NGram` of one size never collides with an
