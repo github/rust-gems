@@ -1,3 +1,119 @@
+// Frozen benchmark corpus for `sparse-ngrams` (see benchmarks/performance.rs).
+// A snapshot of realistic source code, committed so the "large" benchmark input stays
+// fixed and does not drift when the crate sources are edited. Do not regenerate.
+
+//! Bigram priority model.
+//!
+//! Assigns a frequency-based priority to each byte pair, used by the sparse n-gram
+//! extraction algorithm to decide where n-gram boundaries fall.
+//!
+//! Priorities used to be a full 256×256 `u16` table baked from a `bigrams.bin` frequency
+//! ranking (~64kB in memory). They are now reconstructed from a compact *factored* model
+//! (~8.5kB) tuned offline against that ranking. The ascii bigram `(a, b)` is scored as
+//! `BIGRAM_H[a] + BIGRAM_H[b] + (code << BIGRAM_CODE_SHIFT) + 1`, where [`BIGRAM_H`] is a single
+//! shared per-byte weight and `code` is a 4-bit (`0..=15`) per-bigram correction. Bigrams absent
+//! from the training data carry `code == 0` and are not special-cased: they fall back to the bare
+//! factored score, i.e. the model extrapolates a priority for them. The byte index `idx` is folded
+//! into the low 16 bits so every bigram gets a *unique* priority, while a higher score still means
+//! a more frequent bigram (~1.9% inversions vs. the exact ranking).
+
+/// A casefolded indexable byte uses 7 bits for ascii characters; any non-ascii (unicode)
+/// character is expected to have its high bit set. Only ascii bigrams are ever present, so
+/// non-ascii characters always resolve to priority `0`. The model therefore only covers the 128
+/// ascii values per character.
+const BIGRAM_ALPHABET: usize = 128;
+
+/// The per-bigram 4-bit correction code is scaled by `1 << BIGRAM_CODE_SHIFT` and added to the
+/// shared per-byte weights. A plain shift replaces what used to be a lookup into a learned
+/// 16-entry offset table, at a negligible accuracy cost (~1.9% vs ~1.87% inversions).
+const BIGRAM_CODE_SHIFT: u32 = 8;
+
+/// 4-bit correction code per ascii bigram, packed two codes per byte (the even index in the low
+/// nibble). Scaled by `1 << BIGRAM_CODE_SHIFT` and added to the shared per-byte weights.
+static BIGRAM_CODE: &[u8; BIGRAM_ALPHABET * BIGRAM_ALPHABET / 2] = include_bytes!("bigram_code.bin");
+
+/// Shared per-byte weight. `BIGRAM_H[b]` contributes to the priority of every bigram containing
+/// byte `b`; `3134` is the filler weight for bytes absent from the training data.
+static BIGRAM_H: [u16; BIGRAM_ALPHABET] = [
+    3134, 0, 3134, 3134, 3134, 3134, 3134, 478, 3134, 3259, 3982, 3134, 541, 2332, 3134, 3134,
+    3134, 3134, 3134, 243, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 671, 3134, 3134, 3134, 3134,
+    4433, 2411, 3784, 3065, 2238, 2305, 2643, 2950, 3427, 3280, 2982, 2601, 3306, 3261, 3491, 3565,
+    3296, 3431, 3319, 3142, 3121, 3142, 3122, 3090, 3103, 3063, 3153, 3072, 3065, 3208, 3087, 1901,
+    2506, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 3134,
+    3134, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 3134, 2626, 2519, 2739, 2382, 3238,
+    2578, 3803, 3467, 3773, 3752, 3989, 3500, 3524, 3152, 3571, 2639, 3249, 3542, 3437, 3647, 3554,
+    3503, 2503, 3741, 4069, 3831, 3564, 3162, 3137, 3082, 3080, 2860, 2794, 2396, 2852, 2450, 3134,
+];
+
+/// Reconstructs the priority of the ascii bigram `(a, b)`; see [`bigram_priority`]. This rolling
+/// variant avoids re-loading `BIGRAM_H[a]`: consecutive bigrams overlap by one byte, so the caller
+/// passes the `h_b` returned for the previous position as `h_a` and gets `BIGRAM_H[b]` back for the
+/// next one. The `H` value is only used for ascii bytes; for a non-ascii byte the bigram is absent,
+/// so the masked lookup (`b & 0x7f`) merely returns a value that the next step discards.
+#[inline]
+pub(crate) fn bigram_priority_rolling(a: u8, b: u8, h_a: u32) -> (u32, u32) {
+    let h_b = BIGRAM_H[(b & (BIGRAM_ALPHABET as u8 - 1)) as usize] as u32;
+    if (a | b) >= BIGRAM_ALPHABET as u8 {
+        return (0, h_b);
+    }
+    let idx = a as usize * BIGRAM_ALPHABET + b as usize;
+    let code = (BIGRAM_CODE[idx >> 1] >> ((idx & 1) * 4)) & 0xF;
+    // The 4-bit `code` is scaled by `1 << BIGRAM_CODE_SHIFT` (a plain shift in place of an offset
+    // table) and added to the shared per-byte weights. Absent bigrams carry `code == 0`, so they
+    // fall back to the bare factored score `h_a + h_b + 1`. A higher score still means a more
+    // frequent bigram; `base` fits in 16 bits, so the unique per-bigram `idx` in the low 16 bits
+    // keeps every priority unique.
+    let base = h_a + h_b + ((code as u32) << BIGRAM_CODE_SHIFT) + 1;
+    ((base << 16) | idx as u32, h_b)
+}
+
+/// The `BIGRAM_H` weight of a single byte, used to seed [`bigram_priority_rolling`].
+#[inline]
+pub(crate) fn bigram_h(a: u8) -> u32 {
+    BIGRAM_H[(a & (BIGRAM_ALPHABET as u8 - 1)) as usize] as u32
+}
+
+/// Reconstructs the frequency-ranking priority of the ascii bigram `(a, b)`. Absent or non-ascii
+/// bigrams resolve to `0`; present bigrams get a strictly positive, unique priority where a higher
+/// value means a more frequent bigram. This priority is used to split strings into smaller
+/// n-grams.
+pub fn bigram_priority(a: u8, b: u8) -> u32 {
+    bigram_priority_rolling(a, b, bigram_h(a)).0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_ascii_is_zero() {
+        assert_eq!(bigram_priority(0x80, b'a'), 0);
+        assert_eq!(bigram_priority(b'a', 0x80), 0);
+        assert_eq!(bigram_priority(0xff, 0xff), 0);
+    }
+
+    #[test]
+    fn ascii_bigrams_are_positive_and_unique() {
+        // Distinct ascii bigrams get distinct, strictly positive priorities (the `idx` in the low
+        // 16 bits guarantees uniqueness).
+        assert!(bigram_priority(b'a', b'b') > 0);
+        assert_ne!(bigram_priority(b'a', b'b'), bigram_priority(b'b', b'a'));
+        assert_ne!(bigram_priority(b'a', b'b'), bigram_priority(b'a', b'c'));
+    }
+
+    #[test]
+    fn rolling_matches_direct() {
+        // The rolling variant must reproduce the standalone `bigram_priority` for every ascii pair,
+        // and hand back `BIGRAM_H[b]` for the next step.
+        for a in 0u8..128 {
+            for b in 0u8..128 {
+                let (p, h_b) = bigram_priority_rolling(a, b, bigram_h(a));
+                assert_eq!(p, bigram_priority(a, b), "mismatch at ({a}, {b})");
+                assert_eq!(h_b, bigram_h(b), "h_b mismatch at ({a}, {b})");
+            }
+        }
+    }
+}
 //! Compact n-gram representation.
 //!
 //! An [`NGram`] packs a substring's byte length and a payload into the low **27 bits** of a
@@ -14,7 +130,7 @@
 //! * **Length** (`len - 2`, bits 24..27): substring byte-lengths range from 2 (bigrams) to
 //!   [`MAX_SPARSE_GRAM_SIZE`] (8), so biasing by 2 fits the 7 possible values into 3 bits.
 //! * **Payload** (bits 0..24): for substrings of at most 3 bytes the bytes are packed
-//!   losslessly (right-aligned in the low bits, most-significant byte first); longer substrings are
+//!   losslessly (left-aligned, so distinct short grams never collide); longer substrings are
 //!   hashed down to 24 bits with a multiplicative hash.
 //!
 //! Because the length lives in its own field, an `NGram` of one size never collides with an
@@ -46,7 +162,6 @@ const MULTIPLICATIVE_HASH: u64 = 0x9E37_79B9_7F4A_7C15;
 /// Use [`NGram::from_bytes`] for one-off hashing, or the rolling 8-byte window helper inside the
 /// extraction loop for amortised O(1) computation per n-gram.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
 pub struct NGram(pub(crate) u32);
 
@@ -182,129 +297,3 @@ fn mix27(mut x: u32) -> u32 {
 /// Inverse of [`mix27`]: recovers the packed (length + payload) value from the stored value. Each
 /// step undoes the corresponding `mix27` step in reverse: the `>> 15` xorshifts are self-inverse
 /// (since `2 * 15 >= 27`), the `>> 12` xorshift is undone by the doubling `>> 12` then `>> 24`, and
-/// the multiplies by the modular inverses of their constants (mod `2^27`).
-fn unmix27(mut x: u32) -> u32 {
-    debug_assert!(x <= NGram::MASK, "unmix27 input must be a 27-bit value");
-    x ^= x >> 15;
-    x = x.wrapping_mul(0x4f0_b109) & NGram::MASK; // inverse of 0x297a_2d39 mod 2^27
-    x ^= x >> 12;
-    x ^= x >> 24;
-    x = x.wrapping_mul(0x4ea_2d65) & NGram::MASK; // inverse of 0x2c1b_3c6d mod 2^27
-    x ^= x >> 15;
-    x
-}
-
-/// The encoded `u32` representation is not human readable. This formatter improves the situation
-/// at least for short ascii grams.
-impl fmt::Debug for NGram {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let packed = unmix27(self.0);
-        let len = (((packed >> Self::PAYLOAD_BITS) & Self::LEN_MASK) + Self::LEN_BIAS) as usize;
-        let mut s = String::new();
-        if len <= 3 {
-            // The `len` payload bytes sit right-aligned in the low bits of the packed value,
-            // most-significant byte first (see `from_bytes`).
-            let payload = packed & Self::PAYLOAD_MASK;
-            let bytes = [(payload >> 16) as u8, (payload >> 8) as u8, payload as u8];
-            for &byte in &bytes[3 - len..3] {
-                if byte.is_ascii_graphic() || byte == b' ' {
-                    s.push(byte as char);
-                } else {
-                    write!(s, "\\x{byte:02x}")?;
-                }
-            }
-        } else {
-            write!(s, "{:#08x}", packed & Self::PAYLOAD_MASK)?;
-        }
-        write!(f, "NGram('{s}', len={len})")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mix27_is_invertible() {
-        // `mix27` must be a bijection on the 27-bit space so distinct grams never collide; sample
-        // the space plus boundaries and check the round-trip.
-        for x in (0..=NGram::MASK).step_by(97) {
-            assert_eq!(unmix27(mix27(x)), x, "round-trip failed for {x:#x}");
-        }
-        for x in [0, 1, 2, NGram::MASK - 1, NGram::MASK] {
-            assert_eq!(unmix27(mix27(x)), x, "round-trip failed for {x:#x}");
-        }
-    }
-
-    #[test]
-    fn test_from_bytes_roundtrip() {
-        for len in 2..=MAX_SPARSE_GRAM_SIZE {
-            let bytes = vec![b'a'; len];
-            assert_eq!(
-                NGram::from_bytes(&bytes).len(),
-                len,
-                "len mismatch for {len}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_equal_content_equal_ngram() {
-        assert_eq!(NGram::from_bytes(b"abc"), NGram::from_bytes(b"abc"));
-        assert_eq!(NGram::from_bytes(b"abcdef"), NGram::from_bytes(b"abcdef"));
-    }
-
-    #[test]
-    fn test_short_grams_are_lossless() {
-        // Distinct grams of length <= 3 are packed losslessly, so they must never collide.
-        use std::collections::HashSet;
-        let mut seen = HashSet::new();
-        for a in 0u8..64 {
-            for b in 0u8..64 {
-                assert!(seen.insert(NGram::from_bytes(&[a, b])), "bigram collision");
-                for c in 0u8..8 {
-                    assert!(
-                        seen.insert(NGram::from_bytes(&[a, b, c])),
-                        "trigram collision"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_same_content_different_length() {
-        // Even if payloads were to collide, different lengths produce different NGrams.
-        let a = NGram::from_bytes(b"ab");
-        let b = NGram::from_bytes(b"abc");
-        assert_ne!(a, b);
-        assert_ne!(a.len(), b.len());
-    }
-
-    #[test]
-    fn from_window_matches_from_bytes() {
-        // The extraction loop builds grams from a big-endian rolling window via `from_window`; it
-        // must produce the identical value to `from_bytes`. Check every indexable length with
-        // distinct bytes.
-        for len in (NGram::LEN_BIAS as usize)..=MAX_SPARSE_GRAM_SIZE {
-            let bytes: Vec<u8> = (0..len as u8).map(|i| b'a' + i).collect();
-            let mut buf = [0u8; 8];
-            buf[..len].copy_from_slice(&bytes);
-            // Gram bytes left-aligned in the most-significant bytes, low bytes zero.
-            let window = u64::from_be_bytes(buf);
-            assert_eq!(
-                NGram::from_window(window, len),
-                NGram::from_bytes(&bytes),
-                "mismatch for {len}-byte gram",
-            );
-        }
-    }
-
-    #[test]
-    fn test_default_is_not_empty() {
-        // Valid n-grams are always at least 2 bytes, so nothing (not even the default placeholder)
-        // is ever "empty".
-        assert!(!NGram::default().is_empty());
-        assert_eq!(NGram::default().len(), 2);
-    }
-}

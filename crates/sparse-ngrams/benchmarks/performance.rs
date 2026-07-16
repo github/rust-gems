@@ -16,7 +16,7 @@ fn bench_collect(c: &mut Criterion) {
         ),
         (
             "large_15KB",
-            include_str!("../src/lib.rs").as_bytes().to_vec(),
+            include_bytes!("fixtures/sample_code.txt").to_vec(),
         ),
     ];
 
@@ -26,10 +26,24 @@ fn bench_collect(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(input.len() as u64));
 
         group.bench_with_input(BenchmarkId::new("deque", name), input, |b, input| {
-            b.iter(|| collect_sparse_grams_deque(black_box(input), &mut buf))
+            b.iter(|| {
+                let mut w = 0usize;
+                collect_sparse_grams_deque(black_box(input), |gram| {
+                    buf[w] = gram;
+                    w += 1;
+                });
+                w
+            })
         });
         group.bench_with_input(BenchmarkId::new("scan", name), input, |b, input| {
-            b.iter(|| collect_sparse_grams_scan(black_box(input), &mut buf))
+            b.iter(|| {
+                let mut w = 0usize;
+                collect_sparse_grams_scan(black_box(input), |gram| {
+                    buf[w] = gram;
+                    w += 1;
+                });
+                w
+            })
         });
     }
     group.finish();

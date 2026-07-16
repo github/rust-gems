@@ -10,17 +10,19 @@ For background, see:
 
 ## Caveats
 
-The integrated bigram table contains only lowercase ASCII bigrams. Callers should lowercase and normalize input before extraction (e.g. fold uppercase to lowercase, map non-ASCII bytes to a single sentinel value). This makes the implementation suitable for case-insensitive search indexes.
+The bigram priority model only scores index-folded ASCII byte pairs; any byte with the high bit set resolves to priority `0`. Correct output requires index-folding and normalization with the [casefold](../casefold) crate in this workspace before extraction (including folding uppercase to lowercase and mapping non-ASCII bytes to high-bit-set bytes). This makes the implementation suitable for case-insensitive search indexes.
 
 ## How it works
 
-Each consecutive byte pair (bigram) is assigned a frequency-based priority from a precomputed table. An n-gram boundary occurs wherever a bigram has lower priority than all bigrams between it and the previous boundary. This is computed efficiently using a monotone deque or a scan-based approach.
+Each consecutive byte pair (bigram) is assigned a frequency-based priority from a compact factored model (see [Bigram priority model](#bigram-priority-model)). An n-gram boundary occurs wherever a bigram has lower priority than the bigrams between it and the previous boundary. This is computed efficiently using a monotone deque or a scan-based approach.
 
 For a document of N bytes, this produces at most 3(N−1) n-grams: N−1 bigrams, plus up to 2(N−1) algorithmically selected longer n-grams (up to 8 bytes).
 
+Each n-gram is returned as an opaque 32-bit `NGram` key that packs the byte length together with a payload — the raw bytes for grams of 3 bytes or fewer, a multiplicative hash for longer ones — so grams of different lengths never collide. The packed value is run through a bijective mixing permutation so the key bits are well distributed.
+
 ### Selection criterion
 
-A substring of length 3–8 is emitted as a sparse n-gram if and only if every interior bigram priority is strictly greater than the maximum of the left and right boundary bigram priorities.
+A substring of length 3–8 is emitted as a sparse n-gram when both its left and right boundary bigram priorities are strictly less than every interior bigram priority.
 
 ## Usage
 
@@ -31,39 +33,42 @@ let input = b"hello world";
 let grams = collect_sparse_grams(input);
 for gram in &grams {
     assert!(gram.len() >= 2);
-    assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE as usize);
+    assert!(gram.len() <= MAX_SPARSE_GRAM_SIZE);
 }
+```
+
+`collect_sparse_grams` is a convenience wrapper that collects into a `Vec`. To avoid the
+intermediate allocation — streaming grams straight into an index, deduplicating, or filtering —
+call `collect_sparse_grams_deque` (or `collect_sparse_grams_scan`) with your own closure, which is
+invoked once per n-gram in emission order:
+
+```rust
+use sparse_ngrams::{collect_sparse_grams_deque, NGram};
+
+let mut count = 0;
+collect_sparse_grams_deque(b"hello world", |gram: NGram| {
+    count += 1;
+    // ... insert `gram` into an index, hash it, etc.
+});
+assert!(count > 0);
 ```
 
 ## Performance
 
-Benchmarks on an Apple M1 (15 KB input, `lib.rs` source file):
+Throughput on an Apple M4 Max (the ~15 KB `benchmarks/fixtures/sample_code.txt` corpus):
 
 | Variant | Throughput |
 |---------|-----------|
-| `deque` | ~3.5 GB/s |
-| `scan`  | ~4.9 GB/s |
+| `deque` | ~220 MiB/s |
+| `scan`  | ~320 MiB/s |
 
-The `scan` variant is ~40% faster than the deque variant by replacing the monotone deque with a fixed-size circular buffer and a suffix-minimum scan.
+The `scan` variant is ~45% faster than the deque variant by replacing the monotone deque with a fixed-size circular buffer and a suffix-minimum scan.
 
-## Bigram table size
+The factored bigram model computes each priority (instead of reading a large lookup table) and each key is passed through a mixing permutation. Compared to the earlier table-based implementation this trades roughly 1.6× throughput for a ~7.5× smaller table (~8.5 KB vs ~64 KB in memory) and better-distributed keys.
 
-The priority table maps byte pairs to frequency-based priorities. Increasing the table size (number of ranked bigrams) produces more distinct longer n-grams, but saturates quickly:
+## Bigram priority model
 
-![Unique n-grams vs. table size](images/unique_ngrams_vs_table_size.png)
-
-| Table size | Unique n-grams | % of max |
-|-----------|-----------------|----------|
-| 100       | 5.8M            | 77.0%    |
-| 200       | 6.4M            | 84.4%    |
-| 400       | 6.8M            | 90.2%    |
-| 800       | 7.3M            | 96.0%    |
-| 1,600     | 7.5M            | 99.2%    |
-| 3,200     | 7.6M            | 99.9%    |
-| 5,845     | 7.6M            | 100%     |
-
-The current bigram table contains the 5,845 most frequent bigrams from a large code corpus.
-The table saturates quickly — the first ~1,600 bigrams already capture 99% of the unique n-grams.
+Priorities come from a compact factored model (~8.5 KB) rather than a full 256×256 lookup table (~64 KB in memory). The ASCII bigram `(a, b)` is scored as `H[a] + H[b] + (code << 10) + 1`, where `H` is a shared 128-entry per-byte weight and `code` is a 4-bit per-bigram correction; a per-bigram index folded into the low bits makes every priority unique while a higher score still means a more frequent bigram. The model was trained offline against a frequency ranking from a large code corpus (~1.4% inversions vs. the exact ranking).
 
 ## Maximum n-gram length
 

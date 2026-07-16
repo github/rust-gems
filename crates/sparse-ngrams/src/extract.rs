@@ -1,12 +1,12 @@
 //! Core sparse n-gram extraction algorithm.
 
-use crate::deque::{FixedDeque, PosStateBytes};
-use crate::ngram::{NGram, POLY_HASH_PRIME, POLY_POWERS};
-use crate::table::get_bigram_table;
+use crate::ngram::NGram;
+use crate::table::{bigram_h, bigram_priority_rolling};
 use crate::MAX_SPARSE_GRAM_SIZE;
 
 /// Returns the maximum number of sparse n-grams that can be produced from
-/// `content_len` bytes of input. Use this to pre-allocate the output slice.
+/// `content_len` bytes of input. Use this to reserve capacity for the output (e.g. a `Vec` the
+/// emit closure pushes into, or a pre-sized slice it writes).
 #[inline]
 pub const fn max_sparse_grams(content_len: usize) -> usize {
     if content_len < 2 {
@@ -16,152 +16,199 @@ pub const fn max_sparse_grams(content_len: usize) -> usize {
     }
 }
 
+/// Builds the `len`-byte gram ending at the current position from the rolling `window` (newest byte
+/// in the low byte). The gram is the `len` low bytes of `window`; shifting them into the
+/// most-significant bytes gives the big-endian layout [`NGram::from_window`] consumes.
+#[inline]
+fn window_to_gram(window: u64, len: usize) -> NGram {
+    debug_assert!(len <= MAX_SPARSE_GRAM_SIZE);
+    NGram::from_window(window << ((MAX_SPARSE_GRAM_SIZE - len) * 8), len)
+}
+
 /// Collect all sparse n-grams from the input byte slice into a new [`Vec`].
+///
+/// Convenience wrapper over [`collect_sparse_grams_deque`]. For custom output — streaming into a
+/// search index, deduplicating, or filtering without building an intermediate `Vec` — call
+/// [`collect_sparse_grams_deque`] or [`collect_sparse_grams_scan`] directly with your own closure.
 pub fn collect_sparse_grams(content: &[u8]) -> Vec<NGram> {
-    let mut buf = vec![NGram::from_rolling_hash(0, 0); max_sparse_grams(content.len())];
-    let count = collect_sparse_grams_deque(content, &mut buf);
-    buf.truncate(count);
-    buf
-}
-
-/// Deque-based extraction. Writes n-grams into `out` (must have at least
-/// [`max_sparse_grams`]`(content.len())` slots). Returns the count written.
-///
-/// # Panics
-///
-/// Panics if `out` is too small.
-pub fn collect_sparse_grams_deque(content: &[u8], out: &mut [NGram]) -> usize {
-    let n = content.len();
-    if n < 2 {
-        return 0;
-    }
-    assert!(out.len() >= max_sparse_grams(n));
-    let table = get_bigram_table();
-    let mut queue = FixedDeque::<MAX_SPARSE_GRAM_SIZE>::new();
-    let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE];
-    prefix_hashes[1] = content[0] as u32;
-    let mut w = 0usize;
-
-    for idx in 1..n as u32 {
-        let mask = MAX_SPARSE_GRAM_SIZE - 1;
-        let end_hash = prefix_hashes[idx as usize & mask]
-            .wrapping_mul(POLY_HASH_PRIME)
-            .wrapping_add(content[idx as usize] as u32);
-
-        // Bigram
-        let bigram_hash = end_hash
-            .wrapping_sub(prefix_hashes[(idx as usize - 1) & mask].wrapping_mul(POLY_POWERS[2]));
-        out[w] = NGram::from_rolling_hash(bigram_hash, 2);
+    // Reserve the exact worst case up front and have the emit closure write straight into the
+    // uninitialized spare capacity, then fix up the length once at the end. This avoids both the
+    // per-gram `push` bookkeeping (capacity check + length bump) and the `truncate`/default-fill of
+    // a pre-sized `vec![_; max]`.
+    let mut out = Vec::with_capacity(max_sparse_grams(content.len()));
+    let spare = out.spare_capacity_mut();
+    let mut w = 0;
+    collect_sparse_grams_deque(content, |gram| {
+        spare[w].write(gram);
         w += 1;
-
-        let v1 = table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
-
-        if let Some(begin) = queue.front() {
-            if idx - begin.index + 1 >= MAX_SPARSE_GRAM_SIZE as u32 {
-                queue.pop_front();
-            }
-        }
-        while let Some(begin) = queue.back() {
-            let start = begin.index as usize - 1;
-            let len = (idx - begin.index + 2) as usize;
-            let hash =
-                end_hash.wrapping_sub(prefix_hashes[start & mask].wrapping_mul(POLY_POWERS[len]));
-            out[w] = NGram::from_rolling_hash(hash, len);
-            w += 1;
-            if begin.value == v1 {
-                queue.pop_back();
-                break;
-            } else if begin.value <= v1 {
-                break;
-            }
-            queue.pop_back();
-        }
-        queue.push_back(PosStateBytes {
-            index: idx,
-            value: v1,
-        });
-        prefix_hashes[(idx as usize + 1) & mask] = end_hash;
-    }
-    w
+    });
+    // SAFETY: `collect_sparse_grams_deque` emits at most `max_sparse_grams(content.len())` grams —
+    // exactly the capacity reserved above — so every write above landed within `spare`, and the
+    // first `w` elements of the allocation are now initialized.
+    unsafe { out.set_len(w) };
+    out
 }
 
-/// Queue-free scan-based extraction. Writes n-grams into `out` (must have at least
-/// [`max_sparse_grams`]`(content.len())` slots). Returns the count written.
+/// Monotone-deque extraction, with the deque held in fixed ring buffers. Calls `emit` once for
+/// every sparse n-gram, in emission order (all bigrams, plus algorithmically selected longer
+/// grams). `emit` decides what to do with each gram — push it into a `Vec`, write it into a
+/// pre-sized slice, feed it straight into an index, etc. — so no output buffer needs to be sized
+/// or allocated up front.
 ///
-/// Produces identical output (same order) as [`collect_sparse_grams_deque`].
+/// The boundary candidates form a monotone run, kept in fixed `[_; MAX_SPARSE_GRAM_SIZE]` ring
+/// buffers addressed by a single running depth `tail` — there is no head. Rather than dropping the
+/// oldest candidate up front, the walk-back simply stops at the first candidate too far back to
+/// form a gram of at most `MAX_SPARSE_GRAM_SIZE` bytes; out-of-window candidates are never read and
+/// get overwritten by later pushes (the live window spans fewer than `MAX_SPARSE_GRAM_SIZE`
+/// candidates, so the ring never loses one it still needs).
 ///
-/// # Panics
+/// A rolling `u64` holds the last 8 bytes of `content` (newest byte in the low byte). A gram is at
+/// most [`MAX_SPARSE_GRAM_SIZE`] bytes and always ends at the current index, so it is exactly the
+/// `len` low bytes of the window; `window_to_gram` shifts those up to build it straight from
+/// registers, without re-slicing `content`.
 ///
-/// Panics if `out` is too small.
-pub fn collect_sparse_grams_scan(content: &[u8], out: &mut [NGram]) -> usize {
+/// ```
+/// use sparse_ngrams::{collect_sparse_grams_deque, NGram};
+///
+/// let mut count = 0;
+/// collect_sparse_grams_deque(b"hello world", |_gram: NGram| count += 1);
+/// assert!(count > 0);
+/// ```
+pub fn collect_sparse_grams_deque(content: &[u8], mut emit: impl FnMut(NGram)) {
     let n = content.len();
     if n < 2 {
-        return 0;
+        return;
     }
-    assert!(out.len() >= max_sparse_grams(n));
-
-    let table = get_bigram_table();
     const MASK: usize = MAX_SPARSE_GRAM_SIZE - 1;
-    let mut w = 0usize;
-    let mut prefix_hashes = [0u32; MAX_SPARSE_GRAM_SIZE];
-    prefix_hashes[1] = content[0] as u32;
-    let mut priorities = [u16::MAX; MAX_SPARSE_GRAM_SIZE];
+    // Sentinel index for empty ring slots. It is chosen so the "too-large gram" test in the
+    // walk-back (`idx - begin + 1 >= MAX_SPARSE_GRAM_SIZE`) fires for it at every `idx >= 1` — the
+    // subtraction wraps to `idx + MAX_SPARSE_GRAM_SIZE + 1` — so the walk terminates at the bottom
+    // of the stack purely from the stored values, with no separate emptiness check.
+    const EMPTY: u32 = 0u32.wrapping_sub(MAX_SPARSE_GRAM_SIZE as u32);
+    // Monotone deque of boundary candidates (position index + priority), strictly increasing in
+    // both, held in fixed ring buffers. Only `tail` (the running stack depth) is tracked; a
+    // candidate at depth `d` lives in slot `d & MASK`. The live window never spans
+    // `MAX_SPARSE_GRAM_SIZE` candidates, so overwriting slot `tail & MASK` only clobbers an
+    // out-of-window entry that the walk-back below never reaches.
+    let mut idx_buf = [EMPTY; MAX_SPARSE_GRAM_SIZE];
+    let mut val_buf = [0u32; MAX_SPARSE_GRAM_SIZE];
+    let mut tail = 0usize;
+
+    // The rolling window starts with the first byte; each loop iteration shifts in `content[idx]`.
+    let mut window = content[0] as u64;
+    // `BIGRAM_H` of the most recent byte, carried between positions so consecutive bigrams (which
+    // overlap by one byte) only load one new H value each. Seeded with the first byte's H.
+    let mut h = bigram_h(content[0]);
+
     for idx in 1..n as u32 {
-        let end_hash = prefix_hashes[idx as usize & MASK]
-            .wrapping_mul(POLY_HASH_PRIME)
-            .wrapping_add(content[idx as usize] as u32);
-        // Bigram
-        let bigram_hash = end_hash
-            .wrapping_sub(prefix_hashes[(idx as usize - 1) & MASK].wrapping_mul(POLY_POWERS[2]));
-        out[w] = NGram::from_rolling_hash(bigram_hash, 2);
-        w += 1;
-        let v1 = table[content[idx as usize - 1] as usize * 256 + content[idx as usize] as usize];
+        window = (window << 8) | content[idx as usize] as u64;
+        // The bigram for this position is the low two bytes of the rolling window. `h` is the H
+        // value of its first byte, carried over from the previous position; `h_b` feeds the next.
+        let (value, h_b) = bigram_priority_rolling((window >> 8) as u8, window as u8, h);
+        h = h_b;
+
+        // The bigram (length 2) is always emitted.
+        emit(window_to_gram(window, 2));
+
+        // Walk back over the candidates from the tail, emitting one gram each. Stop at the first
+        // candidate too far back to form a gram of at most `MAX_SPARSE_GRAM_SIZE` bytes (this
+        // replaces the front-drop and, via the `EMPTY` sentinel, also terminates at the stack
+        // bottom), or one whose priority is < the current bigram's (it stays as the new left
+        // boundary). Equal-or-larger priorities are dropped, and the current position overwrites
+        // the first dropped slot.
+        let mut t = tail;
+        loop {
+            let slot = t.wrapping_sub(1) & MASK;
+            let begin = idx_buf[slot];
+            if idx.wrapping_sub(begin) + 1 >= MAX_SPARSE_GRAM_SIZE as u32 {
+                break;
+            }
+            emit(window_to_gram(
+                window,
+                (idx.wrapping_sub(begin) + 2) as usize,
+            ));
+            let bval = val_buf[slot];
+            if bval < value {
+                break;
+            }
+            t -= 1;
+            if bval == value {
+                break;
+            }
+        }
+
+        // Push the current position by overwriting the first dropped (or next free) slot.
+        idx_buf[t & MASK] = idx;
+        val_buf[t & MASK] = value;
+        tail = t + 1;
+    }
+}
+
+/// Queue-free scan-based extraction. Calls `emit` once for every sparse n-gram, in the same order
+/// as [`collect_sparse_grams_deque`].
+///
+/// Produces identical output (same order) as [`collect_sparse_grams_deque`]: the boundary
+/// candidates are exactly the positions where a backward scan hits a new suffix minimum, so a
+/// fixed-size ring of recent priorities replaces the monotone deque.
+pub fn collect_sparse_grams_scan(content: &[u8], mut emit: impl FnMut(NGram)) {
+    let n = content.len();
+    if n < 2 {
+        return;
+    }
+
+    const MASK: usize = MAX_SPARSE_GRAM_SIZE - 1;
+    let mut window = content[0] as u64;
+    let mut h = bigram_h(content[0]);
+    // Ring buffer of the most recent bigram priorities, indexed by `idx & MASK`.
+    let mut priorities = [0u32; MAX_SPARSE_GRAM_SIZE];
+    for idx in 1..n as u32 {
+        window = (window << 8) | content[idx as usize] as u64;
+        let (v1, h_b) = bigram_priority_rolling((window >> 8) as u8, window as u8, h);
+        h = h_b;
         priorities[idx as usize & MASK] = v1;
-        let mut running_min = u16::MAX;
+
+        // The bigram (length 2) is always emitted.
+        emit(window_to_gram(window, 2));
+
+        // Scan backwards, tracking the minimum interior priority seen so far. Each new strict
+        // minimum is a boundary candidate; emit its gram while the right boundary `v1` is strictly
+        // below the interior minimum, then stop.
+        let mut running_min = u32::MAX;
         for d in 1..=(MAX_SPARSE_GRAM_SIZE as u32 - 2) {
             if d >= idx {
                 break;
             }
-            let p = idx.wrapping_sub(d) as usize & MASK;
-            let v_p = priorities[p];
+            let v_p = priorities[(idx - d) as usize & MASK];
             if v_p < running_min {
-                running_min = v_p;
-                let start = p.wrapping_sub(1) & MASK;
-                let len = d as usize + 2;
-                let hash =
-                    end_hash.wrapping_sub(prefix_hashes[start].wrapping_mul(POLY_POWERS[len]));
-                out[w] = NGram::from_rolling_hash(hash, len);
-                w += 1;
-                if v_p <= v1 {
+                if running_min <= v1 {
                     break;
                 }
+                let len = d as usize + 2;
+                emit(window_to_gram(window, len));
+                running_min = v_p;
             }
         }
-        prefix_hashes[(idx as usize + 1) & MASK] = end_hash;
     }
-    w
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::table::get_bigram_table;
+    use crate::table::bigram_priority;
     use std::collections::HashSet;
 
-    fn collect_to_vec(content: &[u8], f: fn(&[u8], &mut [NGram]) -> usize) -> Vec<NGram> {
-        let mut buf = vec![NGram::from_rolling_hash(0, 0); max_sparse_grams(content.len())];
-        let count = f(content, &mut buf);
-        buf.truncate(count);
-        buf
+    fn collect_to_vec(run: impl FnOnce(&mut dyn FnMut(NGram))) -> Vec<NGram> {
+        let mut out = Vec::new();
+        run(&mut |gram| out.push(gram));
+        out
     }
 
     /// Brute-force reference implementation.
     ///
-    /// Enumerates all substrings of length 2..=MAX_SPARSE_GRAM_SIZE and emits those
-    /// where every interior bigram priority is strictly greater than `max(left, right)`
-    /// boundary bigram priority. All bigrams (len=2) are always emitted.
+    /// Enumerates all substrings of length 2..=MAX_SPARSE_GRAM_SIZE and emits those where both the
+    /// left and right boundary bigram priorities are strictly less than every interior priority.
+    /// All bigrams (len=2) are always emitted.
     fn brute_force_sparse_grams(content: &[u8]) -> HashSet<NGram> {
-        let table = get_bigram_table();
         let n = content.len();
         let mut result = HashSet::new();
         if n < 2 {
@@ -173,23 +220,21 @@ mod tests {
         }
         // Longer grams: length 3..=MAX_SPARSE_GRAM_SIZE.
         for len in 3..=MAX_SPARSE_GRAM_SIZE {
-            'outer: for start in 0..=n.saturating_sub(len) {
+            for start in 0..=n.saturating_sub(len) {
                 if start + len > n {
                     break;
                 }
-                let left = table[content[start] as usize * 256 + content[start + 1] as usize];
-                let right = table
-                    [content[start + len - 2] as usize * 256 + content[start + len - 1] as usize];
-                let boundary = left.max(right);
-                // Inner bigrams: bytes [start+1,start+2], ..., [start+len-3,start+len-2]
+                let left = bigram_priority(content[start], content[start + 1]);
+                let right = bigram_priority(content[start + len - 2], content[start + len - 1]);
+                // Interior bigrams: (start+1,start+2), ..., (start+len-3,start+len-2).
+                let mut min_interior = u32::MAX;
                 for k in 1..len - 2 {
-                    let p =
-                        table[content[start + k] as usize * 256 + content[start + k + 1] as usize];
-                    if p <= boundary {
-                        continue 'outer;
-                    }
+                    let p = bigram_priority(content[start + k], content[start + k + 1]);
+                    min_interior = min_interior.min(p);
                 }
-                result.insert(NGram::from_bytes(&content[start..start + len]));
+                if left < min_interior && right < min_interior {
+                    result.insert(NGram::from_bytes(&content[start..start + len]));
+                }
             }
         }
         result
@@ -267,8 +312,8 @@ mod tests {
     fn test_scan_equivalence_small() {
         for input in [b"" as &[u8], b"x", b"ab", b"abc", b"abcdefgh", b"abcdefghi"] {
             assert_eq!(
-                collect_to_vec(input, collect_sparse_grams_deque),
-                collect_to_vec(input, collect_sparse_grams_scan),
+                collect_to_vec(|emit| collect_sparse_grams_deque(input, emit)),
+                collect_to_vec(|emit| collect_sparse_grams_scan(input, emit)),
                 "mismatch on {:?}",
                 std::str::from_utf8(input).unwrap_or("?")
             );
@@ -279,8 +324,8 @@ mod tests {
     fn test_scan_equivalence_hello_world() {
         let input = b"hello world";
         assert_eq!(
-            collect_to_vec(input, collect_sparse_grams_deque),
-            collect_to_vec(input, collect_sparse_grams_scan),
+            collect_to_vec(|emit| collect_sparse_grams_deque(input, emit)),
+            collect_to_vec(|emit| collect_sparse_grams_scan(input, emit)),
         );
     }
 
@@ -288,17 +333,17 @@ mod tests {
     fn test_scan_equivalence_large() {
         let input: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
         assert_eq!(
-            collect_to_vec(&input, collect_sparse_grams_deque),
-            collect_to_vec(&input, collect_sparse_grams_scan),
+            collect_to_vec(|emit| collect_sparse_grams_deque(&input, emit)),
+            collect_to_vec(|emit| collect_sparse_grams_scan(&input, emit)),
         );
     }
 
     #[test]
     fn test_scan_equivalence_source_code() {
-        let input = include_bytes!("lib.rs");
+        let input = include_bytes!("extract.rs");
         assert_eq!(
-            collect_to_vec(input, collect_sparse_grams_deque),
-            collect_to_vec(input, collect_sparse_grams_scan),
+            collect_to_vec(|emit| collect_sparse_grams_deque(input, emit)),
+            collect_to_vec(|emit| collect_sparse_grams_scan(input, emit)),
         );
     }
 
@@ -351,14 +396,39 @@ mod tests {
     }
 
     #[test]
+    fn test_brute_force_tie_break() {
+        // Repeated bigrams create exact ties between an interior priority and a boundary; this
+        // exercises the both-strict `max(L, R) < interior` rule where deque, scan and brute force
+        // must agree (a gram whose right boundary only ties the smallest interior priority is
+        // dropped as redundant).
+        assert_matches_brute_force(b"ababababab");
+        assert_matches_brute_force(b"the the the the");
+        assert_matches_brute_force(b"a.b.a.b.a.b.");
+    }
+
+    #[test]
     fn test_brute_force_diverse() {
         let input: Vec<u8> = (0..200).map(|i| (i % 256) as u8).collect();
         assert_matches_brute_force(&input);
     }
 
     #[test]
+    fn test_brute_force_long_ascending() {
+        // Long ascending ASCII runs create monotone priority stretches that grow the deque's
+        // `tail` counter far beyond the ring size, exercising the `EMPTY` sentinel that lets the
+        // walk-back terminate at the stack bottom without a `t > 0` check. Also runs a scan/deque
+        // cross-check on the same input.
+        let input: Vec<u8> = (0..3000u32).map(|i| 33 + (i % 90) as u8).collect();
+        assert_matches_brute_force(&input);
+        assert_eq!(
+            collect_to_vec(|emit| collect_sparse_grams_deque(&input, emit)),
+            collect_to_vec(|emit| collect_sparse_grams_scan(&input, emit)),
+        );
+    }
+
+    #[test]
     fn test_brute_force_source_code() {
-        let input = include_bytes!("lib.rs");
+        let input = include_bytes!("extract.rs");
         assert_matches_brute_force(input);
     }
 }

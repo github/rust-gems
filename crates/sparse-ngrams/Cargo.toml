@@ -11,6 +11,13 @@ categories = ["algorithms", "data-structures", "text-processing"]
 [lib]
 bench = false
 
+[features]
+# Derive `serde::{Serialize, Deserialize}` for `NGram`.
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+
 [[bench]]
 name = "performance"
 path = "benchmarks/performance.rs"
