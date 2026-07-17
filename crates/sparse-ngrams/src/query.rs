@@ -76,12 +76,9 @@ impl Queue {
         })
     }
 
-    fn pop_front(&mut self) -> PosState {
+    fn pop_front(&mut self) -> u32 {
         debug_assert!(self.len > 0);
-        let first = PosState {
-            index: self.idx_buf[self.head],
-            value: self.val_buf[self.head],
-        };
+        let first = self.idx_buf[self.head];
         self.head = (self.head + 1) & (MAX_SPARSE_GRAM_SIZE - 1);
         self.len -= 1;
         first
@@ -202,26 +199,25 @@ impl QueryGrams {
             let left = ((self.content >> 8) & 0xFF) as u8;
             let (value, h_b) = bigram_priority_rolling(left, right, self.h);
             self.h = h_b;
-            if self.queue.len > 0 && value < self.queue.front_value() {
-                let priority = self.queue.front_value();
-                let mut last = self.queue.pop_front();
+            let priority = self.queue.front_value();
+            if self.queue.len > 0 && value < priority {
+                let mut begin = self.queue.pop_front();
                 while self.queue.len > 0 && self.queue.front_value() == priority {
-                    let next = self.queue.pop_front();
-                    self.extract_gram(last.index, next.index, &mut consumer);
-                    last = next;
+                    let end = self.queue.pop_front();
+                    self.extract_gram(begin, end, &mut consumer);
+                    begin = end;
                 }
                 self.queue.clear();
                 self.queue.push(PosState { index: idx, value });
-                self.extract_gram(last.index, idx, &mut consumer);
+                self.extract_gram(begin, idx, &mut consumer);
             } else {
                 self.queue.push(PosState { index: idx, value });
             }
-            if idx - self.queue.front_idx() + 2 >= MAX_SPARSE_GRAM_SIZE as u32 {
-                if self.queue.len > 1 {
-                    let first = self.queue.pop_front();
-                    let end = self.queue.front_idx();
-                    self.extract_gram(first.index, end, &mut consumer);
-                }
+            if idx - self.queue.front_idx() + 2 >= MAX_SPARSE_GRAM_SIZE as u32 && self.queue.len > 1
+            {
+                let begin = self.queue.pop_front();
+                let end = self.queue.front_idx();
+                self.extract_gram(begin, end, &mut consumer);
             }
         }
     }
@@ -233,12 +229,12 @@ impl QueryGrams {
     {
         if self.content_end_idx == 2 {
             self.extract_gram(1, 1, &mut consumer);
-            return;
-        }
-        while self.queue.len > 1 {
-            let first = self.queue.pop_front();
-            let end = self.queue.front_idx();
-            self.extract_gram(first.index, end, &mut consumer);
+        } else {
+            while self.queue.len > 1 {
+                let begin = self.queue.pop_front();
+                let end = self.queue.front_idx();
+                self.extract_gram(begin, end, &mut consumer);
+            }
         }
     }
 
@@ -249,9 +245,9 @@ impl QueryGrams {
     {
         if self.queue.len > 1 {
             // Emit the gram spanning the first boundary to the next one, mirroring `flush`.
-            let first = self.queue.pop_front();
+            let begin = self.queue.pop_front();
             let end = self.queue.front_idx();
-            self.extract_gram(first.index, end, &mut consumer);
+            self.extract_gram(begin, end, &mut consumer);
         } else if self.content_end_idx == 2 {
             // Only a single bigram remains; emit it like `flush` does.
             self.extract_gram(1, 1, &mut consumer);
@@ -541,7 +537,7 @@ mod tests {
             let len = 3 + rng.gen_range(14); // [3, 16]
             let mut bytes = vec![0u8; len];
             for b in &mut bytes {
-                *b = (b'a' + rng.gen_range(26) as u8) as u8; // casefold-stable lowercase ASCII
+                *b = b'a' + rng.gen_range(26) as u8; // casefold-stable lowercase ASCII
             }
             let input = std::str::from_utf8(&bytes).expect("ASCII should be valid UTF-8");
 
@@ -583,7 +579,7 @@ mod tests {
             let len = 4 + rng.gen_range(13); // [4, 16]
             let mut bytes = vec![0u8; len];
             for b in &mut bytes {
-                *b = (b'a' + rng.gen_range(26) as u8) as u8;
+                *b = b'a' + rng.gen_range(26) as u8;
             }
             let input = std::str::from_utf8(&bytes).expect("ASCII should be valid UTF-8");
 
