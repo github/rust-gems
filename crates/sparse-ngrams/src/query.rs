@@ -216,7 +216,7 @@ impl QueryGrams {
             } else {
                 self.queue.push(PosState { index: idx, value });
             }
-            if idx - self.queue.front_idx() + 1 >= MAX_SPARSE_GRAM_SIZE as u32 {
+            if idx - self.queue.front_idx() + 2 >= MAX_SPARSE_GRAM_SIZE as u32 {
                 if self.queue.len > 1 {
                     let first = self.queue.pop_front();
                     let end = self.queue.front_idx();
@@ -538,7 +538,7 @@ mod tests {
         let mut rng = Rng64::new(0xA5A5_0123_89AB_CDEF);
 
         for _ in 0..2000 {
-            let len = 3 + rng.gen_range(MAX_SPARSE_GRAM_SIZE - 2); // [3, 8]
+            let len = 3 + rng.gen_range(14); // [3, 16]
             let mut bytes = vec![0u8; len];
             for b in &mut bytes {
                 *b = (b'a' + rng.gen_range(26) as u8) as u8; // casefold-stable lowercase ASCII
@@ -580,7 +580,7 @@ mod tests {
         let mut rng = Rng64::new(0xC0DE_CAFE_1234_5678);
 
         for _ in 0..2000 {
-            let len = 4 + rng.gen_range(MAX_SPARSE_GRAM_SIZE - 3); // [4, 8]
+            let len = 4 + rng.gen_range(13); // [4, 16]
             let mut bytes = vec![0u8; len];
             for b in &mut bytes {
                 *b = (b'a' + rng.gen_range(26) as u8) as u8;
