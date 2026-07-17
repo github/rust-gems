@@ -112,7 +112,7 @@ impl Queue {
 /// needs to be retained.
 #[derive(Clone)]
 pub struct QueryGrams {
-    /// Queue of candidate boundaries (strictly increasing index and priority).
+    /// Queue of candidate boundaries (strictly increasing indices and nondecreasing priorities).
     queue: Queue,
     /// Active content packed into a `u64` (newest byte in the low byte).
     content: u64,
