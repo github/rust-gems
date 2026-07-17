@@ -1,7 +1,8 @@
 //! Streaming sparse n-gram extraction state for query-time traversal.
 //!
-//! Unlike indexing, query extraction prefers longer grams and supports incremental character
-//! feeding, cloning, and partial/full draining.
+//! Unlike indexing, which emits every candidate gram, query extraction emits the minimum number of
+//! grams that cover the input stream and supports incremental character feeding, cloning, and
+//! partial/full draining.
 
 use std::hash::{Hash, Hasher};
 
