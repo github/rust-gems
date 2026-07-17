@@ -40,9 +40,11 @@
 
 mod extract;
 mod ngram;
+mod query;
 mod table;
 
 pub use ngram::NGram;
+pub use query::QueryGrams;
 pub use table::bigram_priority;
 
 /// Maximum length (in bytes) of a sparse n-gram.

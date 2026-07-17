@@ -131,6 +131,23 @@ impl NGram {
         Self::pack(len, payload)
     }
 
+    /// Builds an `NGram` from a right-shifted window where the gram's end byte is in the low
+    /// byte and older bytes are above it. This helper keeps only the low `len` bytes, aligns them
+    /// into the top bytes, and then delegates to [`from_window`](Self::from_window).
+    #[inline]
+    pub(crate) fn from_window_masked(value: u64, len: usize) -> Self {
+        debug_assert!(
+            (Self::LEN_BIAS as usize..=MAX_SPARSE_GRAM_SIZE).contains(&len),
+            "ngram length {len} out of range [{}, {}]",
+            Self::LEN_BIAS,
+            MAX_SPARSE_GRAM_SIZE,
+        );
+        let bits = (len * 8) as u32;
+        let low_mask = u64::MAX >> (u64::BITS - bits);
+        let aligned = (value & low_mask) << ((MAX_SPARSE_GRAM_SIZE - len) * 8);
+        Self::from_window(aligned, len)
+    }
+
     /// Packs a length and payload into the structured value, then stores it *mixed* (via [`mix27`])
     /// so the hot sorting/bucketing paths read a well-distributed value directly from the field;
     /// [`len`](Self::len) and [`Debug`] unmix on demand.

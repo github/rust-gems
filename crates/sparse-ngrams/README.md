@@ -46,7 +46,7 @@ invoked once per n-gram in emission order:
 use sparse_ngrams::{collect_sparse_grams_deque, NGram};
 
 let mut count = 0;
-collect_sparse_grams_deque(b"hello world", |gram: NGram| {
+collect_sparse_grams_deque(b"hello world", |gram: NGram, _idx| {
     count += 1;
     // ... insert `gram` into an index, hash it, etc.
 });

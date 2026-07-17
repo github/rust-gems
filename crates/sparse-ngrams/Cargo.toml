@@ -16,6 +16,7 @@ bench = false
 serde = ["dep:serde"]
 
 [dependencies]
+casefold = { path = "../casefold" }
 serde = { version = "1", features = ["derive"], optional = true }
 
 [[bench]]
