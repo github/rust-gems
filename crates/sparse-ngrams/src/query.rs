@@ -304,9 +304,9 @@ impl QueryGrams {
             self.queue.clear();
             if self.content_end_idx > 1 {
                 // `self.h` already holds `bigram_h(last)` by invariant, so it needs no update.
-                let last = (self.content & 0xFF) as u8;
-                self.content = last as u64;
                 self.content_end_idx = 1;
+            } else {
+                self.content_end_idx = 0;
             }
         }
     }
