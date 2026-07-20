@@ -47,6 +47,10 @@ pub use ngram::NGram;
 pub use query::QueryGrams;
 pub use table::bigram_priority;
 
+/// Re-export of the index-folding used internally by [`QueryGrams::append_char`], so callers that
+/// buffer already-folded bytes (and feed them via [`QueryGrams::append_byte`]) fold identically.
+pub use casefold::index_fold_char;
+
 /// Maximum length (in bytes) of a sparse n-gram.
 pub const MAX_SPARSE_GRAM_SIZE: usize = 8;
 

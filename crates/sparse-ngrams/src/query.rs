@@ -152,9 +152,27 @@ impl QueryGrams {
         }
     }
 
+    /// The character following a gram whose reported position is `end` — i.e. the byte at content
+    /// position `end` — if that character has already been fed into the active window.
+    ///
+    /// Returns `None` when `end` is at (or past) the newest fed byte — the following character has
+    /// not been fed yet, e.g. for the gram ending at the most recently appended byte, or for the
+    /// single trailing bigram of the whole input. Panics if the position lies outside the packed
+    /// window. A one-byte-lookahead wrapper can use its buffered byte for the `None` case.
+    #[inline]
+    fn follow_byte(&self, end: u32) -> Option<u8> {
+        if end >= self.content_end_idx {
+            None
+        } else {
+            let shift = self.content_end_idx - 1 - end;
+            debug_assert!(shift < MAX_SPARSE_GRAM_SIZE as u32);
+            Some((self.content >> (shift * 8)) as u8)
+        }
+    }
+
     fn extract_gram<F>(&mut self, begin_index: u32, end_index: u32, consumer: &mut F)
     where
-        F: FnMut(NGram, u32),
+        F: FnMut(NGram, u32, Option<u8>),
     {
         debug_assert!(end_index >= begin_index);
         debug_assert!(end_index <= self.content_end_idx);
@@ -162,18 +180,31 @@ impl QueryGrams {
         let len = (end_index - begin_index + 2) as usize;
         let dist = self.content_end_idx - end_index;
         let shifted = self.content >> (dist * 8);
-        // Report the position of the character just after the emitted ngram.
-        consumer(NGram::from_window_masked(shifted, len), end_index);
+        // Report the position of the character just after the emitted ngram, along with that
+        // character itself when it has already been fed (see `follow_byte`).
+        let follow = self.follow_byte(end_index);
+        consumer(NGram::from_window_masked(shifted, len), end_index, follow);
     }
 
     /// Appends a single character to the n-gram state.
     ///
     /// The character is index-folded using the `casefold` crate and may trigger one or more grams.
-    pub fn append_char<F>(&mut self, c: char, mut consumer: F)
+    pub fn append_char<F>(&mut self, c: char, consumer: F)
     where
-        F: FnMut(NGram, u32),
+        F: FnMut(NGram, u32, Option<u8>),
     {
-        let right = index_fold_char(c);
+        self.append_byte(index_fold_char(c), consumer);
+    }
+
+    /// Appends a single already index-folded byte to the n-gram state.
+    ///
+    /// This is the byte-level counterpart of [`append_char`](Self::append_char): the caller has
+    /// already index-folded the character (e.g. buffered it as a byte), so no further folding is
+    /// applied. May trigger one or more grams.
+    pub fn append_byte<F>(&mut self, right: u8, mut consumer: F)
+    where
+        F: FnMut(NGram, u32, Option<u8>),
+    {
         let left = (self.content & 0xFF) as u8;
         self.content_end_idx += 1;
         self.content = (self.content << 8) | right as u64;
@@ -215,7 +246,7 @@ impl QueryGrams {
     /// Flushes all buffered characters and emits remaining grams.
     pub fn flush<F>(mut self, mut consumer: F)
     where
-        F: FnMut(NGram, u32),
+        F: FnMut(NGram, u32, Option<u8>),
     {
         if self.content_end_idx == 2 {
             self.extract_gram(2, 2, &mut consumer);
@@ -231,7 +262,7 @@ impl QueryGrams {
     /// Consumes and emits at most one queued gram (if available), shrinking state.
     pub fn consume_first<F>(&mut self, mut consumer: F)
     where
-        F: FnMut(NGram, u32),
+        F: FnMut(NGram, u32, Option<u8>),
     {
         if self.queue.len > 1 {
             // Emit the gram spanning the first boundary to the next one, mirroring `flush`.
@@ -274,12 +305,12 @@ mod tests {
         let mut q = QueryGrams::default();
         let mut out = Vec::new();
         for c in input.chars() {
-            q.append_char(c, |gram, end| {
+            q.append_char(c, |gram, end, _follow| {
                 let begin = end + 1 - gram.len() as u32;
                 out.push(begin..end - 1);
             });
         }
-        q.flush(|gram, end| {
+        q.flush(|gram, end, _follow| {
             let begin = end + 1 - gram.len() as u32;
             out.push(begin..end - 1);
         });
@@ -359,10 +390,10 @@ mod tests {
     fn append_and_flush_emit_grams() {
         let mut q = QueryGrams::default();
         for c in "hello world".chars() {
-            q.append_char(c, |_gram, _idx| {});
+            q.append_char(c, |_gram, _idx, _follow| {});
         }
         let mut out = Vec::new();
-        q.flush(|gram, idx| out.push((gram, idx)));
+        q.flush(|gram, idx, _follow| out.push((gram, idx)));
         assert!(!out.is_empty());
         assert!(
             out.iter()
@@ -371,17 +402,66 @@ mod tests {
     }
 
     #[test]
+    fn single_bigram_has_no_follow() {
+        // A two-character input yields exactly one gram, the trailing bigram, emitted at flush and
+        // followed by nothing.
+        let bytes: Vec<u8> = "ab".chars().map(crate::index_fold_char).collect();
+        let mut q = QueryGrams::default();
+        for &b in &bytes {
+            q.append_byte(b, |_gram, _end, _follow| {});
+        }
+        let mut emitted = Vec::new();
+        q.flush(|gram, end, follow| emitted.push((gram.len(), end, follow)));
+        assert_eq!(emitted, vec![(2usize, 2u32, None)]);
+    }
+
+    #[test]
+    fn emitted_follow_is_the_actual_next_char() {
+        // Whenever a gram is emitted with a follow character, it must be the actual next byte of the
+        // input at the reported boundary (and a gram ending at the newest fed byte reports `None`).
+        for input in [
+            "ab",
+            "abc",
+            "hello",
+            "querystream",
+            "aaaaaaaaaa",
+            "lardeee",
+            "sssdk",
+        ] {
+            let bytes: Vec<u8> = input.chars().map(crate::index_fold_char).collect();
+            let n = bytes.len() as u32;
+            let mut q = QueryGrams::default();
+            let mut check = |_gram: NGram, end: u32, follow: Option<u8>| {
+                if let Some(b) = follow {
+                    assert!(
+                        end < n,
+                        "follow reported past input for {input:?}: end={end}"
+                    );
+                    assert_eq!(
+                        b, bytes[end as usize],
+                        "wrong follow byte for {input:?} at end={end}"
+                    );
+                }
+            };
+            for &b in &bytes {
+                q.append_byte(b, &mut check);
+            }
+            q.flush(&mut check);
+        }
+    }
+
+    #[test]
     fn state_eq_and_hash_ignore_absolute_history() {
         let mut a = QueryGrams::default();
         let mut b = QueryGrams::default();
 
         for c in "abc".chars() {
-            a.append_char(c, |_gram, _idx| {});
+            a.append_char(c, |_gram, _idx, _follow| {});
         }
         for c in "zabc".chars() {
-            b.append_char(c, |_gram, _idx| {});
+            b.append_char(c, |_gram, _idx, _follow| {});
         }
-        b.consume_first(|_gram, _idx| {});
+        b.consume_first(|_gram, _idx, _follow| {});
 
         // Only assert hash consistency when Eq says they are equivalent.
         if a == b {
@@ -563,14 +643,14 @@ mod tests {
             // plus grams drained via `consume_first`.
             let mut first_half = Vec::new();
             for c in prefix.chars() {
-                q.append_char(c, |gram, end| {
+                q.append_char(c, |gram, end, _follow| {
                     let begin = end + 1 - gram.len() as u32;
                     first_half.push(begin..end - 1);
                 });
             }
 
             while !q.queue.is_empty() {
-                q.consume_first(|gram, end| {
+                q.consume_first(|gram, end, _follow| {
                     let begin = end + 1 - gram.len() as u32;
                     first_half.push(begin..end - 1);
                 });
@@ -609,12 +689,12 @@ mod tests {
 
             let mut remaining = Vec::new();
             for c in suffix.chars() {
-                q.append_char(c, |gram, end| {
+                q.append_char(c, |gram, end, _follow| {
                     let begin = end + 1 - gram.len() as u32;
                     remaining.push(begin..end - 1);
                 });
             }
-            q.flush(|gram, end| {
+            q.flush(|gram, end, _follow| {
                 let begin = end + 1 - gram.len() as u32;
                 remaining.push(begin..end - 1);
             });
