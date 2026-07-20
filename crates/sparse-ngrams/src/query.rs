@@ -166,10 +166,17 @@ impl QueryGrams {
         (content_len, self.content & mask)
     }
 
-    /// Returns the smallest active boundary priority.
+    /// Returns the smallest active boundary priority, or `u32::MAX` when there is no active
+    /// boundary left to consume.
+    ///
+    /// Callers use this to repeatedly drain the lowest-priority boundary across a *set* of states
+    /// (e.g. the regex state-set reducer). A state with an empty queue has nothing left to consume,
+    /// so it must report the *maximum* priority: otherwise it would be selected ahead of states that
+    /// can still make progress, `consume_first` on it would be a no-op, and the reducer would loop
+    /// forever.
     pub fn min_priority(&self) -> u32 {
         if self.queue.is_empty() {
-            0
+            u32::MAX
         } else {
             self.queue.front_value()
         }
