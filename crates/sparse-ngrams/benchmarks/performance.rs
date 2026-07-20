@@ -1,8 +1,8 @@
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use sparse_ngrams::{
-    collect_sparse_grams_deque, collect_sparse_grams_scan, max_sparse_grams, NGram,
+    NGram, collect_sparse_grams_deque, collect_sparse_grams_scan, max_sparse_grams,
 };
 
 fn bench_collect(c: &mut Criterion) {
@@ -28,7 +28,7 @@ fn bench_collect(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("deque", name), input, |b, input| {
             b.iter(|| {
                 let mut w = 0usize;
-                collect_sparse_grams_deque(black_box(input), |gram| {
+                collect_sparse_grams_deque(black_box(input), |gram, _idx| {
                     buf[w] = gram;
                     w += 1;
                 });
@@ -38,7 +38,7 @@ fn bench_collect(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("scan", name), input, |b, input| {
             b.iter(|| {
                 let mut w = 0usize;
-                collect_sparse_grams_scan(black_box(input), |gram| {
+                collect_sparse_grams_scan(black_box(input), |gram, _idx| {
                     buf[w] = gram;
                     w += 1;
                 });

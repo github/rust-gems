@@ -46,12 +46,48 @@ invoked once per n-gram in emission order:
 use sparse_ngrams::{collect_sparse_grams_deque, NGram};
 
 let mut count = 0;
-collect_sparse_grams_deque(b"hello world", |gram: NGram| {
+collect_sparse_grams_deque(b"hello world", |gram: NGram, _idx| {
     count += 1;
     // ... insert `gram` into an index, hash it, etc.
 });
 assert!(count > 0);
 ```
+
+### Query-time extraction
+
+`collect_sparse_grams` emits *every* candidate gram, which is what you want when building an index.
+At query time you instead want the *minimum* set of grams that still covers the query string, fed
+incrementally as the user types. `QueryGrams` is a streaming state machine for exactly that: it
+accepts one character (or already index-folded byte) at a time, emits grams as soon as they are
+determined, and can be `flush`ed to drain the tail.
+
+The consumer receives `(gram, end, follow)`: the n-gram, the position of the character just after
+it, and that following byte when it has already been fed (`None` at the current stream end).
+
+```rust
+use sparse_ngrams::{QueryGrams, NGram};
+
+let mut q = QueryGrams::default();
+let mut grams = Vec::new();
+// Feed the query one character at a time (each is index-folded internally).
+for c in "hello world".chars() {
+    q.append_char(c, |gram: NGram, _end: u32, _follow: Option<u8>| {
+        grams.push(gram);
+    });
+}
+// Drain the remaining tail grams.
+q.flush(|gram: NGram, _end, _follow| {
+    grams.push(gram);
+});
+
+assert!(!grams.is_empty());
+assert!(grams.iter().all(|g| g.len() >= 2 && g.len() <= 8));
+```
+
+`QueryGrams` is `Clone` and hashes/compares by its canonical `state()`, so it can be used as an
+automaton state (e.g. cloned across branches while traversing a trie). Callers that buffer
+already-folded bytes can feed them with `append_byte` (using the re-exported `index_fold_char` to
+fold identically), and `consume_first` drains a single leading gram to shrink retained state.
 
 ## Performance
 

@@ -1,12 +1,15 @@
 [package]
 name = "sparse-ngrams"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
 description = "Fast sparse n-gram extraction from byte slices."
 repository = "https://github.com/github/rust-gems"
 license = "MIT"
-keywords = ["ngram", "algorithm", "search", "index"]
-categories = ["algorithms", "data-structures", "text-processing"]
+keywords = ["sparse-ngram", "ngram", "algorithm", "search", "code-search", "regular-expression"]
+categories = ["algorithms", "data-structures", "text-processing", "search-engine", "data-retrieval"]
+# `data/` holds the reference bigram ranking used only for offline model training/verification;
+# it is not needed to build or use the crate, so keep it out of the published package.
+exclude = ["data/"]
 
 [lib]
 bench = false
@@ -16,6 +19,7 @@ bench = false
 serde = ["dep:serde"]
 
 [dependencies]
+casefold = "0.1"
 serde = { version = "1", features = ["derive"], optional = true }
 
 [[bench]]

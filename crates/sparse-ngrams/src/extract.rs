@@ -1,8 +1,8 @@
 //! Core sparse n-gram extraction algorithm.
 
+use crate::MAX_SPARSE_GRAM_SIZE;
 use crate::ngram::NGram;
 use crate::table::{bigram_h, bigram_priority_rolling};
-use crate::MAX_SPARSE_GRAM_SIZE;
 
 /// Returns the maximum number of sparse n-grams that can be produced from
 /// `content_len` bytes of input. Use this to reserve capacity for the output (e.g. a `Vec` the
@@ -38,7 +38,7 @@ pub fn collect_sparse_grams(content: &[u8]) -> Vec<NGram> {
     let mut out = Vec::with_capacity(max_sparse_grams(content.len()));
     let spare = out.spare_capacity_mut();
     let mut w = 0;
-    collect_sparse_grams_deque(content, |gram| {
+    collect_sparse_grams_deque(content, |gram, _idx| {
         spare[w].write(gram);
         w += 1;
     });
@@ -51,9 +51,11 @@ pub fn collect_sparse_grams(content: &[u8]) -> Vec<NGram> {
 
 /// Monotone-deque extraction, with the deque held in fixed ring buffers. Calls `emit` once for
 /// every sparse n-gram, in emission order (all bigrams, plus algorithmically selected longer
-/// grams). `emit` decides what to do with each gram — push it into a `Vec`, write it into a
-/// pre-sized slice, feed it straight into an index, etc. — so no output buffer needs to be sized
-/// or allocated up front.
+/// grams), as `(gram, idx)` where `idx` is the position of the character just after `gram` in
+/// `content`.
+/// `emit` decides what to do with each gram — push it into a `Vec`, write it into a pre-sized
+/// slice, feed it straight into an index, etc. — so no output buffer needs to be sized or
+/// allocated up front.
 ///
 /// The boundary candidates form a monotone run, kept in fixed `[_; MAX_SPARSE_GRAM_SIZE]` ring
 /// buffers addressed by a single running depth `tail` — there is no head. Rather than dropping the
@@ -71,10 +73,10 @@ pub fn collect_sparse_grams(content: &[u8]) -> Vec<NGram> {
 /// use sparse_ngrams::{collect_sparse_grams_deque, NGram};
 ///
 /// let mut count = 0;
-/// collect_sparse_grams_deque(b"hello world", |_gram: NGram| count += 1);
+/// collect_sparse_grams_deque(b"hello world", |_gram: NGram, _idx| count += 1);
 /// assert!(count > 0);
 /// ```
-pub fn collect_sparse_grams_deque(content: &[u8], mut emit: impl FnMut(NGram)) {
+pub fn collect_sparse_grams_deque(content: &[u8], mut emit: impl FnMut(NGram, u32)) {
     let n = content.len();
     if n < 2 {
         return;
@@ -108,7 +110,7 @@ pub fn collect_sparse_grams_deque(content: &[u8], mut emit: impl FnMut(NGram)) {
         h = h_b;
 
         // The bigram (length 2) is always emitted.
-        emit(window_to_gram(window, 2));
+        emit(window_to_gram(window, 2), idx + 1);
 
         // Walk back over the candidates from the tail, emitting one gram each. Stop at the first
         // candidate too far back to form a gram of at most `MAX_SPARSE_GRAM_SIZE` bytes (this
@@ -123,10 +125,10 @@ pub fn collect_sparse_grams_deque(content: &[u8], mut emit: impl FnMut(NGram)) {
             if idx.wrapping_sub(begin) + 1 >= MAX_SPARSE_GRAM_SIZE as u32 {
                 break;
             }
-            emit(window_to_gram(
-                window,
-                (idx.wrapping_sub(begin) + 2) as usize,
-            ));
+            emit(
+                window_to_gram(window, (idx.wrapping_sub(begin) + 2) as usize),
+                idx + 1,
+            );
             let bval = val_buf[slot];
             if bval < value {
                 break;
@@ -145,12 +147,13 @@ pub fn collect_sparse_grams_deque(content: &[u8], mut emit: impl FnMut(NGram)) {
 }
 
 /// Queue-free scan-based extraction. Calls `emit` once for every sparse n-gram, in the same order
-/// as [`collect_sparse_grams_deque`].
+/// as [`collect_sparse_grams_deque`], as `(gram, idx)` where `idx` is the position of the character
+/// just after `gram` in `content`.
 ///
 /// Produces identical output (same order) as [`collect_sparse_grams_deque`]: the boundary
 /// candidates are exactly the positions where a backward scan hits a new suffix minimum, so a
 /// fixed-size ring of recent priorities replaces the monotone deque.
-pub fn collect_sparse_grams_scan(content: &[u8], mut emit: impl FnMut(NGram)) {
+pub fn collect_sparse_grams_scan(content: &[u8], mut emit: impl FnMut(NGram, u32)) {
     let n = content.len();
     if n < 2 {
         return;
@@ -168,7 +171,7 @@ pub fn collect_sparse_grams_scan(content: &[u8], mut emit: impl FnMut(NGram)) {
         priorities[idx as usize & MASK] = v1;
 
         // The bigram (length 2) is always emitted.
-        emit(window_to_gram(window, 2));
+        emit(window_to_gram(window, 2), idx + 1);
 
         // Scan backwards, tracking the minimum interior priority seen so far. Each new strict
         // minimum is a boundary candidate; emit its gram while the right boundary `v1` is strictly
@@ -184,7 +187,7 @@ pub fn collect_sparse_grams_scan(content: &[u8], mut emit: impl FnMut(NGram)) {
                     break;
                 }
                 let len = d as usize + 2;
-                emit(window_to_gram(window, len));
+                emit(window_to_gram(window, len), idx + 1);
                 running_min = v_p;
             }
         }
@@ -197,9 +200,9 @@ mod tests {
     use crate::table::bigram_priority;
     use std::collections::HashSet;
 
-    fn collect_to_vec(run: impl FnOnce(&mut dyn FnMut(NGram))) -> Vec<NGram> {
+    fn collect_to_vec(run: impl FnOnce(&mut dyn FnMut(NGram, u32))) -> Vec<NGram> {
         let mut out = Vec::new();
-        run(&mut |gram| out.push(gram));
+        run(&mut |gram, _idx| out.push(gram));
         out
     }
 
