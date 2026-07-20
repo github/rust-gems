@@ -1,8 +1,8 @@
 //! Core sparse n-gram extraction algorithm.
 
+use crate::MAX_SPARSE_GRAM_SIZE;
 use crate::ngram::NGram;
 use crate::table::{bigram_h, bigram_priority_rolling};
-use crate::MAX_SPARSE_GRAM_SIZE;
 
 /// Returns the maximum number of sparse n-grams that can be produced from
 /// `content_len` bytes of input. Use this to reserve capacity for the output (e.g. a `Vec` the

@@ -1,8 +1,8 @@
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use sparse_ngrams::{
-    collect_sparse_grams_deque, collect_sparse_grams_scan, max_sparse_grams, NGram,
+    NGram, collect_sparse_grams_deque, collect_sparse_grams_scan, max_sparse_grams,
 };
 
 fn bench_collect(c: &mut Criterion) {
