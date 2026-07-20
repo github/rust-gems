@@ -61,7 +61,7 @@ impl Queue {
         self.val_buf[self.head as usize]
     }
 
-    fn pop_front(&mut self) -> u32 {
+    fn pop_front_idx(&mut self) -> u32 {
         debug_assert!(!self.is_empty());
         let first = self.idx_buf[self.head as usize];
         self.head = (self.head + 1) & RING_MASK;
@@ -132,12 +132,35 @@ impl Default for QueryGrams {
 }
 
 impl QueryGrams {
+    /// Returns the canonical, position-independent fingerprint of the active window as
+    /// `(content_len, content)`.
+    ///
+    /// `content_len` is the number of active bytes and `content` is exactly those bytes packed into
+    /// a `u64` (newest in the low byte), with all higher bytes masked off. The active window starts
+    /// two bytes before the front boundary (the oldest candidate still able to start a gram) and
+    /// runs to the newest fed byte: the front boundary is a bigram, so both of its source bytes —
+    /// which determine its priority and the left half of the next bigram — must be retained for the
+    /// state to fully predict future grams. Everything before that has already been covered by an
+    /// emitted gram and can no longer influence future grams, so it is excluded; this makes the
+    /// fingerprint independent of the absolute stream position and of already-drained history.
+    /// [`PartialEq`], [`Eq`] and [`Hash`] are all defined in terms of it, so two states with
+    /// identical active windows compare and hash equal.
+    ///
+    /// When the queue is empty there is no front boundary, so the whole packed buffer is active:
+    /// `(0, 0)` for a fresh state and `(1, last_byte)` once a single trailing byte has been
+    /// retained (e.g. after `consume_first` collapses). The retained byte is part of the state
+    /// because it becomes the left half of the next bigram.
     #[inline]
     pub fn state(&self) -> (u32, u64) {
-        if self.queue.is_empty() {
-            return (0, 0);
-        }
-        let content_len = self.content_end_idx - self.queue.front_idx();
+        let begin = if self.queue.is_empty() {
+            0
+        } else {
+            // The front boundary is a bigram at index `front_idx`, spanning byte positions
+            // `front_idx - 2` and `front_idx - 1`; include both so its priority (and the next
+            // bigram's left byte) are captured.
+            self.queue.front_idx() - 2
+        };
+        let content_len = self.content_end_idx - begin;
         debug_assert!(content_len < MAX_SPARSE_GRAM_SIZE as u32);
         let mask = (1u64 << (content_len * 8)) - 1;
         (content_len, self.content & mask)
@@ -222,9 +245,9 @@ impl QueryGrams {
                 && let priority = self.queue.front_value()
                 && value < priority
             {
-                let mut begin = self.queue.pop_front();
+                let mut begin = self.queue.pop_front_idx();
                 while !self.queue.is_empty() && self.queue.front_value() == priority {
-                    let end = self.queue.pop_front();
+                    let end = self.queue.pop_front_idx();
                     self.extract_gram(begin, end, &mut consumer);
                     begin = end;
                 }
@@ -236,7 +259,7 @@ impl QueryGrams {
             }
             if idx - self.queue.front_idx() + 2 >= MAX_SPARSE_GRAM_SIZE as u32 && self.queue.len > 1
             {
-                let begin = self.queue.pop_front();
+                let begin = self.queue.pop_front_idx();
                 let end = self.queue.front_idx();
                 self.extract_gram(begin, end, &mut consumer);
             }
@@ -252,7 +275,7 @@ impl QueryGrams {
             self.extract_gram(2, 2, &mut consumer);
         } else {
             while self.queue.len > 1 {
-                let begin = self.queue.pop_front();
+                let begin = self.queue.pop_front_idx();
                 let end = self.queue.front_idx();
                 self.extract_gram(begin, end, &mut consumer);
             }
@@ -266,7 +289,7 @@ impl QueryGrams {
     {
         if self.queue.len > 1 {
             // Emit the gram spanning the first boundary to the next one, mirroring `flush`.
-            let begin = self.queue.pop_front();
+            let begin = self.queue.pop_front_idx();
             let end = self.queue.front_idx();
             self.extract_gram(begin, end, &mut consumer);
         } else if self.content_end_idx == 2 {
@@ -447,6 +470,45 @@ mod tests {
                 q.append_byte(b, &mut check);
             }
             q.flush(&mut check);
+        }
+    }
+
+    #[test]
+    fn state_tracks_active_window_each_step() {
+        // `state()` must report `(content_len, packed active window)` after every processed byte,
+        // where the active window is exactly the last `content_len` bytes of the input so far. This
+        // pins two things at once:
+        //  * the pre-append snapshot equals the previous post-append snapshot (state only moves on
+        //    append), and
+        //  * no step collapses the window below its true length — the regression where an empty or
+        //    front-coincident queue reported `(0, 0)` (dropping the retained trailing byte / the
+        //    pending front bigram) would show up here as a wrong length at bytes 1, 3, 5, 7, ...
+        let input = b"hello world";
+        // Active-window length after each processed byte (byte 0 = after the first byte).
+        let expected_len = [1u32, 2, 3, 2, 3, 2, 3, 2, 3, 4, 5];
+
+        let pack = |bytes: &[u8]| bytes.iter().fold(0u64, |acc, &b| (acc << 8) | b as u64);
+
+        let mut q = QueryGrams::default();
+        let mut prev = q.state();
+        assert_eq!(prev, (0, 0), "a fresh state must be empty");
+
+        for (i, &byte) in input.iter().enumerate() {
+            // Before the append the state must be untouched since the last append.
+            assert_eq!(q.state(), prev, "state moved without an append before byte {i}");
+
+            q.append_byte(byte, |_, _, _| {});
+
+            let len = expected_len[i];
+            let window = &input[i + 1 - len as usize..=i];
+            let after = q.state();
+            assert_eq!(
+                after,
+                (len, pack(window)),
+                "unexpected state after byte {i} ({:?})",
+                char::from(byte),
+            );
+            prev = after;
         }
     }
 
