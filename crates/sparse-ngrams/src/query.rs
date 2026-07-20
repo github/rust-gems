@@ -495,7 +495,11 @@ mod tests {
 
         for (i, &byte) in input.iter().enumerate() {
             // Before the append the state must be untouched since the last append.
-            assert_eq!(q.state(), prev, "state moved without an append before byte {i}");
+            assert_eq!(
+                q.state(),
+                prev,
+                "state moved without an append before byte {i}"
+            );
 
             q.append_byte(byte, |_, _, _| {});
 
