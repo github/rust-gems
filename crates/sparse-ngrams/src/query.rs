@@ -8,9 +8,12 @@ use std::hash::{Hash, Hasher};
 
 use casefold::index_fold_char;
 
+use crate::MAX_SPARSE_GRAM_SIZE;
 use crate::ngram::NGram;
 use crate::table::{bigram_h, bigram_priority_rolling};
-use crate::MAX_SPARSE_GRAM_SIZE;
+
+/// Bit mask that wraps ring-buffer indices into `[0, MAX_SPARSE_GRAM_SIZE)`.
+const RING_MASK: u32 = MAX_SPARSE_GRAM_SIZE as u32 - 1;
 
 #[derive(Clone, Copy, Debug)]
 struct PosState {
@@ -22,8 +25,8 @@ struct PosState {
 struct Queue {
     idx_buf: [u32; MAX_SPARSE_GRAM_SIZE],
     val_buf: [u32; MAX_SPARSE_GRAM_SIZE],
-    head: usize,
-    len: usize,
+    head: u32,
+    len: u32,
 }
 
 impl Queue {
@@ -40,61 +43,44 @@ impl Queue {
         self.len = 0;
     }
 
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     fn front_idx(&self) -> u32 {
-        if self.len == 0 {
-            1
-        } else {
-            self.idx_buf[self.head]
-        }
+        // Callers only read the front boundary when the queue is non-empty; the empty case is
+        // handled earlier (e.g. via `state`'s early return) and must never reach here.
+        debug_assert!(!self.is_empty());
+        self.idx_buf[self.head as usize]
     }
 
     fn front_value(&self) -> u32 {
-        if self.len == 0 {
-            0
-        } else {
-            self.val_buf[self.head]
-        }
-    }
-
-    fn back_value(&self) -> Option<u32> {
-        if self.len == 0 {
-            None
-        } else {
-            let slot = (self.head + self.len - 1) & (MAX_SPARSE_GRAM_SIZE - 1);
-            Some(self.val_buf[slot])
-        }
-    }
-
-    fn pop_back(&mut self) -> Option<PosState> {
-        if self.len == 0 {
-            return None;
-        }
-        let slot = (self.head + self.len - 1) & (MAX_SPARSE_GRAM_SIZE - 1);
-        self.len -= 1;
-        Some(PosState {
-            index: self.idx_buf[slot],
-            value: self.val_buf[slot],
-        })
+        // Callers only read the front priority when the queue is non-empty; the empty case is
+        // handled earlier and must never reach here.
+        debug_assert!(!self.is_empty());
+        self.val_buf[self.head as usize]
     }
 
     fn pop_front(&mut self) -> u32 {
-        debug_assert!(self.len > 0);
-        let first = self.idx_buf[self.head];
-        self.head = (self.head + 1) & (MAX_SPARSE_GRAM_SIZE - 1);
+        debug_assert!(!self.is_empty());
+        let first = self.idx_buf[self.head as usize];
+        self.head = (self.head + 1) & RING_MASK;
         self.len -= 1;
         first
     }
 
     fn push(&mut self, state: PosState) {
-        while let Some(back_value) = self.back_value() {
-            if back_value <= state.value {
+        // Drop tail candidates whose priority exceeds the new one, keeping the deque monotone
+        // (nondecreasing priorities front-to-back).
+        while !self.is_empty() {
+            let slot = ((self.head + self.len - 1) & RING_MASK) as usize;
+            if self.val_buf[slot] <= state.value {
                 break;
             }
-            self.pop_back();
+            self.len -= 1;
         }
-
-        debug_assert!(self.len < MAX_SPARSE_GRAM_SIZE);
-        let slot = (self.head + self.len) & (MAX_SPARSE_GRAM_SIZE - 1);
+        debug_assert!(self.len < MAX_SPARSE_GRAM_SIZE as u32);
+        let slot = ((self.head + self.len) & RING_MASK) as usize;
         self.idx_buf[slot] = state.index;
         self.val_buf[slot] = state.value;
         self.len += 1;
@@ -124,15 +110,13 @@ impl Eq for QueryGrams {}
 
 impl PartialEq for QueryGrams {
     fn eq(&self, other: &Self) -> bool {
-        self.active_content_len() == other.active_content_len()
-            && self.masked_content() == other.masked_content()
+        self.state() == other.state()
     }
 }
 
 impl Hash for QueryGrams {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.active_content_len().hash(state);
-        self.masked_content().hash(state);
+        self.state().hash(state);
     }
 }
 
@@ -149,21 +133,23 @@ impl Default for QueryGrams {
 
 impl QueryGrams {
     #[inline]
-    fn active_content_len(&self) -> u32 {
-        self.content_end_idx - self.queue.front_idx().saturating_sub(1)
-    }
-
-    #[inline]
-    fn masked_content(&self) -> u64 {
-        let content_len = self.active_content_len();
-        debug_assert!(content_len < 8);
+    pub fn state(&self) -> (u32, u64) {
+        if self.queue.is_empty() {
+            return (0, 0);
+        }
+        let content_len = self.content_end_idx - self.queue.front_idx();
+        debug_assert!(content_len < MAX_SPARSE_GRAM_SIZE as u32);
         let mask = (1u64 << (content_len * 8)) - 1;
-        self.content & mask
+        (content_len, self.content & mask)
     }
 
     /// Returns the smallest active boundary priority.
     pub fn min_priority(&self) -> u32 {
-        self.queue.front_value()
+        if self.queue.is_empty() {
+            0
+        } else {
+            self.queue.front_value()
+        }
     }
 
     fn extract_gram<F>(&mut self, begin_index: u32, end_index: u32, consumer: &mut F)
@@ -171,11 +157,12 @@ impl QueryGrams {
         F: FnMut(NGram, u32),
     {
         debug_assert!(end_index >= begin_index);
-        debug_assert!(end_index < self.content_end_idx);
+        debug_assert!(end_index <= self.content_end_idx);
 
         let len = (end_index - begin_index + 2) as usize;
-        let dist = self.content_end_idx - 1 - end_index;
+        let dist = self.content_end_idx - end_index;
         let shifted = self.content >> (dist * 8);
+        // Report the position of the character just after the emitted ngram.
         consumer(NGram::from_window_masked(shifted, len), end_index);
     }
 
@@ -187,23 +174,25 @@ impl QueryGrams {
         F: FnMut(NGram, u32),
     {
         let right = index_fold_char(c);
+        let left = (self.content & 0xFF) as u8;
         self.content_end_idx += 1;
         self.content = (self.content << 8) | right as u64;
 
-        let idx = self.content_end_idx - 1;
+        let idx = self.content_end_idx;
 
         // Initialize rolling state from the first character; from then on each append consumes
         // exactly one new character via the bigram path.
-        if idx == 0 {
+        if idx == 1 {
             self.h = bigram_h(right);
         } else {
-            let left = ((self.content >> 8) & 0xFF) as u8;
             let (value, h_b) = bigram_priority_rolling(left, right, self.h);
             self.h = h_b;
-            let priority = self.queue.front_value();
-            if self.queue.len > 0 && value < priority {
+            if !self.queue.is_empty()
+                && let priority = self.queue.front_value()
+                && value < priority
+            {
                 let mut begin = self.queue.pop_front();
-                while self.queue.len > 0 && self.queue.front_value() == priority {
+                while !self.queue.is_empty() && self.queue.front_value() == priority {
                     let end = self.queue.pop_front();
                     self.extract_gram(begin, end, &mut consumer);
                     begin = end;
@@ -229,7 +218,7 @@ impl QueryGrams {
         F: FnMut(NGram, u32),
     {
         if self.content_end_idx == 2 {
-            self.extract_gram(1, 1, &mut consumer);
+            self.extract_gram(2, 2, &mut consumer);
         } else {
             while self.queue.len > 1 {
                 let begin = self.queue.pop_front();
@@ -251,7 +240,7 @@ impl QueryGrams {
             self.extract_gram(begin, end, &mut consumer);
         } else if self.content_end_idx == 2 {
             // Only a single bigram remains; emit it like `flush` does.
-            self.extract_gram(1, 1, &mut consumer);
+            self.extract_gram(2, 2, &mut consumer);
         }
 
         // The last boundary is a dangling endpoint that never becomes its own gram (just like
@@ -272,64 +261,45 @@ impl QueryGrams {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::table::bigram_priority;
+    use crate::collect_sparse_grams_deque;
     use std::collections::hash_map::DefaultHasher;
+    use std::ops::Range;
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    struct Interval {
-        start: u32,
-        end: u32,
-    }
+    // Test intervals are stored as `Range<u32>` in bigram-boundary coordinates: a gram covering
+    // 0-based bytes `s..=s+L-1` is represented as `s+1..s+L-1`, the inclusive range of bigram
+    // boundaries (right-byte indices) it covers. The cover-chain and DP helpers treat `end`
+    // inclusively.
 
-    fn query_intervals(input: &str) -> Vec<Interval> {
+    fn query_intervals(input: &str) -> Vec<Range<u32>> {
         let mut q = QueryGrams::default();
         let mut out = Vec::new();
         for c in input.chars() {
             q.append_char(c, |gram, end| {
-                let begin = end + 2 - gram.len() as u32;
-                out.push(Interval { start: begin, end });
+                let begin = end + 1 - gram.len() as u32;
+                out.push(begin..end - 1);
             });
         }
         q.flush(|gram, end| {
-            let begin = end + 2 - gram.len() as u32;
-            out.push(Interval { start: begin, end });
+            let begin = end + 1 - gram.len() as u32;
+            out.push(begin..end - 1);
         });
         out
     }
 
-    fn candidate_intervals(bytes: &[u8]) -> Vec<Interval> {
-        let n = bytes.len();
-        if n < 2 {
-            return Vec::new();
-        }
-
-        let mut out = Vec::with_capacity((n - 1) * 3);
-        // Every bigram is always a candidate.
-        for i in 1..n as u32 {
-            out.push(Interval { start: i, end: i });
-        }
-
-        for len in 3..=MAX_SPARSE_GRAM_SIZE.min(n) {
-            for start in 0..=n - len {
-                let left = bigram_priority(bytes[start], bytes[start + 1]);
-                let right = bigram_priority(bytes[start + len - 2], bytes[start + len - 1]);
-                let mut min_interior = u32::MAX;
-                for k in 1..len - 2 {
-                    min_interior =
-                        min_interior.min(bigram_priority(bytes[start + k], bytes[start + k + 1]));
-                }
-                if left < min_interior && right < min_interior {
-                    out.push(Interval {
-                        start: start as u32 + 1,
-                        end: start as u32 + len as u32 - 1,
-                    });
-                }
-            }
-        }
+    // The full candidate set (every sparse gram the index extractor would emit) is exactly the
+    // pool the query cover must be drawn from, so reuse `collect_sparse_grams_deque` instead of
+    // re-deriving the boundary rule here. `idx` is the position just after the gram, matching the
+    // `Range<u32>` boundary convention above.
+    fn candidate_intervals(bytes: &[u8]) -> Vec<Range<u32>> {
+        let mut out = Vec::new();
+        collect_sparse_grams_deque(bytes, |gram, idx| {
+            let begin = idx + 1 - gram.len() as u32;
+            out.push(begin..idx - 1);
+        });
         out
     }
 
-    fn min_cover_size_query_semantics(m: u32, intervals: &[Interval]) -> usize {
+    fn min_cover_size_query_semantics(m: u32, intervals: &[Range<u32>]) -> usize {
         let inf = usize::MAX / 4;
         let mut dp = vec![0usize; m as usize + 1];
         for pos in (1..m).rev() {
@@ -345,7 +315,7 @@ mod tests {
         dp[1]
     }
 
-    fn is_valid_query_cover_chain(m: u32, intervals: &[Interval]) -> bool {
+    fn is_valid_query_cover_chain(m: u32, intervals: &[Range<u32>]) -> bool {
         if m <= 1 {
             return true;
         }
@@ -394,9 +364,10 @@ mod tests {
         let mut out = Vec::new();
         q.flush(|gram, idx| out.push((gram, idx)));
         assert!(!out.is_empty());
-        assert!(out
-            .iter()
-            .all(|(g, _)| (2..=MAX_SPARSE_GRAM_SIZE).contains(&g.len())));
+        assert!(
+            out.iter()
+                .all(|(g, _)| (2..=MAX_SPARSE_GRAM_SIZE).contains(&g.len()))
+        );
     }
 
     #[test]
@@ -593,15 +564,15 @@ mod tests {
             let mut first_half = Vec::new();
             for c in prefix.chars() {
                 q.append_char(c, |gram, end| {
-                    let begin = end + 2 - gram.len() as u32;
-                    first_half.push(Interval { start: begin, end });
+                    let begin = end + 1 - gram.len() as u32;
+                    first_half.push(begin..end - 1);
                 });
             }
 
-            while q.queue.len != 0 {
+            while !q.queue.is_empty() {
                 q.consume_first(|gram, end| {
-                    let begin = end + 2 - gram.len() as u32;
-                    first_half.push(Interval { start: begin, end });
+                    let begin = end + 1 - gram.len() as u32;
+                    first_half.push(begin..end - 1);
                 });
             }
 
@@ -639,13 +610,13 @@ mod tests {
             let mut remaining = Vec::new();
             for c in suffix.chars() {
                 q.append_char(c, |gram, end| {
-                    let begin = end + 2 - gram.len() as u32;
-                    remaining.push(Interval { start: begin, end });
+                    let begin = end + 1 - gram.len() as u32;
+                    remaining.push(begin..end - 1);
                 });
             }
             q.flush(|gram, end| {
-                let begin = end + 2 - gram.len() as u32;
-                remaining.push(Interval { start: begin, end });
+                let begin = end + 1 - gram.len() as u32;
+                remaining.push(begin..end - 1);
             });
 
             assert_eq!(

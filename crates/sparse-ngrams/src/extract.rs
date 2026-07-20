@@ -51,7 +51,8 @@ pub fn collect_sparse_grams(content: &[u8]) -> Vec<NGram> {
 
 /// Monotone-deque extraction, with the deque held in fixed ring buffers. Calls `emit` once for
 /// every sparse n-gram, in emission order (all bigrams, plus algorithmically selected longer
-/// grams), as `(gram, idx)` where `idx` is the inclusive end index of `gram` in `content`.
+/// grams), as `(gram, idx)` where `idx` is the position of the character just after `gram` in
+/// `content`.
 /// `emit` decides what to do with each gram — push it into a `Vec`, write it into a pre-sized
 /// slice, feed it straight into an index, etc. — so no output buffer needs to be sized or
 /// allocated up front.
@@ -109,7 +110,7 @@ pub fn collect_sparse_grams_deque(content: &[u8], mut emit: impl FnMut(NGram, u3
         h = h_b;
 
         // The bigram (length 2) is always emitted.
-        emit(window_to_gram(window, 2), idx);
+        emit(window_to_gram(window, 2), idx + 1);
 
         // Walk back over the candidates from the tail, emitting one gram each. Stop at the first
         // candidate too far back to form a gram of at most `MAX_SPARSE_GRAM_SIZE` bytes (this
@@ -126,7 +127,7 @@ pub fn collect_sparse_grams_deque(content: &[u8], mut emit: impl FnMut(NGram, u3
             }
             emit(
                 window_to_gram(window, (idx.wrapping_sub(begin) + 2) as usize),
-                idx,
+                idx + 1,
             );
             let bval = val_buf[slot];
             if bval < value {
@@ -146,8 +147,8 @@ pub fn collect_sparse_grams_deque(content: &[u8], mut emit: impl FnMut(NGram, u3
 }
 
 /// Queue-free scan-based extraction. Calls `emit` once for every sparse n-gram, in the same order
-/// as [`collect_sparse_grams_deque`], as `(gram, idx)` where `idx` is the inclusive end index of
-/// `gram` in `content`.
+/// as [`collect_sparse_grams_deque`], as `(gram, idx)` where `idx` is the position of the character
+/// just after `gram` in `content`.
 ///
 /// Produces identical output (same order) as [`collect_sparse_grams_deque`]: the boundary
 /// candidates are exactly the positions where a backward scan hits a new suffix minimum, so a
@@ -170,7 +171,7 @@ pub fn collect_sparse_grams_scan(content: &[u8], mut emit: impl FnMut(NGram, u32
         priorities[idx as usize & MASK] = v1;
 
         // The bigram (length 2) is always emitted.
-        emit(window_to_gram(window, 2), idx);
+        emit(window_to_gram(window, 2), idx + 1);
 
         // Scan backwards, tracking the minimum interior priority seen so far. Each new strict
         // minimum is a boundary candidate; emit its gram while the right boundary `v1` is strictly
@@ -186,7 +187,7 @@ pub fn collect_sparse_grams_scan(content: &[u8], mut emit: impl FnMut(NGram, u32
                     break;
                 }
                 let len = d as usize + 2;
-                emit(window_to_gram(window, len), idx);
+                emit(window_to_gram(window, len), idx + 1);
                 running_min = v_p;
             }
         }
