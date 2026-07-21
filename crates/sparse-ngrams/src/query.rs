@@ -166,10 +166,17 @@ impl QueryGrams {
         (content_len, self.content & mask)
     }
 
-    /// Returns the smallest active boundary priority.
+    /// Returns the smallest active boundary priority, or `u32::MAX` when there is no active
+    /// boundary left to consume.
+    ///
+    /// Callers use this to repeatedly drain the lowest-priority boundary across a *set* of states
+    /// (e.g. the regex state-set reducer). A state with an empty queue has nothing left to consume,
+    /// so it must report the *maximum* priority: otherwise it would be selected ahead of states that
+    /// can still make progress, `consume_first` on it would be a no-op, and the reducer would loop
+    /// forever.
     pub fn min_priority(&self) -> u32 {
         if self.queue.is_empty() {
-            0
+            u32::MAX
         } else {
             self.queue.front_value()
         }
@@ -304,9 +311,17 @@ impl QueryGrams {
             self.queue.clear();
             if self.content_end_idx > 1 {
                 // `self.h` already holds `bigram_h(last)` by invariant, so it needs no update.
-                let last = (self.content & 0xFF) as u8;
-                self.content = last as u64;
+                // Keep just the single trailing byte for now: it is the left half of the next
+                // bigram, so a `consume_first` that stops here still satisfies
+                // `retained-byte + suffix == fresh(retained-byte + suffix)`.
                 self.content_end_idx = 1;
+            } else {
+                // A further `consume_first` on that lone byte drops it, converging to the default
+                // state. This fixpoint is required by the regex state-set reducer, which shrinks
+                // distinct states until they collapse into a shared one (see
+                // `consume_first_converges_to_default`). `state()` masks `content`, so the stale
+                // high bytes left in `self.content` are invisible and need not be cleared.
+                self.content_end_idx = 0;
             }
         }
     }
@@ -797,6 +812,31 @@ mod tests {
                     remaining
                 );
             }
+        }
+    }
+
+    /// Repeatedly calling `consume_first` (without any intervening `append`) must eventually reach
+    /// the default state. Consumers such as the regex state-set reducer shrink a *set* of states by
+    /// calling `consume_first` on the lowest-priority ones until distinct states collapse into a
+    /// shared one; if a state could get stuck at a non-default fixed point, two such states with
+    /// different retained bytes would never merge and the reducer would loop forever.
+    #[test]
+    fn consume_first_converges_to_default() {
+        for input in ["abc", "abcdef", "hello world", "ababababab", "mississippi"] {
+            let mut q = QueryGrams::default();
+            for c in input.chars() {
+                q.append_char(c, |_gram, _idx, _follow| {});
+            }
+            // Far more calls than there are bytes: the state must be at the default fixpoint well
+            // before this loop ends, and further calls must keep it there.
+            for _ in 0..(input.len() + 8) {
+                q.consume_first(|_gram, _idx, _follow| {});
+            }
+            assert_eq!(
+                q.state(),
+                QueryGrams::default().state(),
+                "consume_first did not converge to the default state for input {input:?}",
+            );
         }
     }
 }
