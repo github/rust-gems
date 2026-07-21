@@ -1,6 +1,6 @@
 [package]
 name = "sparse-ngrams"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Fast sparse n-gram extraction from byte slices."
 repository = "https://github.com/github/rust-gems"
