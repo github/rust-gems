@@ -64,7 +64,8 @@ determined, and can be `flush`ed to drain the tail.
 The consumer receives `(gram, end, follow, bytes)`: the n-gram, the position of the character just
 after it, that following byte when it has already been fed (`None` at the current stream end), and
 the gram's index-folded bytes. `bytes` borrows a stack buffer valid only for the duration of the
-call — copy it if you need to keep it — so nothing is allocated per gram.
+call — copy it if you need to keep it — so nothing is allocated per gram. A consumer that ignores
+the argument optimizes back to code identical to not reporting the bytes at all.
 
 ```rust
 use sparse_ngrams::{QueryGrams, NGram};

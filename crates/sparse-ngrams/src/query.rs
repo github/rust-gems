@@ -107,7 +107,8 @@ impl Queue {
 ///   current stream end.
 /// * `bytes` — the gram's index-folded bytes, in reading order. They are borrowed from a stack
 ///   buffer that is only valid for the duration of the call, so a consumer that needs to keep them
-///   must copy them. Nothing is allocated per gram, so this stays cheap on the hot path.
+///   must copy them. Nothing is allocated per gram, and a consumer that ignores the argument
+///   optimizes back to code identical to not reporting the bytes at all.
 #[derive(Clone)]
 pub struct QueryGrams {
     /// Queue of candidate boundaries (strictly increasing indices and nondecreasing priorities).
@@ -232,11 +233,15 @@ impl QueryGrams {
         // Report the position of the character just after the emitted ngram, along with that
         // character itself when it has already been fed (see `follow_byte`).
         let follow = self.follow_byte(end_index);
+        // `len` is always in `2..=MAX_SPARSE_GRAM_SIZE` (`from_window` debug-asserts it), so the
+        // clamp never changes the slice. It is what makes the bound *statically* provable: without
+        // it the slicing keeps a bounds-check panic path alive, and that observable side effect
+        // stops the optimizer from eliminating the byte buffer for consumers that ignore it.
         consumer(
             NGram::from_window(aligned, len),
             end_index,
             follow,
-            &bytes[..len],
+            &bytes[..len.min(MAX_SPARSE_GRAM_SIZE)],
         );
     }
 
