@@ -61,8 +61,11 @@ incrementally as the user types. `QueryGrams` is a streaming state machine for e
 accepts one character (or already index-folded byte) at a time, emits grams as soon as they are
 determined, and can be `flush`ed to drain the tail.
 
-The consumer receives `(gram, end, follow)`: the n-gram, the position of the character just after
-it, and that following byte when it has already been fed (`None` at the current stream end).
+The consumer receives `(gram, end, follow, bytes)`: the n-gram, the position of the character just
+after it, that following byte when it has already been fed (`None` at the current stream end), and
+the gram's index-folded bytes. `bytes` borrows a stack buffer valid only for the duration of the
+call — copy it if you need to keep it — so nothing is allocated per gram. A consumer that ignores
+the argument optimizes back to code identical to not reporting the bytes at all.
 
 ```rust
 use sparse_ngrams::{QueryGrams, NGram};
@@ -71,12 +74,13 @@ let mut q = QueryGrams::default();
 let mut grams = Vec::new();
 // Feed the query one character at a time (each is index-folded internally).
 for c in "hello world".chars() {
-    q.append_char(c, |gram: NGram, _end: u32, _follow: Option<u8>| {
+    q.append_char(c, |gram: NGram, _end: u32, _follow: Option<u8>, bytes: &[u8]| {
+        assert_eq!(gram, NGram::from_bytes(bytes));
         grams.push(gram);
     });
 }
 // Drain the remaining tail grams.
-q.flush(|gram: NGram, _end, _follow| {
+q.flush(|gram: NGram, _end, _follow, _bytes| {
     grams.push(gram);
 });
 
