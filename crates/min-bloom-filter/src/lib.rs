@@ -46,13 +46,8 @@ impl MinBloomFilter {
             "false_positive_rate must be finite and between zero and one"
         );
 
-        let probes = WORDS_PER_BLOCK as f64;
-        let bits_per_entry = -probes / (1.0 - false_positive_rate.powf(1.0 / probes)).ln();
-        let total_bits =
-            (expected_entries as f64 * bits_per_entry * f64::from(MAX_VALUE.ilog2() + 1)).ceil()
-                as usize;
-        let bits_per_block = WORDS_PER_BLOCK * u32::BITS as usize;
-        let block_count = total_bits.div_ceil(bits_per_block).max(1);
+        let block_count =
+            (expected_entries as f64 / mean_block_occupancy(false_positive_rate)).ceil() as usize;
 
         Self {
             blocks: vec![[0; WORDS_PER_BLOCK]; block_count].into_boxed_slice(),
@@ -113,6 +108,39 @@ impl MinBloomFilter {
     /// Resets every nibble to zero.
     pub fn clear(&mut self) {
         self.blocks.fill([0; WORDS_PER_BLOCK]);
+    }
+}
+
+fn mean_block_occupancy(false_positive_rate: f64) -> f64 {
+    let mut low = 0.0;
+    let mut high = 64.0;
+    while split_block_false_positive_probability(high) < false_positive_rate {
+        high *= 2.0;
+    }
+    for _ in 0..64 {
+        let middle = (low + high) / 2.0;
+        if split_block_false_positive_probability(middle) < false_positive_rate {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    low
+}
+
+fn split_block_false_positive_probability(mean_occupancy: f64) -> f64 {
+    let mut probability = (-mean_occupancy).exp();
+    let mut total = 0.0;
+    let mut occupancy = 0_u32;
+    loop {
+        let selected = 1.0 - (7.0_f64 / 8.0).powf(f64::from(occupancy));
+        total += probability * selected.powi(WORDS_PER_BLOCK as i32);
+
+        occupancy += 1;
+        probability *= mean_occupancy / f64::from(occupancy);
+        if probability < f64::EPSILON && occupancy as f64 > mean_occupancy {
+            return total;
+        }
     }
 }
 
@@ -304,6 +332,8 @@ mod tests {
         let one_percent = MinBloomFilter::new(entries, 0.01);
         let tenth_percent = MinBloomFilter::new(entries, 0.001);
 
+        assert_eq!(one_percent.len_bytes(), 20_149_216);
+        assert_eq!(tenth_percent.len_bytes(), 38_009_632);
         assert!(tenth_percent.len_bytes() > one_percent.len_bytes());
         assert_eq!(one_percent.len_bytes() % 32, 0);
         assert_eq!(tenth_percent.len_bytes() % 32, 0);
