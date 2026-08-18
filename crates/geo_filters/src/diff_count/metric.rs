@@ -141,7 +141,56 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffMetric<'a, C> {
     pub fn filter(&self) -> &GeoDiffCount<'a, C> {
         &self.filter
     }
+
+    /// Prefetches the filter data first read by [`Self::symmetric_diff_size`] into the L1 data
+    /// cache.
+    ///
+    /// This is a CPU cache hint only: it does not perform I/O or require the filter to own its
+    /// backing storage. It is intended for callers that can issue the hint several iterations
+    /// before comparing an mmap-backed candidate.
+    #[inline]
+    pub fn prefetch_l1(&self) {
+        let ptr = self
+            .filter
+            .lsb
+            .blocks()
+            .first()
+            .map(|block| std::ptr::from_ref(block).cast::<u8>())
+            .or_else(|| {
+                self.filter
+                    .msb
+                    .first()
+                    .map(|bucket| std::ptr::from_ref(bucket).cast::<u8>())
+            });
+        if let Some(ptr) = ptr {
+            prefetch_l1(ptr);
+        }
+    }
 }
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn prefetch_l1(ptr: *const u8) {
+    // SAFETY: `ptr` points into storage borrowed through `&self`, so it remains valid for this
+    // call. `_mm_prefetch` only issues a cache hint and does not expose or retain the pointer.
+    unsafe {
+        std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(ptr.cast());
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn prefetch_l1(ptr: *const u8) {
+    // SAFETY: `ptr` points into storage borrowed through `&self`, so it remains valid for this
+    // call. `prfm` only issues a cache hint and does not expose or retain the pointer.
+    unsafe {
+        std::arch::asm!("prfm pldl1keep, [{ptr}]", ptr = in(reg) ptr, options(readonly, nostack));
+    }
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[inline]
+fn prefetch_l1(_ptr: *const u8) {}
 
 impl<C: GeoConfig<Diff> + Default> MetricSpace for GeoDiffMetric<'_, C> {
     type Metric = OnesMetric<C>;
