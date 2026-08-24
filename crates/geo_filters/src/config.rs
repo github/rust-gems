@@ -129,7 +129,7 @@ impl<
 
     #[inline]
     fn bucket_position_bits(&self) -> u32 {
-        usize::BITS - largest_bucket(B).leading_zeros()
+        bucket_position_bits(B)
     }
 
     #[inline]
@@ -285,7 +285,7 @@ impl<M: Method, T: IsBucketType + 'static, H: ReproducibleBuildHasher> GeoConfig
 
     #[inline]
     fn bucket_position_bits(&self) -> u32 {
-        usize::BITS - largest_bucket(self.b).leading_zeros()
+        bucket_position_bits(self.b)
     }
 
     #[inline]
