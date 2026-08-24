@@ -151,8 +151,9 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     ///
     /// The key packs as many complete bucket positions as fit into a `u64`, most significant
     /// position first. Positions use the smallest width that can hold the configuration's
-    /// [`GeoConfig::max_bucket_position`]. Any remaining key bits contain the most-significant
-    /// portion of the next position. Because masking distributes over the xor used by
+    /// bucket positions, as reported by [`GeoConfig::bucket_position_bits`]. Any remaining key bits
+    /// contain the most-significant portion of the next position. Because masking distributes over
+    /// the xor used by
     /// [`Self::cmp_masked`] and the partial position is an order-preserving prefix, comparing two
     /// keys numerically yields the same ordering as [`Self::cmp_masked`] whenever the keys differ.
     /// When two keys are equal the ordering is undetermined and the caller must fall back to
@@ -163,8 +164,11 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
             (1..u64::BITS as usize).contains(&mask_size),
             "mask_size must be in 1..=63 (got {mask_size})"
         );
-        let max_position = self.config.max_bucket_position();
-        let position_bits = (u64::BITS - max_position.leading_zeros()).max(1);
+        let position_bits = self.config.bucket_position_bits();
+        assert!(
+            (1..=u64::BITS).contains(&position_bits),
+            "bucket position width must be in 1..=64 (got {position_bits})"
+        );
         let complete_positions = (u64::BITS / position_bits) as usize;
         let remaining_bits = u64::BITS % position_bits;
 
@@ -188,12 +192,18 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         let mut key = 0u64;
         for _ in 0..complete_positions {
             let position = positions.next().unwrap_or(0);
-            debug_assert!(position <= max_position);
+            debug_assert!(
+                position_bits == u64::BITS || position < 1u64 << position_bits,
+                "bucket position {position} exceeds configured width {position_bits}"
+            );
             key = (key << position_bits) | position;
         }
         if remaining_bits > 0 {
             let position = positions.next().unwrap_or(0);
-            debug_assert!(position <= max_position);
+            debug_assert!(
+                position_bits == u64::BITS || position < 1u64 << position_bits,
+                "bucket position {position} exceeds configured width {position_bits}"
+            );
             key = (key << remaining_bits) | (position >> (position_bits - remaining_bits));
         }
         key
@@ -1136,14 +1146,14 @@ mod tests {
             expected_remaining: u32,
         ) {
             let config = C::default();
-            let max_position = config.max_bucket_position();
-            let position_bits = (u64::BITS - max_position.leading_zeros()).max(1);
+            let max_position = 65 * config.bits_per_level() - 1;
+            let position_bits = config.bucket_position_bits();
             assert_eq!(position_bits, expected_bits);
             assert_eq!((u64::BITS / position_bits) as usize, expected_complete);
             assert_eq!(u64::BITS % position_bits, expected_remaining);
 
             let positions = (0..expected_complete + 2)
-                .map(|offset| C::BucketType::from_usize(max_position as usize - offset))
+                .map(|offset| C::BucketType::from_usize(max_position - offset))
                 .collect_vec();
             let filter = GeoDiffCount::<C>::from_ones(positions.iter().copied());
             let actual = filter.masked_sort_key(1, 1);

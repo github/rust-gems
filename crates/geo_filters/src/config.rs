@@ -42,14 +42,12 @@ pub trait GeoConfig<M: Method>: Clone + Eq + Sized {
 
     fn bits_per_level(&self) -> usize;
 
-    /// The largest bucket position that [`Self::hash_to_bucket`] can return.
+    /// The number of bits required to store positions returned by [`Self::hash_to_bucket`].
     ///
-    /// The default covers the full bucket type. Configurations can override this with a tighter
-    /// proven bound to enable more compact representations of bucket positions. An override must
-    /// remain greater than or equal to every position returned by [`Self::hash_to_bucket`].
-    fn max_bucket_position(&self) -> u64 {
-        debug_assert!(Self::BucketType::BITS <= u64::BITS);
-        u64::MAX >> (u64::BITS - Self::BucketType::BITS)
+    /// The default uses the full bucket type width. Configurations can override this with a tighter
+    /// proven width to enable more compact representations of bucket positions.
+    fn bucket_position_bits(&self) -> u32 {
+        Self::BucketType::BITS
     }
 
     /// The granularity of the geometric buckets.
@@ -130,8 +128,8 @@ impl<
     }
 
     #[inline]
-    fn max_bucket_position(&self) -> u64 {
-        largest_bucket(B) as u64
+    fn bucket_position_bits(&self) -> u32 {
+        usize::BITS - largest_bucket(B).leading_zeros()
     }
 
     #[inline]
@@ -286,8 +284,8 @@ impl<M: Method, T: IsBucketType + 'static, H: ReproducibleBuildHasher> GeoConfig
     }
 
     #[inline]
-    fn max_bucket_position(&self) -> u64 {
-        largest_bucket(self.b) as u64
+    fn bucket_position_bits(&self) -> u32 {
+        usize::BITS - largest_bucket(self.b).leading_zeros()
     }
 
     #[inline]
