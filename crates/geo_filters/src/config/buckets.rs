@@ -153,7 +153,7 @@ impl IsBucketType for usize {
 /// of the following level, so the inclusive maximum position is 65 * (1<<B) - 1.
 #[inline]
 pub(crate) fn bucket_position_bits(b: usize) -> u32 {
-    usize::BITS - (65usize * (1usize << b) - 1).leading_zeros()
+    u32::try_from(b).expect("B must fit in u32") + 7
 }
 
 #[inline]
