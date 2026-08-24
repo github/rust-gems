@@ -149,10 +149,11 @@ impl IsBucketType for usize {
 /// the hash space.
 ///
 /// (1 << B) buckets cover half the hash space, i.e., buckets [k * (1<<B), (k+1) * (1<<B) cover
-/// the hashes with k leading zeros. For a 64-bit hash, this gives us 64 * (1<<B) buckets.
+/// the hashes with k leading zeros. The zero hash has 64 leading zeros and maps to the last bucket
+/// of the following level, so the inclusive maximum is 65 * (1<<B) - 1.
 #[inline]
 pub(crate) fn largest_bucket(b: usize) -> usize {
-    64 * (1 << b)
+    65 * (1 << b) - 1
 }
 
 #[inline]

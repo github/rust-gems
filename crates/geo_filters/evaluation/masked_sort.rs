@@ -2,7 +2,7 @@ use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use geo_filters::config::GeoConfig;
-use geo_filters::diff_count::{GeoDiffConfig13, GeoDiffConfig7, GeoDiffCount};
+use geo_filters::diff_count::{GeoDiffConfig10, GeoDiffConfig13, GeoDiffConfig7, GeoDiffCount};
 use geo_filters::{Count, Diff};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -82,6 +82,7 @@ fn bench_config<C: GeoConfig<Diff> + Default>(c: &mut Criterion, name: &str) {
 
 fn criterion_benchmark(c: &mut Criterion) {
     bench_config::<GeoDiffConfig7>(c, "geo_diff_count_7");
+    bench_config::<GeoDiffConfig10>(c, "geo_diff_count_10");
     bench_config::<GeoDiffConfig13>(c, "geo_diff_count_13");
 }
 
