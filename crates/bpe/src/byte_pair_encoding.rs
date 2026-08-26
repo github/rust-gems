@@ -1,6 +1,6 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 use std::ops::Range;
 
 use aneubeck_daachorse::{DoubleArrayAhoCorasick, DoubleArrayAhoCorasickBuilder};
@@ -149,7 +149,13 @@ fn token_bytes<'a>(all_tokens: &'a [u8], token_starts: &[u32], token_id: u32) ->
 
 fn hash_bytes(bytes: &[u8], factor: u64) -> u32 {
     let mut hasher = FnvHasher::default();
-    bytes.hash(&mut hasher);
+    // Write the length ourselves instead of `bytes.hash(&mut hasher)`. The slice impl
+    // prefixes it with `write_usize`, which is native-endian and pointer-sized, so the
+    // same token hashed differently on big-endian or 32-bit targets and the hardcoded
+    // hash factors stopped preventing collisions (`from_dictionary` then panics).
+    // On 64-bit little-endian this writes exactly the same bytes as before.
+    hasher.write(&(bytes.len() as u64).to_le_bytes());
+    hasher.write(bytes);
     // Note: we save 1/3 of space for the hashmap by only using the most significant bits of the hash.
     // To make them unique for the given tokens, we have to add unfortunately another multiplication.
     ((hasher.finish().wrapping_mul(factor)) >> 32) as u32
@@ -684,4 +690,26 @@ pub fn create_test_bytes(bpe: &BytePairEncoding, min_bytes: usize) -> Vec<u8> {
         result.extend(bpe.token_bytes(i as u32));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hash_bytes;
+
+    /// The hash must not depend on the target. It keys the serialized `bytes_hash_to_token`,
+    /// and a hardcoded hash factor is only collision-free for one particular mapping.
+    /// These are the values 64-bit little-endian has always produced, so a target whose
+    /// hashes drift fails here, and so does a change that would break existing users.
+    #[test]
+    fn hash_bytes_is_the_same_on_every_target() {
+        // The factor `bpe-openai` uses for cl100k_base, o200k_base and voyage3_base.
+        const FACTOR: u64 = 17846336922010275747;
+        assert_eq!(hash_bytes(b"", FACTOR), 3616665607);
+        assert_eq!(hash_bytes(b"a", FACTOR), 2433636812);
+        assert_eq!(hash_bytes(b" the", FACTOR), 1767689079);
+        assert_eq!(hash_bytes(b"hello", FACTOR), 2209557787);
+        assert_eq!(hash_bytes("🦀".as_bytes(), FACTOR), 2548432741);
+        // Tiktoken vocabularies contain arbitrary bytes, not just UTF-8.
+        assert_eq!(hash_bytes(&[0, 0xff, 0x80], FACTOR), 3276605559);
+    }
 }
