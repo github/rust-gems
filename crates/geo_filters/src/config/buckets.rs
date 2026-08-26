@@ -145,23 +145,25 @@ impl IsBucketType for usize {
     }
 }
 
-/// Computes the largest bucket index for 64-bit hashes given that (1 << B) bits cover half
-/// the hash space.
+/// Computes the bits required to store bucket positions for 64-bit hashes given that (1 << B)
+/// buckets cover half the hash space.
 ///
 /// (1 << B) buckets cover half the hash space, i.e., buckets [k * (1<<B), (k+1) * (1<<B) cover
-/// the hashes with k leading zeros. For a 64-bit hash, this gives us 64 * (1<<B) buckets.
+/// the hashes with k leading zeros. The zero hash has 64 leading zeros and maps to the last bucket
+/// of the following level, so the inclusive maximum position is 65 * (1<<B) - 1.
 #[inline]
-pub(crate) fn largest_bucket(b: usize) -> usize {
-    64 * (1 << b)
+pub(crate) fn bucket_position_bits(b: usize) -> u32 {
+    u32::try_from(b).expect("B must fit in u32") + 7
 }
 
 #[inline]
 pub(crate) fn assert_bucket_type_large_enough<T: IsBucketType>(b: usize) {
+    let required_bits = bucket_position_bits(b);
     assert!(
-        largest_bucket(b).ilog2() < T::BITS,
-        "bucket type has {} bits, which is too small for B = {}, requires bits > {}",
+        required_bits <= T::BITS,
+        "bucket type has {} bits, which is too small for B = {}, requires {} bits",
         T::BITS,
         b,
-        largest_bucket(b).ilog2()
+        required_bits
     );
 }

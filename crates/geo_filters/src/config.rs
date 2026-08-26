@@ -42,6 +42,14 @@ pub trait GeoConfig<M: Method>: Clone + Eq + Sized {
 
     fn bits_per_level(&self) -> usize;
 
+    /// The number of bits required to store positions returned by [`Self::hash_to_bucket`].
+    ///
+    /// The default uses the full bucket type width. Configurations can override this with a tighter
+    /// proven width to enable more compact representations of bucket positions.
+    fn bucket_position_bits(&self) -> u32 {
+        Self::BucketType::BITS
+    }
+
     /// The granularity of the geometric buckets.
     /// The size of the i-th bucket is determined by the formula:
     ///    (1 - phi) * phi^i
@@ -117,6 +125,11 @@ impl<
     #[inline]
     fn bits_per_level(&self) -> usize {
         1 << B
+    }
+
+    #[inline]
+    fn bucket_position_bits(&self) -> u32 {
+        bucket_position_bits(B)
     }
 
     #[inline]
@@ -268,6 +281,11 @@ impl<M: Method, T: IsBucketType + 'static, H: ReproducibleBuildHasher> GeoConfig
     #[inline]
     fn bits_per_level(&self) -> usize {
         1 << self.b
+    }
+
+    #[inline]
+    fn bucket_position_bits(&self) -> u32 {
+        bucket_position_bits(self.b)
     }
 
     #[inline]
