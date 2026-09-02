@@ -8,8 +8,10 @@ generate=$root/.github/scripts/generate-dependency-update
 apply=$root/.github/scripts/apply-dependency-update
 verify_base=$root/.github/scripts/verify-dependency-base
 update_npm=$root/.github/scripts/update-npm-dependencies
-test_root=$(mktemp -d "${TMPDIR:-/tmp}/rust-gems-dependency-automation.XXXXXX")
+test_root=$root/target/dependency-automation-tests
 
+rm -rf "$test_root"
+mkdir -p "$test_root"
 trap 'rm -rf "$test_root"' EXIT
 
 ruby -rpsych -e 'Psych.parse_file(ARGV.fetch(0))' "$workflow"
