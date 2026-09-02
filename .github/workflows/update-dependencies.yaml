@@ -14,6 +14,7 @@ concurrency:
 jobs:
   generate:
     name: Generate ${{ matrix.ecosystem }} update
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -27,10 +28,10 @@ jobs:
       copilot-requests: write
     env:
       GITHUB_TOKEN: ${{ github.token }}
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       COPILOT_VERSION: 1.0.83-3
       COPILOT_SHA256: 868c68d92d207cf1b68b4791b94b38d2cdeefc0717986bc5cd71843a83b41603
       CARGO_EDIT_VERSION: 0.13.10
+      NPM_CHECK_UPDATES_VERSION: 19.1.1
       WASM_PACK_VERSION: 0.15.0
       PINACT_VERSION: 4.1.1
       PINACT_SHA256: d1cffebe5704b74e2e5f8a864efb9f7e54768972dc686188c008033fb1797841
@@ -40,6 +41,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: main
 
       - name: Install pinned Copilot CLI
         run: |
@@ -70,7 +72,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org/
           cache: npm
           cache-dependency-path: crates/string-offsets/js/package-lock.json
 
@@ -90,7 +91,6 @@ jobs:
       - name: Generate immutable update artifact
         id: generate
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           BUNDLE_DIR: ${{ runner.temp }}/dependency-update/${{ matrix.ecosystem }}
         run: |
           set +e
@@ -118,7 +118,7 @@ jobs:
   apply:
     name: Apply ${{ matrix.ecosystem }} update
     needs: generate
-    if: always()
+    if: always() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -137,6 +137,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: main
 
       - name: Download immutable update artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0

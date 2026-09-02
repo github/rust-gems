@@ -4,6 +4,12 @@ set -euo pipefail
 
 ecosystem=${1:?ecosystem is required}
 bundle_dir=${2:?bundle directory is required}
+
+if [[ -n "${NPM_TOKEN:-}" || -n "${NODE_AUTH_TOKEN:-}" ]]; then
+  echo "dependency generation refuses npm publish credentials" >&2
+  exit 1
+fi
+
 agent_output_dir=.dependency-agent-output
 agent_context_dir=${RUNNER_TEMP:-/tmp}/dependency-agent-context
 candidate_title=$agent_context_dir/candidate-title.txt
@@ -11,6 +17,7 @@ candidate_body=$agent_context_dir/candidate-body.md
 
 mkdir -p "$bundle_dir" "$agent_output_dir" "$agent_context_dir"
 rm -f \
+  "$bundle_dir/base.sha" \
   "$bundle_dir/deterministic.patch" \
   "$bundle_dir/final.patch" \
   "$bundle_dir/state" \
@@ -38,10 +45,7 @@ run_updater() {
       rm -f Cargo.lock
       ;;
     npm)
-      (
-        cd crates/string-offsets/js
-        npm update --save --ignore-scripts
-      )
+      .github/scripts/update-npm-dependencies
       ;;
     github-actions)
       pinact run --update --min-age 14 --branch-to-tag '^main$' --branch-to-tag '^master$'
@@ -156,7 +160,7 @@ Do not add a signature, authentication discussion, reviewer request, validation 
 EOF
 )
 
-  env -u NPM_TOKEN -u NODE_AUTH_TOKEN copilot \
+  copilot \
     --no-auto-update \
     --no-ask-user \
     --no-remote \
@@ -169,10 +173,12 @@ EOF
     --allow-url=https://crates.io \
     --allow-url=https://registry.npmjs.org \
     --model auto \
-    --secret-env-vars=NPM_TOKEN,NODE_AUTH_TOKEN \
     --output-format text \
     --prompt "$prompt"
 }
+
+base_oid=$(.github/scripts/verify-dependency-base)
+printf '%s\n' "$base_oid" > "$bundle_dir/base.sha"
 
 echo "Running deterministic $ecosystem updater"
 run_updater 2>&1 | tee "$agent_context_dir/updater.log"

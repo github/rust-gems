@@ -40,6 +40,9 @@ jobs:
 
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v4.4.0
 
+      - name: Test dependency automation
+        run: .github/scripts/test-dependency-automation
+
       - name: Check formatting and clippy
         run: make lint
 

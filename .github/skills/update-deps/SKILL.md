@@ -29,7 +29,9 @@ Roll out this repository-local automation before removing any existing dependenc
 Each ecosystem run has two trust domains:
 
 1. The read-only `generate` job runs a pinned updater, captures its deterministic patch, invokes a checksum-verified Copilot CLI release, runs machine validation, and uploads immutable patch and metadata artifacts.
-2. The `apply` job never executes agent output. It validates both patches, checks deterministic and agent path allowlists independently, refuses non-bot history on the reserved branch, applies the final patch as data, and uses force-with-lease only on that reserved branch.
+2. The `apply` job never executes agent output. It validates both patches, checks deterministic and agent path allowlists independently, refuses artifacts generated from any commit other than its current `origin/main`, refuses non-bot history on the reserved branch, applies the final patch as data, and uses force-with-lease only on that reserved branch.
+
+Manual dispatches are accepted only from `main`. Both jobs explicitly check out `main`, and the trusted scripts require `HEAD` to equal `refs/remotes/origin/main`.
 
 The Copilot CLI is started with `--add-dir .` so this project skill is loaded as trusted local configuration. It receives no shell or GitHub MCP tool, cannot ask questions, and has only read/search/edit/web tools. It may repair consumer code, assess risk, and write the proposed PR title/body to a temporary in-tree handoff directory that the trusted script removes before snapshotting. It must not run git, push, create PRs, edit dependency manifests, or edit workflows.
 
@@ -44,8 +46,9 @@ The Copilot CLI is started with `--add-dir .` so this project skill is loaded as
 
 ### npm
 
-- Run `npm update --save` in `crates/string-offsets/js` so both direct requirements and `package-lock.json` move together.
+- Run the pinned `npm-check-updates` release with `--target latest` in `crates/string-offsets/js`, then regenerate `package-lock.json` with lifecycle scripts disabled. Direct ranges must move across major versions.
 - Preserve and commit `package-lock.json`.
+- Dependency updates, installs, builds, tests, and lifecycle code run without `NPM_TOKEN` or `NODE_AUTH_TOKEN`; the package uses only the public registry.
 - Install the workflow's pinned `wasm-pack` before validation; never rely on the Makefile's unpinned fallback installation.
 - The agent may repair tracked JavaScript consumer/test files under `crates/string-offsets/js/**`, excluding `package.json` and `package-lock.json`.
 - Validate with `make lint`, `make test`, `make build`, and `make build-js`.
@@ -77,4 +80,5 @@ make lint
 make test
 make build
 make build-js # npm/WASM changes
+.github/scripts/test-dependency-automation
 ```

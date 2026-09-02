@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+workflow=$root/.github/workflows/update-dependencies.yaml
+generate=$root/.github/scripts/generate-dependency-update
+apply=$root/.github/scripts/apply-dependency-update
+verify_base=$root/.github/scripts/verify-dependency-base
+update_npm=$root/.github/scripts/update-npm-dependencies
+test_root=$root/target/dependency-automation-tests
+
+rm -rf "$test_root"
+mkdir -p "$test_root"
+trap 'rm -rf "$test_root"' EXIT
+
+ruby -rpsych -e 'Psych.parse_file(ARGV.fetch(0))' "$workflow"
+bash -n "$generate" "$apply" "$verify_base" "$update_npm"
+
+if grep -Eq '^[[:space:]]+(NPM_TOKEN|NODE_AUTH_TOKEN):' "$workflow"; then
+  echo "dependency workflow exposes npm publish credentials" >&2
+  exit 1
+fi
+if grep -Fq 'secrets.NPM_TOKEN' "$workflow"; then
+  echo "dependency workflow reads the npm publish secret" >&2
+  exit 1
+fi
+if grep -Eq -- '--secret-env-vars=.*(NPM_TOKEN|NODE_AUTH_TOKEN)' "$generate"; then
+  echo "Copilot receives npm publish credentials" >&2
+  exit 1
+fi
+for token in NPM_TOKEN NODE_AUTH_TOKEN; do
+  if env "$token=test" "$generate" npm "$test_root/token-bundle" >/dev/null 2>&1; then
+    echo "dependency generation accepted $token" >&2
+    exit 1
+  fi
+done
+
+[[ $(grep -Fc "if: github.ref == 'refs/heads/main'" "$workflow") -eq 1 ]]
+grep -Fq "if: always() && github.ref == 'refs/heads/main'" "$workflow"
+[[ $(grep -Fc 'ref: main' "$workflow") -eq 2 ]]
+grep -Fq 'verify-dependency-base' "$generate"
+grep -Fq "verify-dependency-base \"\$expected_base\"" "$apply"
+grep -Fq "git checkout -B \"\$branch\" refs/remotes/origin/main" "$apply"
+
+git_fixture=$test_root/git
+git init --bare "$git_fixture/origin.git" >/dev/null
+git init -b main "$git_fixture/work" >/dev/null
+git -C "$git_fixture/work" config user.name test
+git -C "$git_fixture/work" config user.email test@example.com
+printf 'main\n' > "$git_fixture/work/base"
+git -C "$git_fixture/work" add base
+git -C "$git_fixture/work" commit -m main >/dev/null
+git -C "$git_fixture/work" remote add origin "$git_fixture/origin.git"
+git -C "$git_fixture/work" push -u origin main >/dev/null
+main_oid=$(git -C "$git_fixture/work" rev-parse HEAD)
+[[ $(cd "$git_fixture/work" && "$verify_base") == "$main_oid" ]]
+
+git -C "$git_fixture/work" switch -c feature >/dev/null
+printf 'feature\n' >> "$git_fixture/work/base"
+git -C "$git_fixture/work" commit -am feature >/dev/null
+if (cd "$git_fixture/work" && "$verify_base") >/dev/null 2>&1; then
+  echo "feature ref passed the origin/main base check" >&2
+  exit 1
+fi
+git -C "$git_fixture/work" switch main >/dev/null
+if (cd "$git_fixture/work" && "$verify_base" "${main_oid}0") >/dev/null 2>&1; then
+  echo "stale dependency artifact passed the origin/main base check" >&2
+  exit 1
+fi
+
+npm_fixture=$test_root/npm
+mkdir -p "$npm_fixture"
+cat > "$npm_fixture/package.json" <<'EOF'
+{
+  "name": "dependency-automation-major-test",
+  "version": "1.0.0",
+  "private": true,
+  "devDependencies": {
+    "jest": "^29.0.0"
+  }
+}
+EOF
+env \
+  -u npm_command \
+  -u npm_config_local_prefix \
+  -u npm_config_user_agent \
+  -u npm_execpath \
+  -u npm_lifecycle_event \
+  -u npm_lifecycle_script \
+  -u npm_node_execpath \
+  -u npm_package_json \
+  -u npm_package_name \
+  -u npm_package_version \
+  NPM_CHECK_UPDATES_VERSION=19.1.1 "$update_npm" "$npm_fixture"
+node - "$npm_fixture/package.json" "$npm_fixture/package-lock.json" <<'NODE'
+const fs = require("fs");
+const packageJson = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const lock = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const range = packageJson.devDependencies.jest;
+const match = /^\^(\d+)\./.exec(range);
+
+if (!match || Number(match[1]) <= 29) {
+  throw new Error(`expected npm updater to cross the Jest major boundary, got ${range}`);
+}
+if (lock.packages[""].devDependencies.jest !== range) {
+  throw new Error("package-lock.json did not preserve the updated direct range");
+}
+NODE

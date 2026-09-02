@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+expected_base=${1:-}
+head_oid=$(git rev-parse HEAD)
+main_oid=$(git rev-parse refs/remotes/origin/main)
+
+if [[ "$head_oid" != "$main_oid" ]]; then
+  echo "dependency automation must run from the current origin/main" >&2
+  echo "HEAD:        $head_oid" >&2
+  echo "origin/main: $main_oid" >&2
+  exit 1
+fi
+
+if [[ -n "$expected_base" && "$expected_base" != "$main_oid" ]]; then
+  echo "dependency artifact was generated from a different origin/main" >&2
+  echo "artifact:    $expected_base" >&2
+  echo "origin/main: $main_oid" >&2
+  exit 1
+fi
+
+printf '%s\n' "$main_oid"

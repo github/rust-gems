@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+package_dir=${1:-crates/string-offsets/js}
+: "${NPM_CHECK_UPDATES_VERSION:?NPM_CHECK_UPDATES_VERSION is required}"
+
+(
+  cd "$package_dir"
+  npm exec --yes --package="npm-check-updates@$NPM_CHECK_UPDATES_VERSION" -- \
+    npm-check-updates --upgrade --target latest
+  npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+)

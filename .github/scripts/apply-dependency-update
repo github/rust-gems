@@ -43,12 +43,15 @@ case "$state" in
     ;;
 esac
 
-for path in deterministic.patch final.patch title.txt body.md; do
+for path in base.sha deterministic.patch final.patch title.txt body.md; do
   if [[ ! -f "$bundle_dir/$path" ]]; then
     echo "missing artifact file: $path" >&2
     exit 1
   fi
 done
+
+expected_base=$(tr -d '[:space:]' < "$bundle_dir/base.sha")
+.github/scripts/verify-dependency-base "$expected_base" >/dev/null
 
 tree_from_patch() {
   local patch=$1
@@ -145,7 +148,7 @@ title=$(tr -d '\n' < "$bundle_dir/title.txt")
 
 cat "$bundle_dir/body.md" > "$RUNNER_TEMP/pr-body.md"
 
-git checkout -B "$branch"
+git checkout -B "$branch" refs/remotes/origin/main
 git apply --index --binary "$bundle_dir/final.patch"
 git commit --no-verify \
   -m "$title" \
