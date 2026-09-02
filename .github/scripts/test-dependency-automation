@@ -69,6 +69,22 @@ if (cd "$git_fixture/work" && "$verify_base" "${main_oid}0") >/dev/null 2>&1; th
   exit 1
 fi
 
+stale_noop=$test_root/stale-noop
+mkdir -p "$stale_noop" "$git_fixture/work/.github/scripts"
+printf 'noop\n' > "$stale_noop/state"
+printf '%s\n' "$main_oid" > "$stale_noop/base.sha"
+cp "$apply" "$verify_base" "$git_fixture/work/.github/scripts/"
+printf 'advanced\n' >> "$git_fixture/work/base"
+git -C "$git_fixture/work" commit -am advanced >/dev/null
+git -C "$git_fixture/work" push origin main >/dev/null
+if (cd "$git_fixture/work" && .github/scripts/apply-dependency-update npm "$stale_noop") \
+  >"$test_root/stale-noop.log" 2>&1; then
+  echo "stale no-op artifact was accepted after origin/main advanced" >&2
+  exit 1
+fi
+grep -Fq 'dependency artifact was generated from a different origin/main' \
+  "$test_root/stale-noop.log"
+
 npm_fixture=$test_root/npm
 mkdir -p "$npm_fixture"
 cat > "$npm_fixture/package.json" <<'EOF'
