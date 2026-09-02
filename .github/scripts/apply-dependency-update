@@ -172,3 +172,6 @@ else
     --title "$title" \
     --body-file "$RUNNER_TEMP/pr-body.md"
 fi
+
+gh api -X POST "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yaml/dispatches" -f ref="$branch"
+echo "Dispatched CI for $branch."

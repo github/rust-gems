@@ -63,6 +63,7 @@ The Copilot CLI is started with `--add-dir .` so this project skill is loaded as
 - Reuse the workflow's own open draft PR for the branch. Refuse a non-draft PR, a PR by another author, a different base, multiple open PRs, or any non-bot commit on the reserved branch.
 - A clean diff is a successful no-op: do not push, create, close, or edit a PR.
 - Never mark a PR ready, merge it, close superseded PRs, or request review. `CODEOWNERS` routes changes to `@github/blackbird-reviewers`.
+- After creating or updating a draft PR, explicitly dispatch `ci.yaml` on the reserved branch. This is nonblocking and does not depend on recursive workflow events.
 - Repair is bounded to three agent passes. Missing output, allowlist violations, failed final validation, and unexpected branch/PR state are explicit failures.
 
 ## Authentication

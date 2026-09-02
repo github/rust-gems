@@ -127,7 +127,7 @@ jobs:
       matrix:
         ecosystem: [cargo, npm, github-actions]
     permissions:
-      actions: read
+      actions: write
       contents: write
       pull-requests: write
     env:
