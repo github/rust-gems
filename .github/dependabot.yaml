@@ -3,6 +3,8 @@ version: 2
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
+    # Version PRs are consolidated by update-dependencies.yaml. Security updates remain enabled.
+    open-pull-requests-limit: 0
     schedule:
       interval: "cron"
       cronjob: "0 5 2 * *" # Second day of each month at 05:00 UTC
@@ -11,6 +13,8 @@ updates:
 
   - package-ecosystem: "github-actions"
     directory: "/"
+    # Version PRs are consolidated by update-dependencies.yaml. Security updates remain enabled.
+    open-pull-requests-limit: 0
     schedule:
       interval: "cron"
       cronjob: "0 5 2 * *" # Second day of each month at 05:00 UTC
@@ -19,6 +23,8 @@ updates:
 
   - package-ecosystem: "npm"
     directory: "/crates/string-offsets/js"
+    # Version PRs are consolidated by update-dependencies.yaml. Security updates remain enabled.
+    open-pull-requests-limit: 0
     schedule:
       interval: "cron"
       cronjob: "0 5 2 * *" # Second day of each month at 05:00 UTC

@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ecosystem=${1:?ecosystem is required}
+bundle_dir=${2:?bundle directory is required}
+
+case "$ecosystem" in
+  cargo)
+    branch=automation/dependencies/cargo
+    deterministic_re='^crates/.*Cargo\.toml$'
+    agent_re='^crates/.*\.rs$'
+    final_re='^crates/.*(Cargo\.toml|\.rs)$'
+    ;;
+  npm)
+    branch=automation/dependencies/npm
+    deterministic_re='^crates/string-offsets/js/package(-lock)?\.json$'
+    agent_re='^crates/string-offsets/js/.*\.(js|cjs|mjs|ts)$'
+    final_re='^crates/string-offsets/js/(package(-lock)?\.json|.*\.(js|cjs|mjs|ts))$'
+    ;;
+  github-actions)
+    branch=automation/dependencies/github-actions
+    deterministic_re='^\.github/workflows/.*\.ya?ml$'
+    agent_re='a^'
+    final_re='^\.github/workflows/.*\.ya?ml$'
+    ;;
+  *)
+    echo "unsupported ecosystem: $ecosystem" >&2
+    exit 2
+    ;;
+esac
+
+state=$(tr -d '[:space:]' < "$bundle_dir/state")
+case "$state" in
+  noop)
+    echo "No $ecosystem dependency changes; leaving branch and PR untouched."
+    exit 0
+    ;;
+  ready) ;;
+  *)
+    echo "generator did not produce an applicable $ecosystem artifact" >&2
+    exit 1
+    ;;
+esac
+
+for path in deterministic.patch final.patch title.txt body.md; do
+  if [[ ! -f "$bundle_dir/$path" ]]; then
+    echo "missing artifact file: $path" >&2
+    exit 1
+  fi
+done
+
+tree_from_patch() {
+  local patch=$1
+  local index
+  index=$(mktemp)
+  rm -f "$index"
+  GIT_INDEX_FILE=$index git read-tree HEAD
+  if [[ -s "$patch" ]]; then
+    GIT_INDEX_FILE=$index git apply --cached --binary "$patch"
+  fi
+  GIT_INDEX_FILE=$index git write-tree
+  rm -f "$index"
+}
+
+validate_paths() {
+  local label=$1
+  local regex=$2
+  local paths=$3
+  local violations
+  violations=$(grep -vE "$regex" "$paths" || true)
+  if [[ -n "$violations" ]]; then
+    echo "$label contains paths outside the allowlist:" >&2
+    printf '%s\n' "$violations" >&2
+    exit 1
+  fi
+}
+
+baseline_tree=$(tree_from_patch "$bundle_dir/deterministic.patch")
+final_tree=$(tree_from_patch "$bundle_dir/final.patch")
+git diff --name-only HEAD "$baseline_tree" > "$RUNNER_TEMP/deterministic-paths.txt"
+git diff --name-only "$baseline_tree" "$final_tree" > "$RUNNER_TEMP/agent-paths.txt"
+git diff --name-only HEAD "$final_tree" > "$RUNNER_TEMP/final-paths.txt"
+git diff --diff-filter=AD --name-only HEAD "$final_tree" > "$RUNNER_TEMP/structural-paths.txt"
+
+validate_paths "deterministic update" "$deterministic_re" "$RUNNER_TEMP/deterministic-paths.txt"
+validate_paths "agent update" "$agent_re" "$RUNNER_TEMP/agent-paths.txt"
+validate_paths "final update" "$final_re" "$RUNNER_TEMP/final-paths.txt"
+
+if [[ -s "$RUNNER_TEMP/structural-paths.txt" ]]; then
+  echo "dependency update added or deleted files:" >&2
+  cat "$RUNNER_TEMP/structural-paths.txt" >&2
+  exit 1
+fi
+
+if [[ ! -s "$RUNNER_TEMP/final-paths.txt" ]]; then
+  echo "Final $ecosystem patch is empty; leaving branch and PR untouched."
+  exit 0
+fi
+
+git config user.name "github-actions[bot]"
+git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+expected_oid=
+remote_oid=$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')
+if [[ -n "$remote_oid" ]]; then
+  git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch"
+  expected_oid=$(git rev-parse "refs/remotes/origin/$branch")
+  non_bot=$(git log "origin/main..refs/remotes/origin/$branch" --format='%ae%x09%ce' |
+    awk -F '\t' '$1 != "41898282+github-actions[bot]@users.noreply.github.com" || $2 != "41898282+github-actions[bot]@users.noreply.github.com"')
+  if [[ -n "$non_bot" ]]; then
+    echo "$branch contains non-bot commits; refusing to overwrite it" >&2
+    printf '%s\n' "$non_bot" >&2
+    exit 1
+  fi
+fi
+
+prs=$(gh pr list \
+  --head "$branch" \
+  --state open \
+  --limit 2 \
+  --json number,isDraft,author,baseRefName)
+count=$(jq 'length' <<<"$prs")
+if [[ "$count" -gt 1 ]]; then
+  echo "multiple open PRs found for $branch" >&2
+  exit 1
+fi
+
+if [[ "$count" -eq 1 ]]; then
+  number=$(jq -r '.[0].number' <<<"$prs")
+  author=$(jq -r '.[0].author.login' <<<"$prs")
+  draft=$(jq -r '.[0].isDraft' <<<"$prs")
+  base=$(jq -r '.[0].baseRefName' <<<"$prs")
+  if [[ "$author" != "github-actions[bot]" || "$draft" != "true" || "$base" != "main" ]]; then
+    echo "open PR for $branch is not the workflow's own main-targeting draft" >&2
+    exit 1
+  fi
+fi
+
+if [[ $(wc -l < "$bundle_dir/title.txt") -ne 1 || $(wc -c < "$bundle_dir/title.txt") -gt 200 ]]; then
+  echo "invalid PR title" >&2
+  exit 1
+fi
+title=$(tr -d '\n' < "$bundle_dir/title.txt")
+
+cat "$bundle_dir/body.md" > "$RUNNER_TEMP/pr-body.md"
+cat >> "$RUNNER_TEMP/pr-body.md" <<'EOF'
+
+---
+
+This draft is a reference implementation using the workflow `GITHUB_TOKEN`. GitHub does not trigger new workflow runs from branch pushes or PR mutations made with that token, so a maintainer must trigger or approve CI. Fully autonomous post-PR repair requires a proven least-privilege GitHub App installation token or PAT scoped to the reserved dependency branches and their pull requests.
+EOF
+
+git checkout -B "$branch"
+git apply --index --binary "$bundle_dir/final.patch"
+git commit --no-verify \
+  -m "$title" \
+  -m "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>"
+
+if [[ -n "$expected_oid" ]]; then
+  git push --force-with-lease="refs/heads/$branch:$expected_oid" origin "HEAD:refs/heads/$branch"
+else
+  git push --force-with-lease="refs/heads/$branch:" origin "HEAD:refs/heads/$branch"
+fi
+
+if [[ "$count" -eq 1 ]]; then
+  jq -n \
+    --arg title "$title" \
+    --rawfile body "$RUNNER_TEMP/pr-body.md" \
+    '{title: $title, body: $body}' |
+    gh api -X PATCH "repos/$GITHUB_REPOSITORY/pulls/$number" --input - >/dev/null
+  echo "Updated draft PR #$number."
+else
+  gh pr create \
+    --base main \
+    --head "$branch" \
+    --draft \
+    --title "$title" \
+    --body-file "$RUNNER_TEMP/pr-body.md"
+fi

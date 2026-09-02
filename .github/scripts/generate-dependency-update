@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ecosystem=${1:?ecosystem is required}
+bundle_dir=${2:?bundle directory is required}
+agent_output_dir=.dependency-agent-output
+agent_context_dir=${RUNNER_TEMP:-/tmp}/dependency-agent-context
+candidate_title=$agent_context_dir/candidate-title.txt
+candidate_body=$agent_context_dir/candidate-body.md
+
+mkdir -p "$bundle_dir" "$agent_output_dir" "$agent_context_dir"
+rm -f \
+  "$bundle_dir/deterministic.patch" \
+  "$bundle_dir/final.patch" \
+  "$bundle_dir/state" \
+  "$bundle_dir/title.txt" \
+  "$bundle_dir/body.md" \
+  "$agent_output_dir/title.txt" \
+  "$agent_output_dir/body.md" \
+  "$candidate_title" \
+  "$candidate_body"
+
+printf 'failure\n' > "$bundle_dir/state"
+
+case "$ecosystem" in
+  cargo|npm|github-actions) ;;
+  *)
+    echo "unsupported ecosystem: $ecosystem" >&2
+    exit 2
+    ;;
+esac
+
+run_updater() {
+  case "$ecosystem" in
+    cargo)
+      cargo upgrade --incompatible allow --pinned allow --recursive true
+      rm -f Cargo.lock
+      ;;
+    npm)
+      (
+        cd crates/string-offsets/js
+        npm update --save --ignore-scripts
+      )
+      ;;
+    github-actions)
+      pinact run --update --min-age 14 --branch-to-tag '^main$' --branch-to-tag '^master$'
+      ;;
+  esac
+}
+
+run_validation() {
+  local log=$1
+  local rc
+
+  set +e
+  set -o pipefail
+  {
+    case "$ecosystem" in
+      cargo)
+        rm -f Cargo.lock
+        make lint && make test && make build
+        ;;
+      npm)
+        rm -rf crates/string-offsets/js/node_modules crates/string-offsets/js/pkg
+        npm --prefix crates/string-offsets/js ci --ignore-scripts
+        make lint && make test && make build && make build-js
+        ;;
+      github-actions)
+        mapfile -t workflows < <(find .github/workflows -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) -print)
+        ruby -rpsych -e 'ARGV.each { |path| Psych.parse_file(path) }' "${workflows[@]}"
+        pinact run --fix=false --no-api
+        ;;
+    esac
+  } 2>&1 | tee "$log"
+  rc=${PIPESTATUS[0]}
+  set -e
+
+  return "$rc"
+}
+
+tree_from_patch() {
+  local patch=$1
+  local index
+  index=$(mktemp)
+  rm -f "$index"
+  GIT_INDEX_FILE=$index git read-tree HEAD
+  if [[ -s "$patch" ]]; then
+    GIT_INDEX_FILE=$index git apply --cached --binary "$patch"
+  fi
+  GIT_INDEX_FILE=$index git write-tree
+  rm -f "$index"
+}
+
+validate_agent_paths() {
+  local baseline_tree=$1
+  local final_tree=$2
+  local structural_changes
+  local violations
+
+  git diff --name-only "$baseline_tree" "$final_tree" > "$agent_context_dir/agent-paths.txt"
+  structural_changes=$(git diff --diff-filter=AD --name-only "$baseline_tree" "$final_tree")
+  if [[ -n "$structural_changes" ]]; then
+    echo "agent added or deleted files:" >&2
+    printf '%s\n' "$structural_changes" >&2
+    return 1
+  fi
+
+  case "$ecosystem" in
+    cargo)
+      violations=$(grep -vE '^crates/.*\.rs$' "$agent_context_dir/agent-paths.txt" || true)
+      ;;
+    npm)
+      violations=$(grep -vE '^crates/string-offsets/js/.*\.(js|cjs|mjs|ts)$' "$agent_context_dir/agent-paths.txt" || true)
+      ;;
+    github-actions)
+      violations=$(cat "$agent_context_dir/agent-paths.txt")
+      ;;
+  esac
+
+  if [[ -n "$violations" ]]; then
+    echo "agent edited paths outside the $ecosystem allowlist:" >&2
+    printf '%s\n' "$violations" >&2
+    return 1
+  fi
+}
+
+run_agent() {
+  local attempt=$1
+  local prompt
+
+  mkdir -p "$agent_output_dir"
+  rm -f "$agent_output_dir/title.txt" "$agent_output_dir/body.md"
+
+  prompt=$(cat <<EOF
+Load and follow the project skill named update-deps.
+
+You are the agentic repair and review stage for the "$ecosystem" ecosystem. The deterministic updater has already run. Read these files first:
+
+- $agent_context_dir/deterministic.diff
+- $agent_context_dir/validation.log
+- $agent_context_dir/agent-paths.txt, if present
+
+This is repair attempt $attempt of 3. Do not run commands or use git/GitHub APIs. The workflow will run all validation after you return.
+
+For Cargo, you may only edit Rust source files under crates/**. Do not edit any Cargo.toml or Cargo.lock.
+For npm, you may only edit tracked JS/TS consumer or test files under crates/string-offsets/js/**. Do not edit package.json or package-lock.json.
+For GitHub Actions, do not edit repository files.
+
+Make the smallest consumer repair justified by the validation log. Do not weaken tests. Then write:
+
+- $agent_output_dir/title.txt: one concise single-line PR title.
+- $agent_output_dir/body.md: a compact PR body explaining why the update exists, the dependency/version changes visible in deterministic.diff, and concrete risk.
+
+Do not add a signature, credential discussion, reviewer request, validation or CI status section, or implementation recap; the trusted apply job adds the fixed operational footer.
+EOF
+)
+
+  env -u NPM_TOKEN -u NODE_AUTH_TOKEN copilot \
+    --no-auto-update \
+    --no-ask-user \
+    --no-remote \
+    --disable-builtin-mcps \
+    --add-dir . \
+    --available-tools=view,rg,glob,apply_patch,web_fetch \
+    --allow-all-tools \
+    --allow-url=https://github.com \
+    --allow-url=https://api.github.com \
+    --allow-url=https://crates.io \
+    --allow-url=https://registry.npmjs.org \
+    --model auto \
+    --secret-env-vars=NPM_TOKEN,NODE_AUTH_TOKEN \
+    --output-format text \
+    --prompt "$prompt"
+}
+
+echo "Running deterministic $ecosystem updater"
+run_updater 2>&1 | tee "$agent_context_dir/updater.log"
+
+if git diff --quiet; then
+  printf 'noop\n' > "$bundle_dir/state"
+  echo "No tracked $ecosystem dependency changes."
+  exit 0
+fi
+
+run_validation "$agent_context_dir/validation.log" || true
+git diff --binary --full-index --no-ext-diff > "$bundle_dir/deterministic.patch"
+cp "$bundle_dir/deterministic.patch" "$agent_context_dir/deterministic.diff"
+deterministic_hash=$(sha256sum "$bundle_dir/deterministic.patch" | awk '{print $1}')
+baseline_tree=$(tree_from_patch "$bundle_dir/deterministic.patch")
+
+max_attempts=3
+if [[ "$ecosystem" == "github-actions" ]]; then
+  max_attempts=1
+fi
+
+final_validation_rc=1
+for attempt in $(seq 1 "$max_attempts"); do
+  if ! run_agent "$attempt" 2>&1 | tee "$agent_context_dir/agent-$attempt.log"; then
+    echo "Copilot CLI failed on attempt $attempt." >&2
+    exit 1
+  fi
+
+  if [[ ! -s "$agent_output_dir/title.txt" || ! -s "$agent_output_dir/body.md" ]]; then
+    echo "agent did not produce a title and body" >&2
+    exit 1
+  fi
+  cp "$agent_output_dir/title.txt" "$candidate_title"
+  cp "$agent_output_dir/body.md" "$candidate_body"
+  rm -f "$agent_output_dir/title.txt" "$agent_output_dir/body.md"
+  if ! rmdir "$agent_output_dir"; then
+    echo "agent left unexpected files in $agent_output_dir" >&2
+    exit 1
+  fi
+
+  untracked=$(git ls-files --others --exclude-standard)
+  if [[ -n "$untracked" ]]; then
+    echo "agent created untracked files:" >&2
+    printf '%s\n' "$untracked" >&2
+    exit 1
+  fi
+
+  current_hash=$(sha256sum "$bundle_dir/deterministic.patch" | awk '{print $1}')
+  if [[ "$current_hash" != "$deterministic_hash" ]]; then
+    echo "deterministic snapshot changed while the agent was running" >&2
+    exit 1
+  fi
+
+  git diff --binary --full-index --no-ext-diff > "$bundle_dir/final.patch"
+  final_tree=$(tree_from_patch "$bundle_dir/final.patch")
+  validate_agent_paths "$baseline_tree" "$final_tree"
+
+  if run_validation "$agent_context_dir/validation.log"; then
+    final_validation_rc=0
+    break
+  fi
+done
+
+if [[ "$final_validation_rc" -ne 0 ]]; then
+  echo "machine validation still fails after $max_attempts agent attempt(s)" >&2
+  exit 1
+fi
+
+if [[ $(wc -l < "$candidate_title") -ne 1 || $(wc -c < "$candidate_title") -gt 200 ]]; then
+  echo "agent title must be one line and at most 200 bytes" >&2
+  exit 1
+fi
+
+if [[ $(wc -c < "$candidate_body") -gt 50000 ]]; then
+  echo "agent body exceeds 50 KB" >&2
+  exit 1
+fi
+
+git diff --binary --full-index --no-ext-diff > "$bundle_dir/final.patch"
+cp "$candidate_title" "$bundle_dir/title.txt"
+cp "$candidate_body" "$bundle_dir/body.md"
+printf 'ready\n' > "$bundle_dir/state"
