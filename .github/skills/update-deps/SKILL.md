@@ -24,7 +24,7 @@ The workspace has 14 Cargo manifests: the virtual root, eight published crates (
 
 `.github/workflows/update-dependencies.yaml` runs at the Thursday 06:17 UTC fleet slot. Its matrix is deliberately serial in this order: Cargo, npm, GitHub Actions.
 
-Rollout order matters: merge and observe this repository-local automation before the central Blackbird dependency combiner excludes `github/rust-gems`, so dependency coverage has no gap.
+Roll out this repository-local automation before removing any existing dependency-update coverage, so there is no gap.
 
 Each ecosystem run has two trust domains:
 
@@ -65,11 +65,9 @@ The Copilot CLI is started with `--add-dir .` so this project skill is loaded as
 - Never mark a PR ready, merge it, close superseded PRs, or request review. `CODEOWNERS` routes changes to `@github/blackbird-reviewers`.
 - Repair is bounded to three agent passes. Missing output, allowlist violations, failed final validation, and unexpected branch/PR state are explicit failures.
 
-## Credentials
+## Authentication
 
-The read-only generator uses `GITHUB_TOKEN` with `copilot-requests: write`, which bills Copilot usage to the organization. The writer currently uses the workflow `GITHUB_TOKEN` because no least-privilege PR-writer credential is proven for this repository.
-
-GitHub suppresses workflow events caused by `GITHUB_TOKEN`, so draft dependency PRs created by this reference implementation require a maintainer-triggered or approved CI run. Fully autonomous post-PR CI repair requires a least-privilege GitHub App installation token or PAT with only the contents and pull-request permissions needed for the reserved branches and PRs. Do not invent or name a secret until that credential exists.
+The read-only generator uses `GITHUB_TOKEN` with `copilot-requests: write`, which bills Copilot usage to the organization. GitHub write authentication belongs only to the separate trusted apply job and must never be exposed to the Copilot CLI.
 
 ## Validation commands
 

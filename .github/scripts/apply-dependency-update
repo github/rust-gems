@@ -144,12 +144,6 @@ fi
 title=$(tr -d '\n' < "$bundle_dir/title.txt")
 
 cat "$bundle_dir/body.md" > "$RUNNER_TEMP/pr-body.md"
-cat >> "$RUNNER_TEMP/pr-body.md" <<'EOF'
-
----
-
-This draft is a reference implementation using the workflow `GITHUB_TOKEN`. GitHub does not trigger new workflow runs from branch pushes or PR mutations made with that token, so a maintainer must trigger or approve CI. Fully autonomous post-PR repair requires a proven least-privilege GitHub App installation token or PAT scoped to the reserved dependency branches and their pull requests.
-EOF
 
 git checkout -B "$branch"
 git apply --index --binary "$bundle_dir/final.patch"

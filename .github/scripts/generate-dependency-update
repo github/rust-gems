@@ -152,7 +152,7 @@ Make the smallest consumer repair justified by the validation log. Do not weaken
 - $agent_output_dir/title.txt: one concise single-line PR title.
 - $agent_output_dir/body.md: a compact PR body explaining why the update exists, the dependency/version changes visible in deterministic.diff, and concrete risk.
 
-Do not add a signature, credential discussion, reviewer request, validation or CI status section, or implementation recap; the trusted apply job adds the fixed operational footer.
+Do not add a signature, authentication discussion, reviewer request, validation or CI status section, or implementation recap.
 EOF
 )
 
