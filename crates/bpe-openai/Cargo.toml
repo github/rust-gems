@@ -24,7 +24,7 @@ bpe = { version = "0.2", path = "../bpe", features = ["rand"] }
 tiktoken-rs = "0.12"
 
 [build-dependencies]
-base64 = "0.22"
+base64 = "0.23"
 bpe = { version = "0.2", path = "../bpe", features = ["tiktoken"] }
 flate2 = "1.0"
 rmp-serde = "1"

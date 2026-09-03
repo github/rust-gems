@@ -18,7 +18,7 @@ tiktoken = ["dep:base64"]
 
 [dependencies]
 aneubeck-daachorse = "1.1.1"
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.23", optional = true }
 fnv = "1.0"
 itertools = "0.15"
 rand = { version = "0.10", optional = true }
