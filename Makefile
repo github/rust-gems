@@ -38,6 +38,8 @@ test:
 	cargo check -p geo_filters --features test-support
 	cargo check -p geo_filters --features serde
 	cargo check -p geo_filters --features evaluation
+	# Check that commutative_hasher works with the serde feature
+	cargo test -p commutative_hasher --features serde
 
 .PHONY: test-ignored
 test-ignored:
