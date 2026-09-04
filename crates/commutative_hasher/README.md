@@ -1,7 +1,7 @@
 # Commutative Hasher
 
-An order-independent hasher that hashes a large byte stream in any order, from any number of threads, and always get the
-same digest.
+An order-independent hasher that hashes a large byte stream in any order, from any number of threads, and always gets
+the same digest.
 
 The stream is split into fixed-size blocks. Each block is hashed, mapped to a point on the Ristretto group over
 Curve25519, and all the points are summed. Because point addition is commutative and associative, blocks can be hashed
