@@ -1,0 +1,13 @@
+[package]
+name = "famst"
+version = "0.1.0"
+edition = "2024"
+description = "Fast Approximate Minimum Spanning Tree (FAMST) algorithm"
+license = "MIT"
+
+[dependencies]
+rand = { version = "0.8", features = ["small_rng"] }
+rayon = "1"
+
+[dev-dependencies]
+rand = "0.8"
