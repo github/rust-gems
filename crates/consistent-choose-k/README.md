@@ -37,6 +37,27 @@ Why replication matters
 - Distributes read/write load across multiple owners, reducing hotspots.
 - Enables fast recovery and higher tail-latency resilience.
 
+## Two permutation APIs, different membership semantics
+
+The existing `ConsistentPermutation` preserves **survivor list order** when
+nodes are appended or removed from the end of `0..n`. The additional,
+experimental `VirtualPermutation` instead preserves **replica slots**: on a
+single-node append, at most one old slot changes, to the new node; on removal,
+only a surviving slot that named that node changes. It does not preserve list
+restriction and is not a drop-in replacement for the existing iterator or
+its failover policies. Both yield distinct nodes and stable `k` prefixes.
+
+`VirtualPermutation::new(n, seed)` supports `1..=u64::MAX`, allocates no state,
+and offers both an iterator and absolute `replica_at(slot)` lookup. Expected
+`O(k)` enumeration follows under ideal independent uniform permutations with
+constant-cost forward/inverse evaluation, **not** as a worst-case guarantee.
+The implemented noncryptographic, 64-bit seeded Feistel family approximates
+that randomness model; exact uniformity and independence are not claimed.
+
+See the [algorithm, proof assumptions and API guide](docs/virtual-permutation.md)
+and the [reproducible comparison with the existing algorithm](docs/virtual-permutation-performance.md).
+The existing APIs and their mappings remain unchanged.
+
 ## Applications beyond replication
 
 The `ConsistentChooseK` iterator produces a per-key ranking of all `n` nodes in priority order — consistently and with zero memory overhead. This ranking is a strict superset of simple replication and enables drop-in replacements for several well-known algorithms that traditionally require maintaining expensive data structures such as hash rings.

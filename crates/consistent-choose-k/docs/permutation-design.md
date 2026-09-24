@@ -4,6 +4,14 @@ This document explains the design of [`ConsistentPermutation`], the
 per-layer Feistel permutation iterator that this crate uses to drive
 its `n`-consistent ranking.
 
+This is **survivor-list consistency**, not the cycle-projection/replica-slot
+consistency of the additional [`VirtualPermutation`](virtual-permutation.md).
+The algorithms are not interchangeable membership policies. See their
+[paired performance comparison](virtual-permutation-performance.md).
+Uniformity arguments below model the per-layer bijections as independent
+uniform permutations; the actual finite-key, noncryptographic Feistel family
+is a practical approximation, not an exact uniform sample from all permutations.
+
 Given a 64-bit `key` and a universe size `n`, the iterator produces a
 uniformly distributed permutation of `[0, n)` as a streaming iterator
 satisfying:
@@ -450,4 +458,3 @@ Observations matching the theory:
   pre-build option is `O(k log k)`), which is why the speedup ratio
   widens with `k`: at `k = 1 000, n = 1 000` the permutation
   implementation is ~50× faster.
-
