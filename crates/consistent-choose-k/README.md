@@ -37,7 +37,7 @@ Why replication matters
 - Distributes read/write load across multiple owners, reducing hotspots.
 - Enables fast recovery and higher tail-latency resilience.
 
-## Two permutation APIs, different membership semantics
+## Permutation APIs and membership semantics
 
 The existing `ConsistentPermutation` preserves **survivor list order** when
 nodes are appended or removed from the end of `0..n`. The additional,
@@ -57,6 +57,15 @@ that randomness model; exact uniformity and independence are not claimed.
 See the [algorithm, proof assumptions and API guide](docs/virtual-permutation.md)
 and the [reproducible comparison with the existing algorithm](docs/virtual-permutation-performance.md).
 The existing APIs and their mappings remain unchanged.
+
+`BalancedVirtualPermutation` is a matched-network experiment: it gives the
+same cycle/slot semantics as `VirtualPermutation`, but uses **exactly** the
+existing `ConsistentPermutation` Feistel, with even widths and two bits per
+lift, over `1..=2^30`. Its state is also allocation-free. The
+[three-way comparison](docs/virtual-permutation-performance.md#matched-network-follow-up)
+repeats performance and primary/held-out statistical diagnostics. This variant
+has repeatable small-domain distribution bias and is not the default or a
+statistically equivalent replacement for the stronger mixer.
 
 ## Applications beyond replication
 

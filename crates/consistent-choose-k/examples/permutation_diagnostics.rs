@@ -3,7 +3,7 @@
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use consistent_choose_k::{ConsistentPermutation, VirtualPermutation};
+use consistent_choose_k::{BalancedVirtualPermutation, ConsistentPermutation, VirtualPermutation};
 
 const SAMPLES: u64 = 200_000;
 fn key_seed(key: u64, workload_seed: u64) -> u64 {
@@ -39,13 +39,14 @@ fn main() {
     );
     println!("# samples={SAMPLES}, key_seed={workload_seed:#x}");
     println!(
-        "# iterator_bytes: layered={}, virtual={}; layered also owns heap counters",
+        "# iterator_bytes: layered={}, virtual={}, balanced={}; layered also owns heap counters",
         std::mem::size_of::<ConsistentPermutation>(),
         std::mem::size_of::<VirtualPermutation>(),
+        std::mem::size_of::<BalancedVirtualPermutation>(),
     );
     println!("algorithm,n,metric,df,expected_per_cell,chi2,min,max");
     for n in [3, 4, 5, 7, 8, 9, 16, 17, 32, 64] {
-        for algorithm in ["layered", "virtual"] {
+        for algorithm in ["layered", "virtual", "balanced"] {
             let slots = n.min(8);
             let mut marginal = vec![vec![0u64; n]; slots];
             let mut pairs = vec![0; n * n];
@@ -60,8 +61,13 @@ fn main() {
                         .take(slots)
                         .map(|v| v as usize)
                         .collect()
-                } else {
+                } else if algorithm == "virtual" {
                     VirtualPermutation::new(n as u64, seed)
+                        .take(slots)
+                        .map(|v| v as usize)
+                        .collect()
+                } else {
+                    BalancedVirtualPermutation::new(n as u32, seed)
                         .take(slots)
                         .map(|v| v as usize)
                         .collect()

@@ -15,6 +15,14 @@ semantics are **different**:
 | Supported `n` | `1..=2^30` (`u32`) | `1..=u64::MAX` |
 | Mutable state | Per-layer `Vec<u32>` counters | Three `u64` fields; no heap allocation |
 
+An additional **matched-network experiment**, `BalancedVirtualPermutation`,
+uses the old iterator's exact Feistel network inside the new cycle-projection
+construction. It supports `1..=2^30`, returns `u64` values, and also has 24-byte
+allocation-free state. Its `new(n: u32, seed)`, `n`, `replica_at`, `nth` and
+iterator operations have the cycle/slot semantics, not survivor-list semantics.
+The [matched comparison](virtual-permutation-performance.md#matched-network-follow-up)
+records both its performance and its repeatable small-domain statistical bias.
+
 For example, the permutation written as an output list `[2, 0, 1]` is the
 cycle `0 -> 2 -> 1 -> 0`. Cycle-deleting node 2 produces `[1, 0]`,
 **not** the survivor list `[0, 1]`. The changed old slot is 0, the slot that
@@ -208,6 +216,43 @@ is `O(1)` machine words, excluding optional returned output, with a
 constant-sized width parameter block and no recursive stack, ring, permutation
 array, or duplicate set. See [measurements and diagnostics](virtual-permutation-performance.md)
 for observed forward/inverse counts and tails on the actual mixer.
+
+## Matched even-width, two-bit variant
+
+The cycle-lift identity is not restricted to doubling. For the matched variant
+let the full domain have size `4h`, with old set `[0,h)`. Reconnect old
+destinations with the same `extend(F_h composed with inverse(R))` operation.
+The chain argument and ideal-model uniformity proof above work unchanged.
+Start at the smallest **even** bit width covering `n`, use boundary
+`1 << (bits - 2)`, and descend by two bits. Intermediate sizes still use cycle
+deletion, not output-list deletion.
+
+`BalancedVirtualPermutation` directly calls the existing `layer_apply` for
+every forward evaluation. It uses the same master seed, round function,
+12/10/6/4 round schedule at widths 2/4/6/8-and-above, and rotated-key/Weyl
+schedule. There is no additional per-width seed hash. The new `layer_inverse`
+undoes that exact mapping and key schedule, sharing the extracted round
+function. Known-answer vectors, exhaustive small domains, all supported
+widths, and extreme keys/inputs check the inverse and unchanged forward
+mapping.
+
+Full-level descent now has probability one quarter in the ideal model,
+instead of one half. The initial partial level can be less than half full,
+however, so its forward and inverse walks can be longer. Expected work is
+still bounded per slot under independent ideal permutations; the specific
+less-than-eight-call bound above is for the one-bit variant and is **not**
+claimed for the two-bit variant. Inverse evaluation also has real work to
+recover the final round key before reversing the rounds; the benchmarks
+charge that cost and do not cache it for free.
+
+This changes **both** layer stride and primitive compared with
+`VirtualPermutation`; timing differences are not a pure attribution to odd
+versus even halves alone. It does make the primitive and stride identical to
+the existing streaming iterator. Neither implementation samples independent
+uniform permutations at different widths: the shared 64-bit seed and the
+finite Feistel family remain approximations. The matched variant's observed
+bias is a substantive limitation, not explained away by the ideal proof.
+The stronger one-bit variant remains available unchanged.
 
 ## References and verification
 

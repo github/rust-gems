@@ -12,4 +12,4 @@ pub use consistent_hash::{
 pub use consistent_permutation::ConsistentPermutation;
 pub use consistent_reservoir::ConsistentReservoir;
 pub use node_map::ConsistentNodeMap;
-pub use virtual_permutation::VirtualPermutation;
+pub use virtual_permutation::{BalancedVirtualPermutation, VirtualPermutation};

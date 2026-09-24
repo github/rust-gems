@@ -75,6 +75,14 @@ fn splitmix64(seed: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+#[inline]
+fn layer_round(r: u32, key: u64, half_mask: u32) -> u32 {
+    let k_xor = key & 0xFFFF_FFFF;
+    let k_mul = (key >> 32) | 1;
+    let mixed = ((r as u64) ^ k_xor).wrapping_mul(k_mul);
+    (mixed as u32).wrapping_add((mixed >> 32) as u32) & half_mask
+}
+
 /// Apply the per-layer Feistel bijection on `[0, 2^n_bits)`.
 /// `master_key` must be well-avalanched: two near-identical keys
 /// will yield two highly correlated permutations.
@@ -104,10 +112,7 @@ pub(crate) fn layer_apply(n_bits: u32, master_key: u64, x: u32) -> u32 {
         // high half (forced odd) is the multiplier. Higher bits stay
         // set on purpose — they contribute via the multiplicative
         // mix.
-        let k_xor = k & 0xFFFF_FFFF;
-        let k_mul = (k >> 32) | 1;
-        let mixed = ((r as u64) ^ k_xor).wrapping_mul(k_mul);
-        let f = (mixed as u32).wrapping_add((mixed >> 32) as u32) & half_mask;
+        let f = layer_round(r, k, half_mask);
         let new_l = r;
         let new_r = l ^ f;
         l = new_l;
@@ -120,6 +125,30 @@ pub(crate) fn layer_apply(n_bits: u32, master_key: u64, x: u32) -> u32 {
         k = k.rotate_right(shift).wrapping_add(0x9E37_79B9_7F4A_7C15);
     }
     ((l << half_bits) | r) & n_mask
+}
+
+/// Invert exactly the existing layer permutation, including its key schedule.
+#[inline]
+pub(crate) fn layer_inverse(n_bits: u32, master_key: u64, x: u32) -> u32 {
+    debug_assert!((2..=30).contains(&n_bits) && n_bits.is_multiple_of(2));
+    let rounds = rounds_for_n_bits(n_bits);
+    let half_bits = n_bits / 2;
+    let half_mask = (1u32 << half_bits) - 1;
+    debug_assert!(x < 1u32 << n_bits, "input out of range");
+    let mut l = x >> half_bits;
+    let mut r = x & half_mask;
+    let mut key = master_key;
+    for _ in 1..rounds {
+        key = key.rotate_right(n_bits).wrapping_add(0x9E37_79B9_7F4A_7C15);
+    }
+    for _ in 0..rounds {
+        let old_r = l;
+        let old_l = r ^ layer_round(l, key, half_mask);
+        l = old_l;
+        r = old_r;
+        key = key.wrapping_sub(0x9E37_79B9_7F4A_7C15).rotate_left(n_bits);
+    }
+    (l << half_bits) | r
 }
 
 /// `n`-consistent permutation iterator over `0..n` driven by one
@@ -236,6 +265,38 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+
+    #[test]
+    fn layer_mapping_known_answers_and_inverse() {
+        for (bits, key, x, y) in [
+            (2, 0, 0, 0),
+            (4, 0x1234_5678_9abc_def0, 9, 2),
+            (6, 1, 63, 62),
+            (8, 0x1234_5678_9abc_def0, 200, 100),
+            (16, u64::MAX, 65535, 0x3a83),
+            (30, 0x1234_5678_9abc_def0, 0x3fff_ffff, 0x1949_4328),
+        ] {
+            assert_eq!(layer_apply(bits, key, x), y);
+            assert_eq!(layer_inverse(bits, key, y), x);
+        }
+        for bits in (2..=30).step_by(2) {
+            let mask = (1u32 << bits) - 1;
+            for key in [0, 1, u64::MAX, splitmix64(42)] {
+                let inputs: Vec<_> = if bits <= 10 {
+                    (0..=mask).collect()
+                } else {
+                    [0, 1, mask / 2, mask / 2 + 1, mask]
+                        .into_iter()
+                        .chain((0..128).map(|i| splitmix64(i) as u32 & mask))
+                        .collect()
+                };
+                for x in inputs {
+                    assert_eq!(layer_inverse(bits, key, layer_apply(bits, key, x)), x);
+                    assert_eq!(layer_apply(bits, key, layer_inverse(bits, key, x)), x);
+                }
+            }
+        }
+    }
 
     /// Across many seeds, `layer_apply(_, key, 0)` must not always
     /// collapse to the same value (regression test for the "F(0, k) =
