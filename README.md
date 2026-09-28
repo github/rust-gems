@@ -10,6 +10,7 @@ A collection of useful algorithms written in Rust. Currently contains:
 - [`sparse-ngrams`](crates/sparse-ngrams): fast sparse n-gram extraction from byte slices. Selects variable-length n-grams (2–8 bytes) deterministically using bigram frequency priorities, suitable for substring search indexes.
 - [`string-offsets`](crates/string-offsets): converts string positions between bytes, chars, UTF-16 code units, and line numbers. Useful when sending string indices across language boundaries.
 - [`casefold`](crates/casefold): a **fast** Unicode simple case-folding library backed by a **very compact** (~1.7 KB) paged-bitmap + run-length table. Folds whole strings at multiple GiB/s via a decode-free `simple_fold` that rewrites UTF-8 with little-endian byte arithmetic, beating a `HashMap` fold table by several × at ~10× less memory.
+- [`min-bloom-filter`](crates/min-bloom-filter): a split-block Bloom filter with four-bit values, max insertion, and min retrieval.
 
 ## Background
 
