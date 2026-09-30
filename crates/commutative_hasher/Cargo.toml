@@ -1,0 +1,39 @@
+[package]
+name = "commutative_hasher"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96.0"
+description = "Hashing function that supports processing data out-of-order"
+repository = "https://github.com/github/rust-gems"
+homepage = "https://github.com/github/rust-gems/tree/main/crates/commutative_hasher"
+documentation = "https://docs.rs/commutative_hasher"
+readme = "README.md"
+license = "MIT"
+keywords = ["hashing", "commutative", "digest", "elliptic-curve", "ristretto"]
+categories = ["algorithms", "concurrency"]
+
+[lib]
+crate-type = ["lib"]
+bench = false
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dependencies]
+curve25519-dalek = { version = "5.0", features = ["digest"] }
+dataview = "1.0"
+digest = "0.11"
+hex = "0.4"
+parking_lot = "0.12"
+serde = { version = "1.0", features = ["derive"], optional = true }
+thiserror = "2.0"
+
+[dev-dependencies]
+itertools = "0.15"
+rand = "0.10"
+rayon = "1.12"
+rstest = "0.26"
+rstest_reuse = "0.7"
+serde_json = "1.0"
+sha2 = "0.11"
