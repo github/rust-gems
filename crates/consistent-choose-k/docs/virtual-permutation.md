@@ -1,40 +1,28 @@
-# VirtualPermutation: cycle-consistent replica slots
+# VirtualPermutation: sentinel-rooted consistent order
 
-`VirtualPermutation` is an additional experimental algorithm, not a replacement
-for `ConsistentPermutation`. Both produce deterministic, distinct candidates,
-and every `k`-selection is a prefix of the same per-key list. Their membership
-semantics are **different**:
+`VirtualPermutation` is an experimental alternative to the unchanged
+`ConsistentPermutation`. Both produce distinct nodes, stable `k` prefixes,
+and **complete survivor-list restriction**: deleting real node `n` from the
+complete order for `n + 1` real nodes recovers the order for `n` real nodes.
+Membership is consecutive IDs `0..n`; additions append IDs and removals remove
+a suffix. Arbitrary holes, weights and physical-node remapping are out of scope.
 
 | Property | Existing `ConsistentPermutation` | New `VirtualPermutation` |
 | --- | --- | --- |
-| Append one node | Insert it into the ranking; later replica slots can shift | At most one old replica slot changes, to the new node |
-| Remove the last node | Remove it from the ranking; later slots can shift | Only a surviving slot that named the removed node changes |
-| Survivor list order | Preserved | Not promised |
-| Projection between sizes | Delete entries from the output list | Delete labels from the permutation's cycles |
-| Direct slot lookup | Replay iterator through that slot | `replica_at(slot)`, without replay |
-| Supported `n` | `1..=2^30` (`u32`) | `1..=u64::MAX` |
-| Mutable state | Per-layer `Vec<u32>` counters | Three `u64` fields; no heap allocation |
+| Membership changes | Insert/delete entries without reordering survivors | Same order-restriction contract |
+| Replica ranks | May shift after insert/delete | May shift after insert/delete |
+| Rank query | Replay the iterator | Replay the iterator |
+| Supported real-node count | `1..=2^30`, `u32` | `1..=u64::MAX - 1`, `u64` |
+| Iterator state | Per-layer heap-allocated counters | Four `u64` fields; no allocation |
+| Construction | Interleaved per-layer Feistel streams | Consistent single-cycle successor traversal from a sentinel |
 
-An additional **matched-network experiment**, `BalancedVirtualPermutation`,
-uses the old iterator's exact Feistel network inside the new cycle-projection
-construction. It supports `1..=2^30`, returns `u64` values, and also has 24-byte
-allocation-free state. Its `new(n: u32, seed)`, `n`, `replica_at`, `nth` and
-iterator operations have the cycle/slot semantics, not survivor-list semantics.
-The [matched comparison](virtual-permutation-performance.md#matched-network-follow-up)
-records both its performance and its repeatable small-domain statistical bias.
+This revision **replaces the earlier experimental slot-based variants**.
+Those variants did not preserve survivor-list order. The experimental output
+mapping has changed, the matched-network variant has been removed, and there
+is no longer an absolute constant-time rank API. Existing consumers and the
+user's `ConsistentPermutation` implementation/mapping are unchanged.
 
-For example, the permutation written as an output list `[2, 0, 1]` is the
-cycle `0 -> 2 -> 1 -> 0`. Cycle-deleting node 2 produces `[1, 0]`,
-**not** the survivor list `[0, 1]`. The changed old slot is 0, the slot that
-named the removed node. This difference matters for failover and bounded-load
-policies that depend on survivor priority; do not substitute the new API into
-`ConsistentNodeMap` or existing consumers without considering their semantics.
-
-Membership is consecutive IDs `0..n`. Additions append IDs and removals remove
-a suffix; arbitrary holes, weights and physical-node remapping are out of scope.
-The one-slot bound is per single-node change, not for an entire suffix at once.
-
-## API and randomness model
+## API, bounds and key hashing
 
 ```rust
 use consistent_choose_k::VirtualPermutation;
@@ -43,236 +31,215 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 let mut hasher = DefaultHasher::new();
 "object-key".hash(&mut hasher);
 let seed = hasher.finish();
-let permutation = VirtualPermutation::new(1_000, seed);
-let third_replica = permutation.replica_at(2);
-let replicas: Vec<u64> = permutation.take(3).collect();
-assert_eq!(third_replica, replicas[2]);
+let replicas: Vec<u64> = VirtualPermutation::new(1000, seed).take(3).collect();
+let third = VirtualPermutation::new(1000, seed).nth(2); // replays three successors
+assert_eq!(third, Some(replicas[2]));
+let old: Vec<_> = VirtualPermutation::new(1000, seed).collect();
+let restricted: Vec<_> = VirtualPermutation::new(1001, seed)
+    .filter(|&node| node != 1000).collect();
+assert_eq!(old, restricted);
 ```
 
-Like the existing iterator, the constructor accepts an already well-mixed
-64-bit seed, not an arbitrary application key. Use the same seed for all `n`
-and `k`. `DefaultHasher` above is convenient for local examples and matches the
-benchmark convention; Rust does not promise its mapping is stable across
+The constructor accepts a well-mixed 64-bit seed. Keep it fixed across all
+membership and replica counts. `DefaultHasher` matches the examples and
+benchmark convention, but Rust does not promise a stable mapping across
 versions. Distributed deployments need a specified, versioned key hash and
-identical algorithm versions on every participant.
+identical algorithm versions on all participants. Seed collisions give
+identical orders.
 
-`new(0, seed)` and `replica_at(slot >= n)` panic, following the existing
-constructor's assertion convention. `replica_at` is absolute, independent of
-the cursor. The iterator is cloneable and fused, reports its remaining size,
-and implements `nth` without replay. `.take(0)` is empty, `.take(n)` is the full
-permutation, and `.take(k)` for `k > n` stops at exhaustion, as usual for Rust
-iterators. There is no separate `k` constructor argument.
+Internal label zero is a permanent sentinel; real node `i` has internal label
+`i + 1`. Internal count is `n + 1`, so `new(0, seed)` and
+`new(u64::MAX, seed)` panic rather than wrap, following the existing
+constructor's assertion convention. `n()` returns the original real-node
+count. The cloneable, fused iterator reports its remaining size, safely even
+when that count exceeds `usize`. `.take(0)` is empty; `.take(n)` is the complete
+order; larger requests stop at exhaustion. There is no separate `k` constructor
+argument. `nth(r)` uses ordinary iterator replay from the current position;
+answering an uncached absolute rank requires replay from a new iterator.
 
-Under **independent uniform ideal permutations for each key and bit width**,
-the construction below gives a uniform permutation for every fixed `n`:
-each ordered `k`-tuple of distinct nodes is equally likely, and different keys'
-preference permutations are independent. Within a key, replicas are sampled
-without replacement, not independently.
+## Ordinary permutation and guaranteed single cycle
 
-The actual primitive is an alternating-XOR Feistel network with SplitMix64's
-avalanche finalizer as its round mixer. It uses 24 rounds for widths 2 through
-4, 16 for widths 5 through 7, and 8 for widths 8 through 64. Tiny half-domains
-need extra rounds: the initial eight-round version had a strong ordered-pair
-bias at width three despite clean marginals. This fixed policy depends **only**
-on bit width, never active `n`, requested `k`, or observed outputs. Unequal
-halves support odd widths; the one-bit case is a keyed XOR.
-Widths are domain-separated through a
-mixed seed; round keys use distinct Weyl offsets. The inverse undoes the same
-updates in reverse order. Geometry never requires a shift by 64: the largest
-half-width is 32 and the evaluator's largest half boundary is `1 << 63`.
-The conceptual full width-64 domain has size `2^64`, but that cardinality is
-never materialized in a `u64`.
-
-This finite, 64-bit seeded family is **noncryptographic and only a practical
-pseudorandom approximation**, not independently sampled ideal permutations,
-not a proven secure PRP, and not exactly uniform over all `n!` permutations.
-Domain separation and avalanche do not prove independence. Seed collisions
-give identical permutations. Even conventional XOR-Feistel families have
-structural restrictions (for example, even permutation parity when both
-halves have at least two bits). The mixing schedule is fixed rather than
-weakened to make a benchmark win. Do not use this as encryption or with
-adversarial keys requiring a cryptographic guarantee.
-
-The existing `layer_apply` is deliberately unchanged: it only supports even
-widths through 30, has no inverse, and has its own key/round schedule. Extending
-or replacing it would change existing mappings. The new private primitive
-therefore lives with the new evaluator.
-
-## Dyadic lift and cycle deletion
-
-The following is a derived construction and evaluator, not an implementation
-of a published constant-time replica-selection algorithm.
-
-Let `h = 2^(b-1)`, let `A = [0,h)` be the old labels, and let `Q = P(seed,b)`
-be an ordinary permutation of `[0,2h)`. Let `R` be its cycle projection onto
-`A`: follow `Q` until the next label in `A`. Starting with `F_1(0) = 0`, define
+For each bit width `b`, let `Q(seed,b)` be an ordinary reversible permutation
+of `[0,2^b)`, with domain separation depending only on seed and width. Define
+the single-cycle primitive by conjugating modular increment:
 
 ```text
-F_(2h) = extend(F_h composed with inverse(R), fixing upper labels) composed with Q
+P(x)       = Q_inverse((Q(x) + 1) mod 2^b)
+P_inverse(x) = Q_inverse((Q(x) - 1) mod 2^b)
 ```
 
-Every `Q`-chain starting at old label `a` ends at old label `R(a)`.
-The left composition changes only that chain's final destination, from
-`R(a)` to `F_h(a)`. Upper edges and upper-only cycles are unchanged. Thus
-cycle-projecting `F_(2h)` onto `A` gives `F_h`. For `h < n < 2h`, define `F_n`
-by deleting all labels at least `n` from `F_(2h)`'s cycles. Cycle projections
-compose, including across power-of-two boundaries.
+Each is two ordinary permutation evaluations: first `Q`, then `Q_inverse`.
+Increment is a full cycle, so its conjugate is a full cycle for **every** Q,
+not merely with high probability. If Q is uniform on all permutations of a
+domain of size `m`, each full cycle has exactly `m` conjugators, so P is uniform
+on the `(m-1)!` full cycles.
 
-**Uniformity in the ideal model.** Conditional on any fixed `Q`, independent
-uniform `F_h` makes `F_h composed with inverse(R)` uniform on the old-label
-permutation group. This factor is consequently independent of `Q`; composing
-it with uniform `Q` makes `F_(2h)` uniform. Cycle projection preserves
-uniformity: each permutation of `n-1` labels has exactly `n` extensions
-(insert the new label after any old label, or as a singleton cycle).
-Induction establishes uniformity at every size. This proof uses ideal
-uniformity, not the diagnostics of the implemented finite-key family.
+The implemented Q is a noncryptographic alternating-XOR Feistel with the
+SplitMix64 finalizer as round mixer. It uses 24 rounds at widths 2--4,
+16 at widths 5--7, and 8 at widths 8--64; width one is keyed XOR. This fixed
+schedule, inherited from the stronger experimental primitive, has been
+rediagnosed in the **new construction**, not assumed adequate from old results.
+Unequal halves support odd widths. Width seeds are mixed and round keys use
+Weyl offsets. The inverse undoes the same updates in reverse order.
 
-**Consistency.** Deleting label `n` from `F_(n+1)` only redirects its
-predecessor to its successor, or removes its singleton cycle. For each
-surviving input `r < n`, `F_(n+1)(r)` is therefore either `F_n(r)` or `n`.
-At most one old input changes. A fixed prefix of input slots inherits this
-property, while bijectivity supplies distinct outputs and prefix stability.
-Enumerate *distinct inputs* `0,1,...,k-1`; following one output cycle instead
-would not enumerate a full permutation.
+This finite 64-bit family is only a practical pseudorandom approximation,
+not exact independent ideal randomness or a proven secure PRP. It cannot
+uniformly represent all orders once there are more orders than seeds.
+Feistel families also have structural restrictions, such as permutation
+parity restrictions on sufficiently large balanced halves. Neither domain
+separation, a large round count nor statistical diagnostics proves independence.
+Do not use this as encryption or where adversarial keys require cryptographic
+security. The existing iterator's different Feistel schedule is not modified.
 
-## Evaluator
+All word operations are safe through width 64: modular steps use wrapping
+arithmetic followed by masking, half widths never exceed 32, and the largest
+dyadic half boundary is `1 << 63`. A conceptual domain cardinality `2^64`
+is never stored in a `u64`.
+
+## Normalized cycle lift
+
+This is a derived construction/evaluator, not an established production
+implementation or an implementation of a published constant-time algorithm.
+
+Let `A=[0,h)` and let P be a full cycle on `[0,2h)`. Let R be P's cycle
+projection onto A: follow P until reaching the next old label. Starting with
+`F_1(0)=0`, define:
 
 ```text
-replica_at(seed, n, r):
-    require 0 <= r < n
-    b = bit_length(n - 1)
-    x = r
+F_(2h) = extend(F_h composed with inverse(R), fixing upper labels) composed with P
+```
+
+For every old label `a`, its P-chain goes through zero or more upper labels
+and ends at `R(a)`. The lift changes that final destination to `F_h(a)`.
+There are no upper-only cycles in P. Reconnecting all old-node chains using
+the lower full cycle therefore produces exactly one full cycle. Its cycle
+projection onto A is F_h. For intermediate counts, delete all inactive labels
+from the larger cycle. Projection composes, including across dyadic boundaries.
+
+**Uniform full cycles under the ideal model.** A full cycle P decomposes into
+its projected lower cycle R and one ordered upper-node chain attached to each
+old label. Every combination of a lower full cycle and such a chain arrangement
+corresponds to exactly one full P. Thus uniform P makes R uniform independently
+of the arrangement. The lift replaces R with the independent uniform F_h
+without changing the arrangement, giving a uniform full F_(2h). Projection of
+a uniform full cycle is uniform: each cycle on `m-1` labels has exactly `m-1`
+extensions, inserting the new label after any old label. Induction gives
+uniform full cycles at every internal count.
+
+**Rooted list order.** Begin at sentinel zero and repeatedly follow F:
+
+```text
+cursor = 0
+repeat k times, where 0 <= k <= n:
+    cursor = next_consistent(seed, n + 1, cursor)
+    emit cursor - 1
+```
+
+The sentinel cannot reappear before all `n` real nodes. A full cycle with a
+fixed sentinel corresponds bijectively to a real-node order. Cycle deletion
+therefore becomes ordinary list deletion: for example `S->A->C->B->S` can
+grow into `S->A->D->C->B->S`, preserving the old order. Each ideal real-node
+order, ordered prefix, or subset has the appropriate uniform distribution.
+Different keys have independent orders **only under independent ideal
+primitives across keys**; nodes within a key are sampled without replacement.
+
+Evaluating successor inputs `0,1,...,k-1` instead of following the cursor would
+not implement this contract. Internal input-label successor consistency is
+not the public output-rank API.
+
+## Constant-space successor evaluator
+
+```text
+next_consistent(seed, count, x):
+    require 0 <= x < count
+    b = bit_length(count - 1)
     while b > 0:
         half = 1 << (b - 1)
         y = P(seed, b, x)
-        if y >= n:
+        if y >= count:
             x = y
             continue
         if y >= half:
             return y
         while x >= half:
             x = P_inverse(seed, b, x)
-        n = half
+        count = half
         b -= 1
     return 0
 ```
 
-Walking inactive upper labels can use `Q` rather than the recursively defined
-`F`, because edges whose outputs are upper labels were unchanged by the lift.
-On reaching a lower output `y`, walking backward from its predecessor `x`
-finds the old input `a = inverse(R)(y)`. The next level evaluates `F_h(a)`.
-This proves the evaluator agrees with the explicit lift.
+Edges whose outputs are upper labels are unchanged by the lift, so walking
+inactive upper labels can use P directly. Upon reaching a lower output,
+the backward walk recovers the old input at the start of that chain; recursion
+then supplies its correct lower-cycle destination. This is the explicit lift
+without constructing any tables. The actual implementation uses loops, not a
+recursive stack. Walks terminate because P is a full finite cycle intersecting
+the retained/lower set. No retry cap or mapping-changing fallback is used.
 
-Walks terminate because they follow a finite bijection's cycle. A forward walk
-starts in the retained set, so it cannot remain forever in an inactive-only
-cycle. A backward walk is entered only after reaching a lower label, so that
-cycle necessarily meets the lower half. There are no retry caps or mapping-
-changing fallbacks.
+## Expected adaptive-prefix work
 
-## Expected work, not a worst-case guarantee
+The cursor depends on previous outputs. A fixed-input expected-cost bound
+would therefore be insufficient. Instead count work over the entire rooted
+prefix, under independent uniform ideal Q at each width and constant-cost
+forward/inverse ordinary permutation calls. Fix `n,k` before sampling those
+primitives. A zero-length prefix does no traversal; the strict bounds below
+are for `1<=k<=n`.
 
-Count each forward or inverse permutation evaluation as one constant-cost
-operation. The following bounds are derived for **ideal independent uniform**
-permutations and a fixed input, not asserted as a published theorem or a
-guarantee for every seed of the implemented mixer.
+Let `M` be the smallest power of two at least `n+1`. The lifted full cycle
+F_M (not the raw primitive P) is uniform. Reaching the first `k` active real outputs visits, in expectation,
+`k*M/(n+1)` top-level successors: sample without replacement from the
+`M-1` non-sentinel labels until the `k`th of the `n` active labels. This is
+less than `2k`.
 
-At a full dyadic level, descent probability is exactly one half. For an
-upper input conditional on descent, the mean inverse-walk length is
-`2h/(h+1)`: predecessors are sampled without replacement from `2h-1` labels,
-`h` of them lower. The terminal lower input is uniform. If `T_s(a)` is mean
-cost at full size `s`, and `U_s` its average over inputs, then
+At each lower full dyadic domain of size `L=M/2,M/4,...,2`, the successor
+invocations form the rooted lower-label subsequence. Their count equals the
+number of selected final internal labels in `1..L-1`, so its expectation is
+`k*(L-1)/n`. This uses marginal uniformity of the rooted real-node order, not
+independence of adaptive calls. Summing these lower-level expectations gives
+less than `k*M/n`, which is at most `2k` for `n>=1`.
 
-```text
-T_(2h)(a) = 1 + T_h(a)/2                  if a < h
-T_(2h)(a) = 1 + h/(h+1) + U_h/2           if a >= h
-U_(2h)    = 1 + h/(2(h+1)) + U_h/2
-T_1 = U_1 = 0
-```
+At any level, a backward walk retraces an upper-node chain already traversed
+by that level's forward prefix. This includes inactive labels just visited
+in the top-level walk. Each upper label is retraced at most once; the prefix
+does not wrap back through the sentinel. Consequently inverse calls are
+bounded pathwise by forward calls across the prefix. Combining the counts
+gives a conservative **expected bound below `8k` P/P_inverse calls, or `16k`
+ordinary Q/Q_inverse calls**. Width setup is bounded per level invocation and
+does not change expected `O(k)` work. This bounds cumulative work from the
+sentinel, not work conditioned on an arbitrary already-observed prefix.
 
-Induction gives `U_s < 3` and `T_s(a) < 3.5`. The initial partial level is
-different: its descent probability `p = h/n` can approach one. Its forward
-length has mean `ell = (2h+1)/(n+1) < 2`; the retained endpoint is uniform
-and independent of that length. On descent, the inverse walk retraces those
-`ell-1` inactive edges. Starting from an upper input also requires finding a
-lower predecessor; conditional on forward length `L`, this takes
-`(2h-L+1)/(h+1)` further inverse calls on average. Thus
+This is an ideal-model derivation, not a published complexity theorem or a
+guarantee for every finite-key seed. An unlucky full cycle can force
+linear-in-domain work even for a short prefix; there is **no worst-case
+`O(k)` or adversarial-latency guarantee**. The iterator uses `O(1)` auxiliary
+state excluding returned outputs. There is no prebuilt ring, per-key table,
+permutation array, cached prefix or duplicate set.
 
-```text
-E C_n(r) = ell + p * (ell - 1 + T_h(r))                          if r < h
-E C_n(r) = ell + p * (ell - 1 + (2h+1-ell)/(h+1) + U_h)          if r >= h
-```
+## Verification and references
 
-In particular, mean total work is **less than eight primitive calls per
-slot**, uniformly in `n,r` in the ideal model. The upper-input bound approaches
-eight at `n=h+1, r=h` as `h` grows. All later levels are full, so descent is
-geometric after the initial level. The entering lower input depends on upper
-permutations, but is independent of lower-width permutations; no independence
-between walks, or between replica costs, is assumed. Linearity of expectation
-gives expected `O(k)` enumeration.
+Tests cover forward/inverse round trips for both Q and P through all 64
+widths, guaranteed single-cycle coverage on small domains, explicit
+table-based lift/projection equivalence, rooted traversal and sentinel return,
+complete survivor-list restriction, `k` prefixes, default `nth` replay, fused
+exhaustion, and small/large dyadic and sentinel boundaries. They explicitly
+reject overflowing sentinel counts. A constructed long-walk case checks that
+evaluation is not truncated.
 
-Long cycles still permit linear-in-domain walks for an unlucky permutation.
-This is **not worst-case `O(k)`**, nor an adversarial-latency guarantee. State
-is `O(1)` machine words, excluding optional returned output, with a
-constant-sized width parameter block and no recursive stack, ring, permutation
-array, or duplicate set. See [measurements and diagnostics](virtual-permutation-performance.md)
-for observed forward/inverse counts and tails on the actual mixer.
+Exhaustive ideal checks cover all 24 ordinary size-four conjugators and all
+30,240 independent full-cycle families at sizes 2,4,8. Every real-node order
+at sizes 1 through 7 appears equally often and agrees with the explicit
+reference and survivor deletion. These are regression checks, not substitutes
+for the ideal-model argument or proofs of security.
 
-## Matched even-width, two-bit variant
-
-The cycle-lift identity is not restricted to doubling. For the matched variant
-let the full domain have size `4h`, with old set `[0,h)`. Reconnect old
-destinations with the same `extend(F_h composed with inverse(R))` operation.
-The chain argument and ideal-model uniformity proof above work unchanged.
-Start at the smallest **even** bit width covering `n`, use boundary
-`1 << (bits - 2)`, and descend by two bits. Intermediate sizes still use cycle
-deletion, not output-list deletion.
-
-`BalancedVirtualPermutation` directly calls the existing `layer_apply` for
-every forward evaluation. It uses the same master seed, round function,
-12/10/6/4 round schedule at widths 2/4/6/8-and-above, and rotated-key/Weyl
-schedule. There is no additional per-width seed hash. The new `layer_inverse`
-undoes that exact mapping and key schedule, sharing the extracted round
-function. Known-answer vectors, exhaustive small domains, all supported
-widths, and extreme keys/inputs check the inverse and unchanged forward
-mapping.
-
-Full-level descent now has probability one quarter in the ideal model,
-instead of one half. The initial partial level can be less than half full,
-however, so its forward and inverse walks can be longer. Expected work is
-still bounded per slot under independent ideal permutations; the specific
-less-than-eight-call bound above is for the one-bit variant and is **not**
-claimed for the two-bit variant. Inverse evaluation also has real work to
-recover the final round key before reversing the rounds; the benchmarks
-charge that cost and do not cache it for free.
-
-This changes **both** layer stride and primitive compared with
-`VirtualPermutation`; timing differences are not a pure attribution to odd
-versus even halves alone. It does make the primitive and stride identical to
-the existing streaming iterator. Neither implementation samples independent
-uniform permutations at different widths: the shared 64-bit seed and the
-finite Feistel family remain approximations. The matched variant's observed
-bias is a substantive limitation, not explained away by the ideal proof.
-The stronger one-bit variant remains available unchanged.
-
-## References and verification
-
-The mathematical antecedent is a *virtual permutation*, using **cycle**
-projection:
+The mathematical antecedents concern virtual permutations and cycle projection:
 
 - Neretin, [Virtual permutations and polymorphisms, section 1.2](https://arxiv.org/html/2202.12978v1#S1):
-  cycle deletion and its equivariance.
+  cycle deletion and equivariance.
 - Bourgade, Najnudel and Nikeghbali,
   [A unitary extension of virtual permutations, section 1](https://arxiv.org/html/1102.2633v1#S1):
-  cycle projections, the Chinese restaurant construction, and the uniform
-  family as the Ewens parameter-one case.
+  cycle projections, Chinese restaurant construction and uniform coherent families.
 
-These references do **not** supply this evaluator, Feistel schedule, or its
-performance bound.
-
-Tests exercise all word widths and extreme values, exhaustive small PRP
-round-trips, full small-domain permutations, `k` prefixes, append/delete
-consistency including dyadic boundaries and `u64::MAX`, and an independent
-table-based lift/projection oracle. Exhaustive ideal permutations check equal
-lift multiplicities at size four and all extensions of one fixed size-four
-permutation through sizes five to eight. These are regression checks, not
-substitutes for the ideal-model proof or evidence of cryptographic security.
+These sources do **not** supply this evaluator, Feistel schedule, single-cycle
+sentinel specialization or performance bound. The
+[performance and randomness report](virtual-permutation-performance.md)
+records actual final-construction measurements and their limitations.

@@ -40,32 +40,29 @@ Why replication matters
 ## Permutation APIs and membership semantics
 
 The existing `ConsistentPermutation` preserves **survivor list order** when
-nodes are appended or removed from the end of `0..n`. The additional,
-experimental `VirtualPermutation` instead preserves **replica slots**: on a
-single-node append, at most one old slot changes, to the new node; on removal,
-only a surviving slot that named that node changes. It does not preserve list
-restriction and is not a drop-in replacement for the existing iterator or
-its failover policies. Both yield distinct nodes and stable `k` prefixes.
+nodes are appended or removed from the end of `0..n`. The experimental
+`VirtualPermutation` now supplies the same order-restriction contract using a
+different construction: it traverses a single consistent cycle from a permanent
+sentinel. Removing the appended node from the larger complete order recovers
+the smaller complete order. Both yield distinct nodes and stable `k` prefixes;
+replica ranks may shift when membership changes.
 
-`VirtualPermutation::new(n, seed)` supports `1..=u64::MAX`, allocates no state,
-and offers both an iterator and absolute `replica_at(slot)` lookup. Expected
-`O(k)` enumeration follows under ideal independent uniform permutations with
-constant-cost forward/inverse evaluation, **not** as a worst-case guarantee.
-The implemented noncryptographic, 64-bit seeded Feistel family approximates
-that randomness model; exact uniformity and independence are not claimed.
+`VirtualPermutation::new(n, seed)` supports `1..=u64::MAX - 1` real nodes,
+uses four `u64` fields and no heap state, and offers sequential iteration.
+The extra internal label is reserved for the sentinel. `nth(r)` replays
+`r + 1` successors; there is no direct rank lookup. Expected `O(k)` prefix
+enumeration follows under ideal independent uniform permutations with
+constant-cost forward/inverse primitives, **not** as a worst-case guarantee.
+The noncryptographic, 64-bit seeded Feistel family approximates that model;
+exact uniformity and independence are not claimed. This implementation
+replaces the earlier experimental slot-based variants and changes their
+output mappings; the existing `ConsistentPermutation` mapping is unchanged.
 
 See the [algorithm, proof assumptions and API guide](docs/virtual-permutation.md)
 and the [reproducible comparison with the existing algorithm](docs/virtual-permutation-performance.md).
-The existing APIs and their mappings remain unchanged.
-
-`BalancedVirtualPermutation` is a matched-network experiment: it gives the
-same cycle/slot semantics as `VirtualPermutation`, but uses **exactly** the
-existing `ConsistentPermutation` Feistel, with even widths and two bits per
-lift, over `1..=2^30`. Its state is also allocation-free. The
-[three-way comparison](docs/virtual-permutation-performance.md#matched-network-follow-up)
-repeats performance and primary/held-out statistical diagnostics. This variant
-has repeatable small-domain distribution bias and is not the default or a
-statistically equivalent replacement for the stronger mixer.
+The comparison reports fresh-key performance regressions as well as fresh
+primary and held-out randomness diagnostics; neither algorithm is replaced
+in existing consumers.
 
 ## Applications beyond replication
 

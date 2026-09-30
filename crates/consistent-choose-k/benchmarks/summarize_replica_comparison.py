@@ -17,9 +17,9 @@ def summarize(root):
     for metadata in root.glob("**/new/benchmark.json"):
         benchmark = json.loads(metadata.read_text())
         group = benchmark["group_id"]
-        if not group.startswith("replicas/"):
+        if not group.startswith("sentinel_replicas/"):
             continue
-        mode = group.removeprefix("replicas/")
+        mode = group.removeprefix("sentinel_replicas/")
         algorithm = benchmark["function_id"]
         value = benchmark.get("value_str") or ""
         match = re.fullmatch(r"n(\d+)_k(\d+)", value)
@@ -38,7 +38,7 @@ def summarize(root):
                 interval["lower_bound"] / divisor,
                 interval["upper_bound"] / divisor,
                 estimates["std_dev"]["point_estimate"] / divisor,
-                mean["point_estimate"] / divisor / (k if k and mode != "slot" else 1),
+                mean["point_estimate"] / divisor / (k if k and mode != "rank_replay" else 1),
             )
         )
     if not rows:

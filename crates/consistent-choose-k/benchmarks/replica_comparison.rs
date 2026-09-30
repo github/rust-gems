@@ -7,35 +7,46 @@ use std::{
     time::Duration,
 };
 
-use consistent_choose_k::{BalancedVirtualPermutation, ConsistentPermutation, VirtualPermutation};
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
+use consistent_choose_k::{ConsistentPermutation, VirtualPermutation};
+use criterion::{
+    criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput,
+};
 use rand::{rngs::StdRng, RngExt, SeedableRng};
 
 const WORKLOAD_SEED: u64 = 0x7065_726d_7574_6531;
 const KEY_COUNT: usize = 128;
 const NODES: &[u32] = &[
     1,
+    2,
     3,
+    4,
+    6,
     7,
     8,
     9,
+    14,
     15,
     16,
     17,
+    30,
     31,
     32,
     33,
+    254,
     255,
     256,
     257,
     1000,
+    1022,
     1023,
     1024,
     1025,
+    65534,
     65535,
     65536,
     65537,
     1_000_000,
+    (1 << 30) - 2,
     (1 << 30) - 1,
     1 << 30,
 ];
@@ -75,10 +86,11 @@ fn end_to_end(c: &mut Criterion) {
     let keys = keys();
     let seeds: Vec<_> = keys.iter().copied().map(hash_key).collect();
     for mode in ["fresh", "seeded"] {
-        let mut group = c.benchmark_group(format!("replicas/{mode}"));
+        let mut group = c.benchmark_group(format!("sentinel_replicas/{mode}"));
         // Both execute exactly one complete query per key, including
         // construction, streaming consumption and state destruction.
         group.throughput(Throughput::Elements(KEY_COUNT as u64));
+        group.sampling_mode(SamplingMode::Flat);
         for &n in NODES {
             for k in counts(n) {
                 let input = if mode == "fresh" { &keys } else { &seeds };
@@ -90,23 +102,12 @@ fn end_to_end(c: &mut Criterion) {
                         }
                     })
                 });
-                group.bench_function(BenchmarkId::new("virtual", format!("n{n}_k{k}")), |b| {
+                group.bench_function(BenchmarkId::new("sentinel", format!("n{n}_k{k}")), |b| {
                     b.iter(|| {
                         for &key in black_box(input) {
                             let seed = if mode == "fresh" { hash_key(key) } else { key };
                             consume(
                                 VirtualPermutation::new(u64::from(black_box(n)), seed),
-                                black_box(k),
-                            );
-                        }
-                    })
-                });
-                group.bench_function(BenchmarkId::new("balanced", format!("n{n}_k{k}")), |b| {
-                    b.iter(|| {
-                        for &key in black_box(input) {
-                            let seed = if mode == "fresh" { hash_key(key) } else { key };
-                            consume(
-                                BalancedVirtualPermutation::new(black_box(n), seed),
                                 black_box(k),
                             );
                         }
@@ -121,8 +122,9 @@ fn end_to_end(c: &mut Criterion) {
 fn cost_components(c: &mut Criterion) {
     let keys = keys();
     let seeds: Vec<_> = keys.iter().copied().map(hash_key).collect();
-    let mut setup = c.benchmark_group("replicas/setup");
+    let mut setup = c.benchmark_group("sentinel_replicas/setup");
     setup.throughput(Throughput::Elements(KEY_COUNT as u64));
+    setup.sampling_mode(SamplingMode::Flat);
     setup.bench_function("hash_u64", |b| {
         b.iter(|| {
             for &key in black_box(&keys) {
@@ -138,26 +140,20 @@ fn cost_components(c: &mut Criterion) {
                 }
             })
         });
-        setup.bench_function(BenchmarkId::new("virtual", n), |b| {
+        setup.bench_function(BenchmarkId::new("sentinel", n), |b| {
             b.iter(|| {
                 for &seed in black_box(&seeds) {
                     black_box(VirtualPermutation::new(u64::from(black_box(n)), seed));
                 }
             })
         });
-        setup.bench_function(BenchmarkId::new("balanced", n), |b| {
-            b.iter(|| {
-                for &seed in black_box(&seeds) {
-                    black_box(BalancedVirtualPermutation::new(black_box(n), seed));
-                }
-            })
-        });
     }
     setup.finish();
 
-    for mode in ["stream_only", "collect", "slot"] {
-        let mut group = c.benchmark_group(format!("replicas/{mode}"));
+    for mode in ["stream_only", "collect", "rank_replay"] {
+        let mut group = c.benchmark_group(format!("sentinel_replicas/{mode}"));
         group.throughput(Throughput::Elements(KEY_COUNT as u64));
+        group.sampling_mode(SamplingMode::Flat);
         for &n in &[17, 257, 1000, 65537, 1 << 30] {
             for k in counts(n) {
                 group.bench_function(BenchmarkId::new("layered", format!("n{n}_k{k}")), |b| {
@@ -185,14 +181,14 @@ fn cost_components(c: &mut Criterion) {
                                     out.extend(iter.take(k).map(u64::from));
                                     black_box(out);
                                 } else {
-                                    // No random-access API in the baseline: nth must replay.
+                                    // Both methods replay the prefix to answer a rank query.
                                     black_box(iter.nth(black_box(k - 1)));
                                 }
                             }
                         }),
                     }
                 });
-                group.bench_function(BenchmarkId::new("virtual", format!("n{n}_k{k}")), |b| {
+                group.bench_function(BenchmarkId::new("sentinel", format!("n{n}_k{k}")), |b| {
                     match mode {
                         "stream_only" => b.iter_batched_ref(
                             || {
@@ -210,43 +206,14 @@ fn cost_components(c: &mut Criterion) {
                         ),
                         _ => b.iter(|| {
                             for &seed in black_box(&seeds) {
-                                let iter = VirtualPermutation::new(u64::from(black_box(n)), seed);
+                                let mut iter =
+                                    VirtualPermutation::new(u64::from(black_box(n)), seed);
                                 if mode == "collect" {
                                     let mut out = Vec::with_capacity(black_box(k));
                                     out.extend(iter.take(k));
                                     black_box(out);
                                 } else {
-                                    black_box(iter.replica_at(black_box(k as u64 - 1)));
-                                }
-                            }
-                        }),
-                    }
-                });
-                group.bench_function(BenchmarkId::new("balanced", format!("n{n}_k{k}")), |b| {
-                    match mode {
-                        "stream_only" => b.iter_batched_ref(
-                            || {
-                                seeds
-                                    .iter()
-                                    .map(|&seed| BalancedVirtualPermutation::new(n, seed))
-                                    .collect::<Vec<_>>()
-                            },
-                            |iterators| {
-                                for iter in black_box(iterators) {
-                                    consume(iter, black_box(k));
-                                }
-                            },
-                            BatchSize::SmallInput,
-                        ),
-                        _ => b.iter(|| {
-                            for &seed in black_box(&seeds) {
-                                let iter = BalancedVirtualPermutation::new(black_box(n), seed);
-                                if mode == "collect" {
-                                    let mut out = Vec::with_capacity(black_box(k));
-                                    out.extend(iter.take(k));
-                                    black_box(out);
-                                } else {
-                                    black_box(iter.replica_at(black_box(k as u64 - 1)));
+                                    black_box(iter.nth(black_box(k - 1)));
                                 }
                             }
                         }),

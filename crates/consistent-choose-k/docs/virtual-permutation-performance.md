@@ -1,434 +1,314 @@
-# Replica-selection comparison
+# Sentinel-rooted permutation comparison
 
-The original `VirtualPermutation` trades slower sequential enumeration for
-allocation-free state and direct replica-slot evaluation. It is **not a faster
-drop-in replacement** for the existing `ConsistentPermutation`.
+The revised `VirtualPermutation` preserves complete survivor-list order,
+like the unchanged `ConsistentPermutation`, but is **substantially slower**
+in this implementation. It removes heap state, not computational work.
+Fresh-key `n=1000,k=3` costs 351.25 versus 36.48 ns/query (9.63x slower);
+full enumeration costs 195,818.68 versus 10,761.56 ns (18.20x slower).
+No comparably large, repeatable distribution deviations appeared for the
+new construction in the primary/held-out diagnostic matrix; that is not
+a proof of uniformity or independence.
 
-The [matched-network follow-up](#matched-network-follow-up) adds
-`BalancedVirtualPermutation`, which uses exactly the existing Feistel on
-two-bit layers. All three methods are remeasured together; repeatable
-small-domain bias in the matched variant is reported rather than hidden.
-The original two-way tables below are historical measurements at commit
-`d51abfb`, not fresh measurements of the follow-up.
-
-The existing algorithm preserves survivor **list order**; the new one preserves
-each old **slot** except a slot replaced by an appended node (or previously
-naming a removed node). Both provide distinct, `k`-prefix-stable selections,
-but these membership policies are not interchangeable. The
-[design note](virtual-permutation.md) explains the construction, ideal-model
-proof, noncryptographic approximation and expected-versus-worst-case distinction.
-
-Runner names are `layered` for the existing streaming iterator, `virtual`
-for the stronger one-bit cycle construction, and `balanced` for the
-matched-Feistel two-bit cycle construction.
+All results below were measured anew on the **single-cycle plus sentinel**
+construction. They replace the earlier slot-based and matched-network reports.
+There is no constant-time output-rank lookup or direct-slot speedup:
+both iterators replay a prefix for `nth`. See the
+[design, bounds and ideal-model derivation](virtual-permutation.md).
+Runner names are `layered` (existing) and `sentinel` (new).
 
 ## Reproduce
 
-From the repository root:
+From the repository root, run sequentially, without other CPU-heavy work:
 
 ```sh
 cargo test -p consistent-choose-k
+cargo test --release -p consistent-choose-k
 cargo bench -p consistent-choose-k-benchmarks --bench replica_comparison -- --noplot
 python3 crates/consistent-choose-k/benchmarks/summarize_replica_comparison.py \
   target/criterion > comparison.csv
-cargo run --release -p consistent-choose-k --example permutation_diagnostics
-cargo run --release -p consistent-choose-k --example permutation_diagnostics -- --held-out
+cargo run --release -p consistent-choose-k --example permutation_diagnostics \
+  > diagnostics.csv
+cargo run --release -p consistent-choose-k --example permutation_diagnostics \
+  -- --held-out > held-out.csv
 cargo test --release -p consistent-choose-k operation_count_diagnostics \
   -- --ignored --nocapture
 ```
 
-Run these **sequentially**, not alongside other CPU-intensive tasks. Criterion
-filters can restrict a rerun, for example
-`-- 'replicas/fresh/.*/n1000_k3$' --noplot`.
-Raw sample timings and estimates remain under `target/criterion`; the script
-emits mean ns/query, bootstrap 95% confidence interval, sample standard deviation
-in ns/query, and mean ns/replica. Criterion's console times are for a **batch of
-128 queries**, so divide by 128, not by `k`, to obtain ns/query. Divide again by
-`k` for ns/replica (a slot query returns just one result).
+A Criterion filter can select a bounded rerun, for example
+`-- 'sentinel_replicas/fresh/.*/n1000_k3$' --noplot`.
+The new `sentinel_replicas/` result namespace excludes stale measurements of
+the replaced algorithms. Raw samples/estimates remain under `target/criterion`.
+The CSV script reports mean ns/query, bootstrap 95% confidence limits, sample
+standard deviation and ns/output. Criterion's console times are **batches of
+128 queries**: divide by 128 for ns/query, then by `k` for ns/output.
+`rank_replay` returns only one output, so its ns/output equals ns/query.
 
-### Recorded environment
+### Environment and limitations
 
-Measured on September 24, 2026, on an Apple M4 Max, native
-`aarch64-apple-darwin`, macOS 27.0 build 26A428:
+Measured September 30, 2026, on Apple M4 Max, native `aarch64-apple-darwin`,
+macOS 27.0 build 26A428; `rustc 1.92.0 (ded5c06cf 2025-12-08)`,
+LLVM 21.1.3; Apple clang 21.0.0 (`clang-2100.1.1.101`).
+The repository bench profile is optimized with debug information and its
+configured `-C target-feature=+neon`; no additional LTO, PGO or native-CPU
+flags. Criterion 0.8.2 and rand 0.10.3 were resolved locally.
 
-- `rustc 1.92.0 (ded5c06cf 2025-12-08)`, LLVM 21.1.3.
-- Apple clang 21.0.0 (`clang-2100.1.1.101`).
-- Repository bench profile: optimized with debug info; configured
-  `-C target-feature=+neon`; no extra LTO, native-CPU flags or PGO.
-- Criterion 0.8.2, rand 0.10.3; 20 samples, 100 ms warmup, 300 ms target
-  measurement time per case, 1,000 bootstrap resamples, no plots.
-- The default selected Xcode could not link because its license was
-  unaccepted. All successful commands used the independently installed
-  Command Line Tools via
-  `DEVELOPER_DIR=/Library/Developer/CommandLineTools`.
-  No license was accepted and no system setting was changed.
+Each case uses 20 flat samples, 100 ms warmup, 300 ms target measurement,
+1,000 bootstrap resamples and no plots. Flat sampling bounds expensive
+full-prefix cases; actual durations can exceed the target. All successful
+local Cargo commands used
+`DEVELOPER_DIR=/Library/Developer/CommandLineTools` to select the independently
+installed CLT instead of the default Xcode whose license was unaccepted.
+No license was accepted or system setting changed.
 
-These are bounded microbenchmarks on a shared host, without CPU pinning,
-frequency control or isolation. Intervals describe repeated timing samples of
-one fixed key corpus, **not** uncertainty across all keys, machines or compiler
-versions. Algorithms ran sequentially, existing first in each pair. Small
-differences should not be interpreted as portable wins.
+This is a shared host without CPU pinning, frequency control or isolation.
+Algorithms run sequentially, existing first in each pair. Intervals concern
+repeated timing samples of **one fixed key corpus**, not uncertainty across
+all keys, machines or compilers. Some cases are noisy; the wide interval at
+`n=257,k=3` is retained rather than discarded. Small differences are not
+portable wins.
 
 ### Workload and accounting
 
-The fixture is 128 `u64` keys generated by `StdRng` with seed
-`0x7065726d75746531`. The fresh-key mode hashes each key with `DefaultHasher`
-inside every query, identically for all methods. Width/round preparation
-and all inverse walks in the new evaluator are included, as is the existing
-iterator's counter allocation. These are fresh **queries** of a repeated
-deterministic corpus, not new unpredictable keys on every benchmark iteration.
-`StdRng` and `DefaultHasher` are not cross-version reproducibility contracts;
-use the recorded toolchain and dependency versions to reproduce the exact
-corpus and mapping.
+The fixture contains 128 `u64` keys from `StdRng`, seed
+`0x7065726d75746531`. Fresh queries hash with `DefaultHasher` inside the timed
+region, equally for both algorithms. This is repeated fresh **setup** on a
+fixed corpus, not unpredictable new keys every iteration. `StdRng` and
+`DefaultHasher` are not cross-version mapping contracts: use the recorded
+compiler/dependency versions for the exact corpus.
 
-| Group | Timed work |
+| Mode | Timed work |
 | --- | --- |
-| `fresh` (primary comparison) | Key hashing, construction, streaming checksum of `k` values, destruction |
-| `seeded` | Same query, reusing prehashed seeds; no free algorithm-specific cache |
-| `setup` | Hash alone, or construction and destruction from a prehashed seed |
-| `stream_only` | Consume `k` values from separately prepared iterators; construction and destruction excluded equally with `iter_batched_ref` |
-| `collect` | Prehashed construction, allocate/fill/drop `Vec<u64>` with the same capacity `k`, destroy iterator |
-| `slot` | Prehashed construction plus the result at `k-1`; existing `.nth(k-1)` replays, new `replica_at(k-1)` does not |
+| `fresh` (primary) | Hash key, construct, stream/checksum `k` nodes, destroy |
+| `seeded` | Same, but with prehashed seeds; no algorithm-specific cache |
+| `setup` | Hash alone, or construct/drop an iterator from a seed |
+| `stream_only` | Consume separately prepared iterators with `iter_batched_ref`; construction/destruction excluded for both |
+| `collect` | Prehashed construction plus allocate/fill/drop the same-capacity `Vec<u64>` |
+| `rank_replay` | Prehashed construction and `.nth(k-1)`; both replay `k` successors to return one result |
 
-The last row is a comparison of ways to answer a single-slot query, **not** a
-claim that the existing API has a constant-time random-access operation.
-Streaming-only is a diagnostic component benchmark, not a substitute for the
-fresh-query comparison: prepared state has different cache footprints.
-Inputs pass through `black_box`, and outputs are consumed. Both collection
-paths use `u64` output elements, even though the old API returns `u32`.
+All width/key preparation, forward/inverse work, and baseline counter
+allocation are charged in the primary comparison. Inputs use `black_box` and
+outputs are consumed. Collection uses `u64` elements for both, despite the
+existing API's `u32` output. Streaming-only is a component experiment, not
+the primary comparison; its prepared-state cache footprints differ.
 
-The full paired matrix uses
-`n = 1,3,7,8,9,15,16,17,31,32,33,255,256,257,1000,1023,1024,1025,65535,65536,65537,1000000,2^30-1,2^30`.
-For each, it uses valid `k` from `1,2,3,8,16`; at `n <= 1024`, it also uses
-`floor(n/4)` and `n`, removing zeros and duplicates. There are 131 `(n,k)`
-pairs in each of the fresh and seeded groups. Component groups use
-`n = 17,257,1000,65537,2^30`. All paired timings stay within the old
-implementation's supported domain. No wider-domain speedup is inferred.
+The full paired matrix is:
 
-## Original fresh-query results
+```text
+n = 1,2,3,4,6,7,8,9,14,15,16,17,30,31,32,33,
+    254,255,256,257,1000,1022,1023,1024,1025,
+    65534,65535,65536,65537,1000000,2^30-2,2^30-1,2^30
+k = valid values from 1,2,3,8,16; also floor(n/4) and n when n<=1024
+```
 
-Representative mean **ns/query**, with bootstrap 95% confidence intervals in
-brackets. Ratio is new/existing time: **above one means a regression**.
+Zeros and duplicates are removed. This covers powers of two and sentinel
+boundaries `n+1=2^b`. There are **177 `(n,k)` pairs** in each fresh/seeded
+group. Component groups use `n=17,257,1000,65537,2^30`. The completed run
+contains **905 estimates**. All paired timings are in the existing iterator's
+supported range; larger new domains are not claimed as performance wins.
 
-| n | k | Existing layered | New virtual | Ratio |
+## Fresh-query results
+
+Mean **ns/query [bootstrap 95% confidence interval]**. Ratio is new/existing:
+above one is a regression.
+
+| n | k | Existing layered | New sentinel | Ratio |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 1 | 58.04 [57.76, 58.27] | 7.38 [7.08, 7.82] | 0.13x |
-| 8 | 1 | 51.31 [50.97, 51.63] | 114.80 [114.46, 115.16] | 2.24x |
-| 8 | 8 | 227.41 [223.70, 230.99] | 1,005.85 [1,000.85, 1,014.19] | 4.42x |
-| 17 | 3 | 110.06 [108.94, 111.07] | 622.33 [619.42, 625.40] | 5.65x |
-| 33 | 33 | 600.19 [593.91, 604.57] | 7,988.45 [7,913.42, 8,104.45] | 13.31x |
-| 255 | 3 | 38.10 [37.82, 38.39] | 142.31 [141.60, 143.18] | 3.74x |
-| 256 | 3 | 39.69 [39.27, 40.12] | 143.02 [142.31, 143.75] | 3.60x |
-| 257 | 3 | 63.41 [62.81, 63.97] | 305.48 [302.11, 310.19] | 4.82x |
-| 1,000 | 1 | 22.39 [21.38, 24.14] | 49.53 [47.21, 52.43] | 2.21x |
-| 1,000 | 3 | 35.58 [35.43, 35.72] | 104.90 [102.88, 107.36] | 2.95x |
-| 1,000 | 16 | 103.18 [102.78, 103.58] | 536.52 [519.93, 561.57] | 5.20x |
-| 1,000 | 250 | 2,042.64 [2,013.97, 2,070.34] | 14,996.65 [14,959.80, 15,025.20] | 7.34x |
-| 1,000 | 1,000 | 9,735.29 [9,668.93, 9,808.83] | 85,990.56 [84,682.97, 87,389.54] | 8.83x |
-| 1,023 | 3 | 36.29 [35.55, 37.30] | 106.26 [99.49, 118.27] | 2.93x |
-| 1,024 | 3 | 35.79 [35.60, 35.99] | 97.85 [96.85, 98.99] | 2.73x |
-| 1,025 | 3 | 64.33 [64.06, 64.61] | 266.90 [265.96, 268.03] | 4.15x |
-| 65,535 | 3 | 35.19 [35.02, 35.39] | 88.23 [87.26, 89.16] | 2.51x |
-| 65,536 | 3 | 36.40 [36.06, 36.77] | 90.23 [89.02, 91.43] | 2.48x |
-| 65,537 | 3 | 66.23 [65.47, 66.87] | 268.53 [265.08, 272.36] | 4.05x |
-| 1,000,000 | 3 | 36.14 [35.67, 36.65] | 96.65 [95.81, 97.70] | 2.67x |
-| 2^30 - 1 | 3 | 38.49 [38.01, 38.91] | 87.74 [87.45, 88.21] | 2.28x |
-| 2^30 | 3 | 38.86 [38.60, 39.12] | 89.96 [89.23, 90.68] | 2.31x |
+| 1 | 1 | 58.79 [58.58, 59.01] | 14.80 [14.60, 14.95] | 0.25x |
+| 7 | 3 | 103.16 [102.76, 103.49] | 864.91 [845.97, 886.02] | 8.38x |
+| 8 | 3 | 93.23 [92.57, 94.10] | 2,046.05 [2,036.71, 2,057.79] | 21.95x |
+| 8 | 8 | 219.11 [216.88, 221.17] | 6,167.64 [6,071.71, 6,264.64] | 28.15x |
+| 17 | 3 | 112.01 [111.87, 112.13] | 1,536.05 [1,533.94, 1,538.30] | 13.71x |
+| 33 | 33 | 636.62 [632.07, 641.34] | 23,294.31 [22,161.71, 24,440.97] | 36.59x |
+| 254 | 3 | 37.48 [37.27, 37.65] | 468.70 [456.92, 483.16] | 12.51x |
+| 255 | 3 | 38.07 [37.72, 38.40] | 494.86 [483.43, 505.74] | 13.00x |
+| 256 | 3 | 38.74 [38.62, 38.86] | 956.42 [929.65, 988.09] | 24.69x |
+| 257 | 3 | 73.57 [65.12, 88.32] | 903.16 [895.14, 912.31] | 12.28x |
+| 1,000 | 1 | 21.30 [21.25, 21.34] | 103.96 [102.76, 105.34] | 4.88x |
+| 1,000 | 2 | 28.00 [27.96, 28.04] | 218.57 [215.73, 221.40] | 7.80x |
+| 1,000 | 3 | 36.48 [36.11, 36.84] | 351.25 [349.34, 353.43] | 9.63x |
+| 1,000 | 8 | 59.65 [59.41, 59.91] | 1,079.05 [1,040.73, 1,151.32] | 18.09x |
+| 1,000 | 16 | 101.34 [101.04, 101.63] | 2,393.84 [2,338.73, 2,453.82] | 23.62x |
+| 1,000 | 250 | 2,182.76 [2,164.34, 2,198.22] | 44,957.17 [44,920.88, 44,995.31] | 20.60x |
+| 1,000 | 1,000 | 10,761.56 [10,554.57, 10,972.06] | 195,818.68 [191,456.60, 200,639.88] | 18.20x |
+| 1,022 | 3 | 35.23 [34.97, 35.48] | 343.55 [341.82, 345.57] | 9.75x |
+| 1,023 | 3 | 35.90 [35.64, 36.16] | 347.39 [345.30, 349.88] | 9.68x |
+| 1,024 | 3 | 36.13 [35.93, 36.30] | 759.81 [758.32, 761.42] | 21.03x |
+| 1,024 | 16 | 106.36 [105.76, 107.03] | 5,685.25 [5,593.80, 5,766.20] | 53.45x |
+| 1,025 | 3 | 69.08 [68.58, 69.59] | 759.49 [756.87, 762.46] | 10.99x |
+| 65,535 | 3 | 38.91 [35.65, 44.28] | 328.64 [318.92, 338.79] | 8.44x |
+| 65,536 | 3 | 39.12 [38.49, 39.68] | 747.60 [742.93, 751.59] | 19.11x |
+| 65,537 | 3 | 67.87 [66.62, 69.11] | 749.19 [739.39, 760.31] | 11.04x |
+| 1,000,000 | 3 | 35.77 [35.24, 36.34] | 328.07 [320.83, 336.15] | 9.17x |
+| 2^30 - 2 | 3 | 38.40 [38.06, 38.75] | 305.69 [302.15, 309.49] | 7.96x |
+| 2^30 - 1 | 3 | 40.79 [40.24, 41.33] | 300.83 [299.63, 302.02] | 7.37x |
+| 2^30 | 3 | 39.51 [39.32, 39.71] | 727.97 [726.74, 729.28] | 18.42x |
 
-For example, `n=1000,k=3` is 11.86 versus 34.97 **ns/replica**;
-`k=1000` is 9.74 versus 85.99 ns/replica. A full permutation has more
-upper-half input slots, which need inverse walks; a short initial prefix often
-avoids that work. Consequently mean cost per replica is not constant across
-all `k`, even though the ideal-model expectation is bounded uniformly.
+The new implementation is slower in all **176 nontrivial fresh cases**.
+The only win is the degenerate `n=1` constant order. Nontrivial ratios range
+from 3.51x to 53.45x. At `n=1000,k=3`, the figures are 12.16 versus
+117.09 **ns/output**; at `k=1000`, 10.76 versus 195.82 ns/output.
+Sample standard deviations are 0.88/4.88 ns for the three-output query and
+495.29/10,391.66 ns for full enumeration.
 
-Across the entire primary matrix the measured ratio ranges from 0.13x
-(`n=1,k=1`, a degenerate constant-output case) to 13.31x
-(`n=33,k=33`). The new implementation was slower in all 130 nontrivial cases.
-The existing code's inexpensive four-round upper-layer
-primitive and shared streaming counters generally beat repeated evaluation of
-an 8/16/24-round, fully mixed forward/inverse primitive. Avoiding a small state
-allocation does not make up for that extra arithmetic and traversal.
-This compares the actual implementations, not algorithms normalized to an
-identical primitive: both traversal strategy and mixing cost contribute.
-All timings in this original comparison use the final strengthened schedule, not the rejected
-eight-round version discussed below.
+Every conjugated-cycle step evaluates both Q and its inverse; normalized
+lifts also retrace chains. The new Q uses more expensive mixing and more
+rounds than the existing iterator's upper layers. This is not an attribution
+solely to odd versus even Feistel widths. The sentinel shifts padding
+boundaries: `n=1023` has a full internal 1024-label domain, whereas `n=1024`
+requires a nearly half-empty 2048-label domain. Operation counts below expose
+that cost. Avoiding counter allocation does not offset these extra operations.
 
-## Separating setup, streaming and direct-slot costs
+## Setup, streaming, collection and rank replay
 
-Mean ns/query [95% confidence interval]. All rows below are prehashed; in the
-`slot` rows, `k` means "query slot `k-1`", **not** consume `k` replicas.
+Mean ns/query [95% interval], all prehashed; `n=1000`.
+For rank replay, `k` denotes fetching rank `k-1`, not returning `k` outputs.
 
-| Mode | n | k | Existing layered | New virtual |
-| --- | ---: | ---: | ---: | ---: |
-| Constructor + drop | 1,000 | - | 9.73 [9.62, 9.83] | 1.11 [1.10, 1.12] |
-| Constructor + drop | 2^30 | - | 9.77 [9.72, 9.84] | 1.08 [1.08, 1.09] |
-| Seeded stream query | 1,000 | 3 | 32.45 [32.21, 32.66] | 103.99 [102.70, 105.32] |
-| Seeded stream query | 1,000 | 1,000 | 9,737.78 [9,680.29, 9,789.97] | 85,750.68 [85,646.50, 85,868.42] |
-| Stream only | 1,000 | 3 | 14.62 [14.45, 14.82] | 91.78 [91.32, 92.34] |
-| Stream only | 1,000 | 1,000 | 9,681.61 [9,618.72, 9,750.56] | 86,659.57 [86,278.25, 87,113.38] |
-| Collect | 1,000 | 3 | 43.94 [43.02, 45.48] | 113.49 [112.83, 114.09] |
-| Collect | 1,000 | 1,000 | 9,895.86 [9,786.30, 10,060.80] | 90,027.62 [88,127.94, 92,190.79] |
-| Slot | 1,000 | 3 | 29.93 [29.79, 30.07] | 30.83 [30.69, 30.97] |
-| Slot | 1,000 | 16 | 94.70 [93.68, 95.85] | 28.88 [28.76, 28.98] |
-| Slot | 1,000 | 250 | 2,088.37 [2,042.18, 2,135.62] | 50.60 [50.48, 50.77] |
-| Slot | 1,000 | 1,000 | 9,498.73 [9,419.35, 9,599.28] | 72.18 [72.02, 72.36] |
-| Slot | 65,537 | 3 | 60.03 [59.29, 60.85] | 79.55 [78.88, 80.39] |
-
-Hashing a `u64` alone measured 7.48 [7.46, 7.50] ns. Component costs should
-not be added or subtracted as exact identities: compiler optimization,
-instruction overlap and cache state differ between the groups.
-For `n=1000,k=3`, the seeded-query sample standard deviations were 0.54 ns
-(existing) and 2.95 ns (new); collecting 1,000 replicas had standard deviations
-315.22 ns and 4,646.27 ns respectively. The original run had 721 benchmark
-estimates. The current three-method runner emits 1,081 estimates, including
-standard deviations, with the same CSV script.
-
-Direct access becomes useful for later slots: querying slot 999 at `n=1000`
-was about 132x faster than replaying the old iterator. Early slots need not
-benefit, as the slot-2 rows show. This does not change the sequential-enumeration
-regression, and the saved allocation is not being silently excluded from the
-primary comparison.
-
-## State and allocations
-
-On this target, `size_of::<ConsistentPermutation>()` is 40 bytes plus one
-allocation for `4 * max(1, ceil(log2(n)/2))` bytes of counters: 20 bytes at
-`n=1000`, 36 at `n=65537`, and 60 at `n=2^30`, excluding allocator metadata.
-`size_of::<VirtualPermutation>()` is 24 bytes and it has no heap allocation.
-It uses an additional constant-sized parameter block and scalars on the stack
-during evaluation, not a recursion stack or a per-`n` cache.
-
-These allocation counts follow the source, rather than a custom allocator
-installed in the timed benchmark. The diagnostic example prints the actual
-struct sizes. The collection benchmark adds one capacity-`k` `Vec<u64>`
-allocation to **both** algorithms, so it has two total allocations for the
-existing iterator and one for the new one. Optional output storage is `8k`
-bytes in both cases.
-
-## Distribution diagnostics and the rejected first version
-
-The deterministic example evaluates 200,000 hashed seeds per method for
-`n = 3,4,5,7,8,9,16,17,32,64`. It reports each of the first up to eight slot
-marginals, ordered pairs `(slot 0, slot 1)` and `(slot 0, last sampled slot)`,
-unordered first-three subsets, and consecutive-key primary pairs. Expected
-cells exclude repeated nodes for within-key pairs and include them for
-cross-key pairs. All nontrivial cells are printed even when sparse (for
-example, the `n=64` choose-three diagnostic has only 4.80 expected per cell).
-These are exploratory diagnostics, not random p-value CI gates or a proof of
-independence; the histograms overlap and are not independent tests.
-
-The primary corpus hashes `0x7065726d75746531 XOR i`, `i=0..199999`, with
-`DefaultHasher`. A disjoint, deterministic held-out corpus uses
-`0x686f6c646f757431 XOR i`. The held-out corpus was first evaluated **after**
-fixing the stronger schedule; no additional tuning followed its results.
-It is independent input data for diagnosis, not a claim that a deterministic
-hash function supplies mathematically independent random variables.
-
-The initial **eight-round-at-every-width** implementation was rejected:
-at `n=8`, its ordered `(0,1)` pair statistic was 1753.19 on 55 degrees of
-freedom even though its primary marginal statistic was 4.24 on 7 degrees of
-freedom. Clean marginals were insufficient. The final schedule uses 24 rounds
-at widths 2--4, 16 at 5--7 and 8 at 8--64, fixed solely by width. This
-strengthens mixing instead of reducing rounds to improve performance.
-
-| Metric, n=8 | Existing primary / held-out chi-square | Final virtual primary / held-out chi-square | Degrees of freedom |
+| Mode | k | Existing layered | New sentinel |
 | --- | ---: | ---: | ---: |
-| Primary marginal | 4.79 / 4.66 | 8.63 / 1.22 | 7 |
-| Slot 7 marginal | 11.50 / 5.73 | 6.44 / 1.26 | 7 |
-| Ordered slots (0,1) | 65.97 / 43.73 | 54.15 / 44.41 | 55 |
-| Ordered slots (0,7) | 66.92 / 44.74 | 60.47 / 45.43 | 55 |
-| Unordered first-three subset | 53.47 / 59.83 | 47.66 / 40.41 | 55 |
-| Consecutive-key primaries | 50.26 / 61.98 | 68.31 / 44.11 | 63 |
+| Constructor + drop | - | 9.59 [9.46, 9.73] | 1.58 [1.57, 1.59] |
+| Seeded stream query | 3 | 31.60 [31.27, 31.96] | 336.88 [335.32, 339.24] |
+| Seeded stream query | 1,000 | 9,765.81 [9,702.08, 9,834.64] | 186,574.59 [185,570.04, 187,827.35] |
+| Stream only | 3 | 14.67 [14.47, 14.87] | 347.11 [338.09, 357.54] |
+| Stream only | 1,000 | 9,595.61 [9,574.26, 9,622.33] | 215,975.98 [208,624.79, 224,187.29] |
+| Collect | 3 | 42.41 [42.21, 42.60] | 372.48 [371.57, 373.44] |
+| Collect | 1,000 | 9,965.63 [9,906.14, 10,036.13] | 206,992.98 [198,395.13, 216,335.19] |
+| Rank replay | 3 | 33.34 [32.45, 34.14] | 363.04 [355.80, 371.01] |
+| Rank replay | 1,000 | 9,779.07 [9,746.28, 9,820.64] | 187,699.87 [186,407.45, 189,040.15] |
 
-At `n=32`, the final virtual first-three subset statistics are 4863.03 and
-4873.25 on 4959 degrees of freedom, versus 5068.47 and 5024.53 for the existing
-implementation. Its ordered `(0,1)` statistics are 1033.88 and 920.17 on 991
-degrees of freedom, versus 1032.74 and 985.50 for the existing implementation.
+Hashing a `u64` alone measured 5.41 [4.84, 5.98] ns. Component means are
+not additive identities: optimizer behavior, instruction overlap, prepared
+state and host noise differ. In particular, component results do not recover
+a hidden direct-rank advantage.
 
-No similarly large deviations appeared in the final virtual family's measured
-marginals, ordered pairs, subsets or consecutive-key pairs on either corpus.
-That observation does not establish exact uniformity, bound unseen-key bias,
-or validate cryptographic properties.
+### State and allocation
 
-The **unchanged existing implementation** also has detectable deviations in
-these broader diagnostics: at `n=9`, slot 4 has chi-square 253.52 on 8 degrees
-of freedom in the primary corpus and 167.39 in the held-out corpus; slots 3
-and 5 also deviate. This is a limitation of the measured baseline, not a
-reason to alter its behavior in this PR or to declare the new algorithm
-uniform. Timing and statistical evidence answer different questions.
+On this target the baseline struct is 40 bytes plus one allocation for
+`4 * max(1, ceil(log2(n)/2))` bytes of counters: 20 bytes at `n=1000`,
+36 at `n=65537`, 60 at `n=2^30`, excluding allocator metadata.
+The sentinel iterator is **32 bytes with no heap allocation**. Its temporary
+width parameters and scalars are constant-sized, without recursive stack,
+prebuilt ring, permutation table or duplicate set.
 
-## Untimed operation counts and tails
+Allocation counts follow source inspection, not a custom allocator in the
+timed region; the diagnostic prints actual struct sizes. Collection adds one
+capacity-`k` `Vec<u64>` allocation (8k bytes) to both methods: two total
+allocations for the existing iterator and one for the new iterator.
 
-The ignored diagnostic test wraps the **same evaluator and primitive** with
-forward/inverse counters, outside any timed benchmark. For each `(n,slot)`,
-it uses 10,000 deterministic SplitMix64-mixed seeds from integers `0..9999`
-(the test source fixes the exact mixer and offset). Percentiles are nearest-
-rank percentiles of total forward plus inverse calls; one call can contain
-8, 16 or 24 Feistel rounds depending on width.
+## Fresh randomness diagnostics
 
-| n | slot | Mean forward | Mean inverse | Mean visited levels | p50 calls | p99 calls | Observed max |
+The example evaluates **3,760,000 complete orders per method per corpus**:
+200,000 keys at each `n<=33`, 50,000 at `62,63,64,65`, and 20,000 at
+`126,127,128,129,254,255,256,257`. The smaller sizes are
+`1,2,3,4,5,6,7,8,9,14,15,16,17,30,31,32,33`.
+They include small/odd-width domains and both real-node and sentinel boundaries.
+
+Primary keys hash `0x7065726d75746531 XOR i`; a disjoint held-out key corpus
+hashes `0x686f6c646f757431 XOR i`, using `DefaultHasher`.
+The fixed 24/16/8-round Q schedule was not changed or tuned to either corpus
+for this construction. Held-out means separate input data, not mathematical
+independence supplied by a deterministic hash.
+
+Metrics cover ranks `0,1,2,n/2,n-2,n-1` where valid, first/middle adjacent
+pairs, first/middle and first/last distant pairs, first-three unordered subsets,
+all full orders through `n=7`, consecutive application-key primary pairs,
+and primaries for `seed` versus `seed XOR (1<<63)`. Duplicate rank choices
+are removed.
+
+Pairs are exact through `n=65`; larger domains use eight contiguous buckets.
+For within-key bucket pairs the expected weight is
+`size[a]*(size[b] - (a==b))/(n*(n-1))`, not a uniform 64-cell assumption.
+Cross-key pairs use `size[a]*size[b]/n^2`. Repeated exact nodes are impossible
+within-key and allowed cross-key. Triple histograms are skipped when expected
+cell counts would be below ten (all tested sizes above 33); full-order
+histograms stop at seven. The actual minimum expected cell count is 11.834.
+
+The output contains 694 rows across both algorithms per corpus, including
+observations, degrees of freedom, minimum expected count, chi-square, maximum
+relative cell deviation and empirical total variation (TV). These are
+overlapping exploratory diagnostics, **not p-value CI gates**. Consecutive-key
+pairs overlap in their keys; rows and nearby sizes are not independent tests.
+Bucketed tests can miss correlations inside a bucket.
+
+### Representative chi-square results
+
+Values are primary / held-out. All rows use 200,000 observations except
+`n=64,65` (50,000) and `n=256` (20,000).
+
+| n, metric (zero-based ranks) | df | Existing layered | New sentinel |
+| --- | ---: | ---: | ---: |
+| 7, full order | 5,039 | 5,191.353 / 5,431.710 | 5,188.278 / 5,135.056 |
+| 7, first-three subset | 34 | 77.207 / 81.965 | 37.004 / 45.729 |
+| 8, first rank | 7 | 4.790 / 4.656 | 4.560 / 9.774 |
+| 8, last rank | 7 | 11.501 / 5.734 | 6.189 / 13.977 |
+| 8, ordered ranks (0,1) | 55 | 65.968 / 43.725 | 55.089 / 51.515 |
+| 8, ordered ranks (4,5) | 55 | 57.991 / 53.807 | 42.932 / 48.067 |
+| 8, ordered ranks (0,7) | 55 | 66.922 / 44.737 | 58.735 / 60.360 |
+| 8, first-three subset | 55 | 53.474 / 59.828 | 69.037 / 50.819 |
+| 8, related-seed primaries | 63 | 86.673 / 51.715 | 83.164 / 76.575 |
+| 9, middle rank 4 | 8 | 253.520 / 167.394 | 4.610 / 0.708 |
+| 9, ordered ranks (4,5) | 71 | 387.530 / 305.222 | 52.348 / 76.608 |
+| 33, middle rank 16 | 32 | 127.629 / 100.534 | 27.809 / 29.831 |
+| 33, first-three subset | 5,455 | 5,553.436 / 5,455.392 | 5,429.912 / 5,576.133 |
+| 64, ordered ranks (0,1) | 4,031 | 3,967.352 / 3,973.320 | 3,828.813 / 4,140.406 |
+| 65, ordered ranks (0,64) | 4,159 | 4,096.640 / 4,155.046 | 4,042.726 / 4,180.339 |
+| 256, ordered ranks (0,128), eight buckets | 63 | 500.392 / 488.941 | 74.926 / 77.442 |
+
+The unchanged baseline has repeatable deviations, especially middle ranks
+and distant pairs. At `n=9,rank=4`, its maximum relative cell deviations are
+9.91%/7.94%, versus sentinel's 0.90%/0.25%; empirical TV is
+1.10%/0.92% versus 0.20%/0.08%. At `n=256`, the distant bucketed pair has
+maximum relative deviations 53.96%/53.64% versus 17.76%/14.75%, and TV
+5.71%/5.59% versus 2.36%/2.54%. These observations do not justify changing
+the user's mapping in this PR.
+
+Not every new statistic is small. Sentinel's first rank at `n=4` has
+chi-square 2.852/13.863 on df=3, maximum relative deviation 0.56%/1.22%.
+Its last rank at `n=30` has 55.466/36.187 on df=29, and consecutive-key
+primaries at `n=15` have 297.327/203.974 on df=224. Isolated fluctuations
+must be interpreted alongside hundreds of correlated checks, not optimized
+away by changing the mixer after viewing results.
+
+TV and maximum cell error include sampling noise and are not corrected
+estimates of true family bias: even the new full-order `n=7` histograms have
+TV 6.46%/6.39% with only 39.68 expected observations per bin. Diagnostics
+cannot prove independence, exact uniformity, unseen-key bounds or
+cryptographic security. The new family remains experimental.
+
+## Sequential operation counts and tails
+
+The ignored test instruments the actual evaluator **outside timed code**.
+It uses 10,000 deterministic mixed seeds per `(n,k)`, 56 cases. Counts are
+for whole sequential prefixes, not independent input slots.
+One P or P_inverse operation costs two ordinary Q/Q_inverse evaluations;
+each Q uses 8, 16 or 24 rounds according to width (width one is XOR).
+Percentiles below are nearest-rank percentiles of total **P + P_inverse**
+calls per query. `max step` is the largest individual successor evaluation.
+
+| n | k | Mean P forward | Mean P inverse | Mean Q calls/output | p99 query calls | Max query calls | Max step |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 256 | 0 | 1.9808 | 0 | 1.9808 | 1 | 7 | 8 |
-| 257 | 0 | 3.9806 | 1.0051 | 2.9715 | 4 | 16 | 28 |
-| 257 | 256 | 3.9660 | 3.9270 | 2.9786 | 7 | 22 | 41 |
-| 65,536 | 0 | 1.9922 | 0 | 1.9922 | 1 | 7 | 15 |
-| 65,537 | 0 | 3.9822 | 0.9900 | 2.9922 | 4 | 16 | 30 |
-| 65,537 | 65,536 | 4.0104 | 4.0244 | 3.0065 | 7 | 23 | 36 |
-| 2^30 | 2^29 | 1.9907 | 1.4876 | 1.9907 | 1 | 16 | 49 |
-| 2^63 + 1 | 2^63 | 3.9795 | 4.0169 | 2.9878 | 7 | 23 | 40 |
-| u64::MAX | 0 | 2.0194 | 0 | 2.0194 | 2 | 7 | 16 |
+| 1 | 1 | 1.0000 | 0.0000 | 2.0000 | 1 | 1 | 1 |
+| 8 | 1 | 3.1700 | 0.6973 | 7.7346 | 12 | 18 | 18 |
+| 8 | 8 | 25.2413 | 11.0429 | 9.0710 | 40 | 40 | 20 |
+| 255 | 3 | 5.9065 | 0.8688 | 4.5169 | 14 | 20 | 10 |
+| 256 | 3 | 11.8445 | 3.8270 | 10.4477 | 32 | 49 | 35 |
+| 256 | 256 | 1,012.0098 | 502.0404 | 11.8285 | 1,522 | 1,523 | 49 |
+| 1,023 | 3 | 5.9834 | 0.8494 | 4.5552 | 14 | 20 | 12 |
+| 1,024 | 3 | 11.9965 | 3.8663 | 10.5752 | 32 | 47 | 31 |
+| 65,535 | 3 | 5.9705 | 0.8476 | 4.5454 | 15 | 23 | 15 |
+| 65,536 | 3 | 11.9667 | 3.8438 | 10.5403 | 32 | 48 | 36 |
+| 2^30 | 3 | 12.0301 | 3.9108 | 10.6273 | 33 | 50 | 36 |
+| 2^63 - 1 | 16 | 32.0460 | 11.6256 | 5.4589 | 60 | 75 | 23 |
+| u64::MAX - 1 | 16 | 32.1024 | 11.6484 | 5.4688 | 60 | 72 | 25 |
 
-The last two rows are **unpaired, wider-domain diagnostics**, not performance
-comparisons with the old API. Near a half-full top domain, traversal work
-increases substantially; constant expected work does not mean flat latency.
-The 8.0348-call sample mean at `n=65537,slot=65536` is not a contradiction of
-the ideal-model bound: it is a finite sample of a finite-key approximation,
-not the ideal ensemble expectation.
+Observed mean ordinary-PRP calls/output range from 2 to 11.8285. This is
+compatible with, but does not prove, the conservative ideal-model expected
+bound below 16 described in the design note. The mean visited levels for
+three outputs are 5.9834 at `n=1023` versus 8.9764 at `n=1024`; top padding
+also adds forward walks and retracing.
 
-Observed maxima are not guarantees. A deterministic adversarial-oracle unit
-test uses ascending cycles and needs over 4,096 calls for `n=2049,slot=2048`;
-the evaluator still returns the correct result without a retry cap. Long
-cycles and linear-in-domain worst cases remain possible. Neither the
-diagnostics nor the timing confidence intervals establish a latency bound.
-
-## Matched-network follow-up
-
-At the user's request, `BalancedVirtualPermutation` now uses exactly the
-existing `layer_apply` network: same seed, mixer, balanced halves, round
-counts, rotation and Weyl key schedule. The cycle construction descends by
-two bits, as the existing iterator does. A new inverse shares the same round
-function and reverses that exact key schedule. It does not introduce a
-different mixer, extra seed hash, or independently tuned round count.
-
-The same machine, compiler, flags, key corpus, 131-case matrix and Criterion
-settings were used again, sequentially in `layered`, `virtual`, `balanced`
-order per case. There are 1,081 estimates across all groups. All three
-implementations are rerun; comparisons below use this run, not subtraction of
-timings from the earlier run. The shared-host and fixed-corpus limitations
-still apply. State is 24 bytes with no allocation for either cycle iterator,
-versus 40 bytes plus the heap counters for the existing iterator.
-
-### Fresh queries: matching the primitive removes much of the overhead
-
-Mean ns/query [bootstrap 95% interval]. The final ratio is
-**matched/existing**; below one favors the matched variant.
-
-| n | k | Existing | Stronger one-bit | Matched two-bit | Matched/existing |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 8 | 1 | 45.27 [44.67, 45.87] | 110.60 [110.18, 111.13] | 61.42 [60.35, 62.62] | 1.36x |
-| 8 | 8 | 205.76 [203.68, 207.92] | 1,030.44 [1,021.06, 1,041.23] | 608.10 [592.46, 623.97] | 2.96x |
-| 16 | 3 | 57.51 [57.16, 57.82] | 334.54 [333.57, 335.44] | 67.91 [66.89, 69.14] | 1.18x |
-| 17 | 3 | 105.10 [104.22, 105.84] | 619.91 [618.09, 621.79] | 261.59 [258.54, 266.26] | 2.49x |
-| 33 | 33 | 637.60 [604.96, 684.35] | 8,604.99 [8,085.82, 9,388.97] | 2,155.89 [2,115.56, 2,192.34] | 3.38x |
-| 255 | 3 | 35.09 [34.77, 35.39] | 140.78 [140.32, 141.18] | 30.76 [30.58, 30.97] | 0.88x |
-| 256 | 3 | 35.99 [35.64, 36.29] | 139.85 [139.28, 140.62] | 31.11 [30.80, 31.46] | 0.86x |
-| 257 | 3 | 61.67 [61.43, 61.91] | 304.03 [302.58, 305.93] | 198.41 [195.88, 201.23] | 3.22x |
-| 257 | 8 | 155.53 [151.73, 159.47] | 872.01 [846.66, 902.67] | 536.47 [521.46, 564.32] | 3.45x |
-| 1,000 | 1 | 19.75 [19.70, 19.81] | 43.94 [43.47, 44.47] | 16.26 [16.03, 16.48] | 0.82x |
-| 1,000 | 3 | 32.83 [32.63, 33.02] | 101.72 [101.21, 102.22] | 27.72 [27.58, 27.86] | 0.84x |
-| 1,000 | 16 | 98.73 [98.11, 99.45] | 539.84 [504.74, 605.05] | 137.11 [135.35, 138.99] | 1.39x |
-| 1,000 | 250 | 2,059.36 [2,047.90, 2,070.14] | 14,914.99 [14,779.03, 15,043.08] | 3,374.48 [3,336.90, 3,412.61] | 1.64x |
-| 1,000 | 1,000 | 9,808.45 [9,658.26, 10,006.25] | 83,713.94 [83,369.99, 84,114.21] | 22,289.60 [22,158.85, 22,422.35] | 2.27x |
-| 1,024 | 3 | 33.67 [33.45, 33.88] | 98.44 [97.52, 99.27] | 29.54 [28.99, 30.18] | 0.88x |
-| 1,025 | 3 | 65.79 [65.44, 66.12] | 267.49 [266.66, 268.47] | 182.40 [180.91, 184.61] | 2.77x |
-| 65,536 | 3 | 33.12 [32.94, 33.28] | 83.63 [83.24, 83.98] | 28.43 [28.16, 28.67] | 0.86x |
-| 65,537 | 3 | 65.87 [65.58, 66.16] | 262.49 [262.17, 262.80] | 171.81 [169.97, 174.83] | 2.61x |
-| 1,000,000 | 3 | 35.39 [34.87, 36.04] | 95.33 [94.27, 96.33] | 27.43 [27.22, 27.61] | 0.77x |
-| 2^30 | 3 | 34.24 [33.94, 34.51] | 90.35 [89.09, 91.52] | 26.34 [26.18, 26.47] | 0.77x |
-
-At `n=1000,k=3`, matching the network and stride reduces the cycle
-construction from 101.72 to 27.72 ns/query (3.67x faster), making it about
-16% faster than the existing iterator on this workload. That is 9.24
-ns/replica versus 10.94 existing and 33.91 stronger-one-bit. For a full
-1,000-node permutation it is still 2.27x slower than existing (22.29 versus
-9.81 ns/replica), although much faster than the stronger variant's 83.71.
-
-The matched mean is below the existing mean in 31 of 131 cases, including the
-degenerate `n=1` case; small differences are not blanket claims of significance.
-Its largest observed mean ratio is 3.45x at `n=257,k=8`. Just above powers of
-four, the top domain is nearly three-quarters inactive, and cycle walking plus
-inverse traversal is still expensive. This experiment changes primitive
-**and stride together**; it does not isolate the machine cost of odd halves
-alone. It demonstrates that the earlier slowdown was not an unavoidable cost
-of cycle consistency, but it does not show that the cycle method always wins.
-
-The component measurements help distinguish allocation from streaming work.
-Below are mean ns/query from the same run, with prehashed seeds; slot queries
-return **one** value, while the other `k` rows consume or collect `k` values.
-
-| Workload, n=1000 | Existing | Stronger one-bit | Matched two-bit |
-| --- | ---: | ---: | ---: |
-| Constructor + drop | 9.71 | 1.09 | 1.17 |
-| Seeded query, k=3 | 31.25 | 103.66 | 27.08 |
-| Stream only, k=3 | 14.45 | 89.51 | 20.95 |
-| Stream only, k=1000 | 9,541.23 | 86,465.65 | 22,863.95 |
-| Collect, k=3 | 42.90 | 112.43 | 36.66 |
-| Collect, k=1000 | 9,727.46 | 87,758.08 | 22,936.49 |
-| Query slot 2 | 30.03 | 31.54 | 7.89 |
-| Query slot 999 | 9,604.66 | 77.43 | 12.69 |
-
-For `k=3` stream-only, the existing/matched 95% intervals are
-[14.25, 14.66] / [20.80, 21.11] ns, and sample standard deviations
-0.47 / 0.39 ns. For the seeded complete query, the intervals are
-[30.98, 31.47] / [26.92, 27.29] ns. The fresh-query win is therefore consistent
-with avoiding allocation, **not** evidence that the cycle traversal itself is
-cheaper. These components still cannot be added as exact identities because
-their compilation and cache conditions differ.
-
-The matched direct slot-999 query has interval [12.53, 12.88] ns and sample
-standard deviation 0.42 ns. The existing iterator must replay to reach that
-slot; this is an API/workload advantage, not a claim of comparable sequential
-enumeration speed.
-
-### Statistical quality is not equivalent
-
-Both deterministic 200,000-key corpora were rerun without tuning the matched
-network. The existing and stronger variants' reported diagnostic rows are
-unchanged from the prior run. The matched variant has repeatable deviations:
-
-| Metric | Degrees of freedom | Matched primary chi-square | Matched held-out chi-square |
-| --- | ---: | ---: | ---: |
-| n=5, slot 4 | 4 | 82.80 | 84.94 |
-| n=5, ordered slots (0,4) | 19 | 98.15 | 98.63 |
-| n=8, primary marginal | 7 | 6.21 | 7.26 |
-| n=8, ordered slots (0,1) | 55 | 112.66 | 131.31 |
-| n=8, first-three subset | 55 | 133.99 | 146.63 |
-| n=9, first-three subset | 83 | 148.11 | 141.19 |
-
-For the `n=5,slot=4` marginal, the most frequent node occurs 41,613 and 41,612
-times against 40,000 expected in each corpus, about a 4% excess. At `n=8`,
-the stronger variant's first-three subset statistics remain 47.66 / 40.41,
-and the existing iterator's are 53.47 / 59.83, versus the matched variant's
-133.99 / 146.63 (all 55 degrees of freedom).
-
-The same primitive need not have the same statistical behavior after list
-projection versus cycle projection. These results do not distinguish
-within-width weaknesses from cross-width seed correlations, nor do they
-prove exact uniformity for any method. They do show that replacing the
-stronger network is **not statistically neutral**. The matched variant is
-retained as an explicitly experimental comparison, not silently substituted
-for `VirtualPermutation` or promoted as meeting the ideal randomness model.
-
-### Traversal counts explain remaining boundary costs
-
-The operation-count diagnostic now prints both cycle variants, using the same
-10,000 seeds per `(n,slot)` as before. Means count forward plus inverse calls,
-not Feistel rounds or nanoseconds:
-
-| n | slot | Stronger mean calls | Matched mean calls | Stronger p99 | Matched p99 | Matched observed max |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 256 | 0 | 1.9808 | 1.3247 | 7 | 4 | 4 |
-| 257 | 0 | 4.9857 | 8.2873 | 16 | 34 | 59 |
-| 257 | 256 | 7.8930 | 13.2029 | 22 | 41 | 134 |
-| 65,536 | 0 | 1.9922 | 1.3330 | 7 | 4 | 8 |
-| 65,537 | 0 | 4.9722 | 8.3462 | 16 | 34 | 68 |
-| 65,537 | 65,536 | 8.0348 | 13.4067 | 23 | 41 | 73 |
-
-At full powers of four, primary lookup uses fewer levels; a regression test
-also confirms that the matched and existing algorithms give the **same
-primary value** there. Just above those boundaries, however, the two-bit
-construction must traverse a much larger inactive upper region and then
-often retrace it. Its cheaper primitive can still yield faster timings than
-the stronger variant despite more primitive calls. These measured tails are
-not worst-case guarantees, and the one-bit variant's ideal less-than-eight-
-call bound does not apply to the two-bit variant.
+The deterministic invariant test checks that lower-level invocations equal
+the selected lower-label subsequence and inverse calls never exceed forward
+calls per level along every tested prefix. A constructed full-cycle oracle
+still requires more than 4,096 primitive calls for just two outputs at
+internal count 2,049. Thus observed tails, and the expected-prefix bound,
+are **not a worst-case or adversarial-latency guarantee**.

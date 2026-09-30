@@ -1,9 +1,7 @@
-//! Cycle-consistent permutations, as opposed to the survivor-list consistency
-//! of `ConsistentPermutation`. See `docs/virtual-permutation.md`.
+//! Sentinel-rooted, single-cycle consistent permutations.
+//! See `docs/virtual-permutation.md` for the construction and assumptions.
 
 use std::iter::FusedIterator;
-
-use crate::consistent_permutation::{layer_apply, layer_inverse};
 
 const WEYL: u64 = 0x9E37_79B9_7F4A_7C15;
 
@@ -19,8 +17,7 @@ trait Permutation {
     fn inverse(&self, x: u64) -> u64;
 }
 
-/// Alternating Feistel half updates, including unequal halves for odd widths.
-/// This is a noncryptographic family, not a uniform or secure PRP.
+/// Ordinary noncryptographic Feistel Q, not itself the consistent map or cycle.
 struct WordPermutation {
     key: u64,
     bits: u32,
@@ -68,8 +65,6 @@ impl WordPermutation {
 
     #[inline]
     fn transform<const INVERSE: bool>(&self, x: u64) -> u64 {
-        // Tiny half-domains need more mixing: eight rounds had strong
-        // ordered-pair bias at width three despite clean marginals.
         match self.bits {
             1 => x ^ (self.key & 1),
             2..=4 => self.transform_rounds::<12, INVERSE>(x),
@@ -91,113 +86,123 @@ impl Permutation for WordPermutation {
     }
 }
 
-#[inline]
-fn evaluate<P: Permutation>(n: u64, x: u64, layer: impl FnMut(u32) -> P) -> u64 {
-    evaluate_with_stride::<1, P>(n, x, layer)
+struct SingleCycle<Q> {
+    ordinary: Q,
+    mask: u64,
+}
+
+impl<Q: Permutation> Permutation for SingleCycle<Q> {
+    #[inline]
+    fn forward(&self, x: u64) -> u64 {
+        self.ordinary
+            .inverse(self.ordinary.forward(x).wrapping_add(1) & self.mask)
+    }
+
+    #[inline]
+    fn inverse(&self, x: u64) -> u64 {
+        self.ordinary
+            .inverse(self.ordinary.forward(x).wrapping_sub(1) & self.mask)
+    }
 }
 
 #[inline]
-fn evaluate_with_stride<const STEP: u32, P: Permutation>(
-    mut n: u64,
-    mut x: u64,
-    mut layer: impl FnMut(u32) -> P,
-) -> u64 {
-    debug_assert!(STEP == 1 || STEP == 2);
-    let mut bits = u64::BITS - (n - 1).leading_zeros();
-    bits = bits.div_ceil(STEP) * STEP;
+fn cycle(seed: u64, bits: u32) -> SingleCycle<WordPermutation> {
+    SingleCycle {
+        ordinary: WordPermutation::new(seed, bits),
+        mask: u64::MAX >> (64 - bits),
+    }
+}
+
+#[inline]
+fn evaluate<P: Permutation>(mut count: u64, mut x: u64, mut layer: impl FnMut(u32) -> P) -> u64 {
+    debug_assert!(count > 0 && x < count);
+    let mut bits = u64::BITS - (count - 1).leading_zeros();
     while bits > 0 {
-        let boundary = 1u64 << (bits - STEP);
+        let half = 1u64 << (bits - 1);
         let permutation = layer(bits);
         loop {
             let y = permutation.forward(x);
-            if y >= n {
+            if y >= count {
                 x = y;
                 continue;
             }
-            if y >= boundary {
+            if y >= half {
                 return y;
             }
-            // Find the old input at the start of this Q-chain, not its old
-            // output y: this applies inverse(cycle_projection(Q)) before
-            // evaluating the smaller consistent permutation.
-            while x >= boundary {
+            // Recover the old input at the start of this chain, rather than
+            // its old destination y, before evaluating the lower-level cycle.
+            while x >= half {
                 x = permutation.inverse(x);
             }
             break;
         }
-        n = boundary;
-        bits -= STEP;
+        count = half;
+        bits -= 1;
     }
     0
 }
 
-/// An allocation-free, per-key permutation of `0..n` with stable replica slots.
+/// An allocation-free, per-key ordering of `0..n` preserving survivor order.
 ///
-/// For fixed `(n, seed)`, taking `k` items gives `k` distinct nodes and is a
-/// prefix of every longer selection. Appending node `n` changes at most one
-/// existing slot, and that slot changes to `n`; removing the last node changes
-/// only its slot (among slots that still exist). Membership must be a prefix
-/// of consecutive IDs.
+/// Every prefix contains distinct nodes. Appending a node inserts it somewhere
+/// in the complete order; removing the last node deletes it without reordering
+/// survivors. Membership must be consecutive IDs `0..n`. Replica ranks may
+/// shift when membership changes.
 ///
-/// **Not a drop-in replacement for [`crate::ConsistentPermutation`]:** this
-/// preserves cycle projections, not survivor list order. Removing a node from
-/// the output list does not generally produce the smaller permutation.
+/// The iterator traverses one consistent cycle from a permanent internal
+/// sentinel. It does not evaluate independent rank inputs or cache a prefix.
+/// `nth(r)` replays `r + 1` successors from the current position; there is no
+/// constant-time absolute-rank API.
 ///
-/// Uniform, independent permutations per key and bit width give uniform
-/// selections and expected `O(k)` evaluation with constant-cost forward/inverse
-/// primitives. The implemented 64-bit seeded, 8/16/24-round Feistel family is
-/// only a practical noncryptographic approximation to that ideal. Neither
-/// exact uniformity, cryptographic security, nor worst-case `O(k)` is claimed.
-/// State is constant size; no rings, permutation tables, or duplicate sets
-/// are constructed. Walks have no artificial retry limit.
+/// Under independent uniform ideal permutations per key and bit width, the
+/// rooted order is uniform and sequential work is expected `O(k)` for `k`
+/// outputs with constant-cost primitives. This is not a worst-case bound.
+/// The finite 64-bit seeded, 8/16/24-round Feistel family is noncryptographic;
+/// exact uniformity, independence and cryptographic security are not claimed.
+/// State is four `u64` fields, with no ring, table, duplicate set or allocation.
 ///
 /// ```
 /// use consistent_choose_k::VirtualPermutation;
 ///
 /// let seed = 0x1234_5678_9abc_def0; // normally a well-mixed hash of the key
-/// let selection = VirtualPermutation::new(100, seed);
-/// let third = selection.replica_at(2);
-/// assert_eq!(selection.clone().nth(2), Some(third));
-/// let replicas: Vec<_> = selection.take(3).collect();
-/// assert_eq!(replicas.len(), 3);
+/// let old: Vec<_> = VirtualPermutation::new(100, seed).collect();
+/// let new: Vec<_> = VirtualPermutation::new(101, seed)
+///     .filter(|&node| node != 100).collect();
+/// assert_eq!(old, new);
+/// assert_eq!(VirtualPermutation::new(100, seed).take(3).collect::<Vec<_>>(), old[..3]);
 /// ```
 #[derive(Clone, Debug)]
 pub struct VirtualPermutation {
     seed: u64,
-    n: u64,
-    next: u64,
+    count: u64,
+    cursor: u64,
+    remaining: u64,
 }
 
 impl VirtualPermutation {
-    /// Construct a permutation for `1..=u64::MAX` nodes.
+    /// Construct an ordering of `1..=u64::MAX - 1` real nodes.
     ///
-    /// As with [`crate::ConsistentPermutation::new`], supply a well-mixed
-    /// 64-bit hash of the key. Width/round domain separation is internal and
-    /// independent of `n` and of the requested replica count.
+    /// Supply a well-mixed key hash, held fixed across membership and replica
+    /// counts. Internal label zero is the sentinel; real node `i` has label
+    /// `i + 1`. The extra sentinel requires representable internal count `n + 1`.
     ///
     /// # Panics
     ///
-    /// Panics if `n == 0`.
+    /// Panics if `n == 0` or `n == u64::MAX`.
     pub fn new(n: u64, seed: u64) -> Self {
         assert!(n > 0, "n must be at least 1");
-        Self { seed, n, next: 0 }
+        assert!(n < u64::MAX, "n must be at most u64::MAX - 1");
+        Self {
+            seed,
+            count: n + 1,
+            cursor: 0,
+            remaining: n,
+        }
     }
 
-    /// Universe size, independent of the iterator's current position.
+    /// Number of real nodes, independent of iterator position.
     pub fn n(&self) -> u64 {
-        self.n
-    }
-
-    /// Evaluate an absolute zero-based replica slot without advancing the
-    /// iterator. Expected constant work under ideal independent permutations;
-    /// no worst-case constant-time guarantee.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `slot >= self.n()`.
-    pub fn replica_at(&self, slot: u64) -> u64 {
-        assert!(slot < self.n, "replica slot must be less than n");
-        evaluate(self.n, slot, |bits| WordPermutation::new(self.seed, bits))
+        self.count - 1
     }
 }
 
@@ -205,154 +210,73 @@ impl Iterator for VirtualPermutation {
     type Item = u64;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.next == self.n {
+        if self.remaining == 0 {
             return None;
         }
-        let value = self.replica_at(self.next);
-        self.next += 1;
-        Some(value)
+        self.cursor = evaluate(self.count, self.cursor, |bits| cycle(self.seed, bits));
+        debug_assert!(self.cursor > 0 && self.cursor < self.count);
+        self.remaining -= 1;
+        Some(self.cursor - 1)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        match usize::try_from(self.n - self.next) {
+        match usize::try_from(self.remaining) {
             Ok(remaining) => (remaining, Some(remaining)),
             Err(_) => (usize::MAX, None),
         }
-    }
-
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        self.next = self.next.saturating_add(n as u64).min(self.n);
-        self.next()
     }
 }
 
 impl FusedIterator for VirtualPermutation {}
 
-struct ExistingPermutation {
-    bits: u32,
-    seed: u64,
-}
-
-impl Permutation for ExistingPermutation {
-    #[inline]
-    fn forward(&self, x: u64) -> u64 {
-        u64::from(layer_apply(self.bits, self.seed, x as u32))
-    }
-
-    #[inline]
-    fn inverse(&self, x: u64) -> u64 {
-        u64::from(layer_inverse(self.bits, self.seed, x as u32))
-    }
-}
-
-/// Experimental cycle-consistent replica slots using exactly the Feistel
-/// network of [`crate::ConsistentPermutation`], including its round counts and
-/// key schedule, with two bits per lift.
-///
-/// This has the slot-consistency semantics of [`VirtualPermutation`], **not**
-/// the survivor-list semantics of `ConsistentPermutation`. The supplied
-/// well-mixed seed is passed unchanged to the existing network; no additional
-/// width-domain seed mixer is inserted. Consequently its statistical quality
-/// must be assessed separately from the independently keyed ideal model.
-/// It is noncryptographic and does not promise exact uniformity.
-///
-/// **Statistical caution:** the matched-network diagnostics show repeatable
-/// small-domain bias. This variant is provided for comparison, not as a
-/// statistically equivalent substitute for `VirtualPermutation`.
-///
-/// State is allocation-free. The supported domain matches the existing
-/// network: `1..=2^30` nodes. Iteration returns `u64`, as `VirtualPermutation`
-/// does, and direct slot evaluation does not replay earlier slots.
-///
-/// ```
-/// use consistent_choose_k::BalancedVirtualPermutation;
-///
-/// let permutation = BalancedVirtualPermutation::new(100, 0x1234_5678_9abc_def0);
-/// assert_eq!(permutation.clone().nth(2), Some(permutation.replica_at(2)));
-/// assert_eq!(permutation.take(3).count(), 3);
-/// ```
-#[derive(Clone, Debug)]
-pub struct BalancedVirtualPermutation {
-    inner: VirtualPermutation,
-}
-
-impl BalancedVirtualPermutation {
-    /// Construct an iterator with the existing Feistel network and seed.
-    ///
-    /// # Panics
-    ///
-    /// Panics unless `1 <= n <= 2^30`.
-    pub fn new(n: u32, seed: u64) -> Self {
-        assert!(n <= 1u32 << 30, "n must be at most 2^30");
-        Self {
-            inner: VirtualPermutation::new(u64::from(n), seed),
-        }
-    }
-
-    /// Universe size, independent of the iterator's position.
-    pub fn n(&self) -> u64 {
-        self.inner.n()
-    }
-
-    /// Evaluate an absolute slot without advancing the iterator.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `slot >= self.n()`.
-    pub fn replica_at(&self, slot: u64) -> u64 {
-        assert!(slot < self.inner.n, "replica slot must be less than n");
-        evaluate_with_stride::<2, _>(self.inner.n, slot, |bits| ExistingPermutation {
-            bits,
-            seed: self.inner.seed,
-        })
-    }
-}
-
-impl Iterator for BalancedVirtualPermutation {
-    type Item = u64;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.inner.next == self.inner.n {
-            return None;
-        }
-        let value = self.replica_at(self.inner.next);
-        self.inner.next += 1;
-        Some(value)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        self.inner.next = self.inner.next.saturating_add(n as u64).min(self.inner.n);
-        self.next()
-    }
-}
-
-impl FusedIterator for BalancedVirtualPermutation {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    struct CountedCycle<'a> {
+        cycle: SingleCycle<WordPermutation>,
+        calls: &'a Cell<[u64; 3]>,
+    }
+
+    impl Permutation for CountedCycle<'_> {
+        fn forward(&self, x: u64) -> u64 {
+            let mut v = self.calls.get();
+            v[0] += 1;
+            self.calls.set(v);
+            self.cycle.forward(x)
+        }
+        fn inverse(&self, x: u64) -> u64 {
+            let mut v = self.calls.get();
+            v[1] += 1;
+            self.calls.set(v);
+            self.cycle.inverse(x)
+        }
+    }
 
     fn seed(i: u64) -> u64 {
         mix(i.wrapping_add(WEYL))
     }
 
+    fn successor(count: u64, key: u64, x: u64) -> u64 {
+        evaluate(count, x, |bits| cycle(key, bits))
+    }
+
     #[test]
-    fn word_round_trips_all_widths() {
+    fn ordinary_and_cycle_round_trips_all_widths() {
         for bits in 1..=64 {
             let mask = u64::MAX >> (64 - bits);
             for key in [0, 1, u64::MAX, seed(42)] {
-                let p = WordPermutation::new(key, bits);
+                let q = WordPermutation::new(key, bits);
+                let p = cycle(key, bits);
                 for x in [0, 1, mask / 2, mask / 2 + 1, mask]
                     .into_iter()
-                    .chain((0..128).map(|i| seed(i) & mask))
+                    .chain((0..64).map(|i| seed(i) & mask))
                 {
-                    let y = p.forward(x);
-                    assert_eq!(y & !mask, 0);
-                    assert_eq!(p.inverse(y), x, "bits={bits} key={key} x={x}");
+                    assert!(q.forward(x) <= mask && p.forward(x) <= mask);
+                    assert_eq!(q.inverse(q.forward(x)), x);
+                    assert_eq!(q.forward(q.inverse(x)), x);
+                    assert_eq!(p.inverse(p.forward(x)), x);
                     assert_eq!(p.forward(p.inverse(x)), x);
                 }
             }
@@ -360,153 +284,29 @@ mod tests {
     }
 
     #[test]
-    fn word_exhaustive_small_domains() {
-        for bits in 1..=10 {
+    fn conjugates_are_single_cycles() {
+        for bits in 1..=9 {
             for key in 0..16 {
-                let p = WordPermutation::new(seed(key), bits);
-                let mut outputs: Vec<_> = (0..1 << bits)
-                    .map(|x| {
-                        let y = p.forward(x);
-                        assert_eq!(p.inverse(y), x);
-                        y
-                    })
-                    .collect();
-                outputs.sort_unstable();
-                assert_eq!(outputs, (0..1 << bits).collect::<Vec<_>>());
-            }
-        }
-    }
-
-    #[test]
-    fn full_permutations_prefixes_and_membership() {
-        for key in 0..32 {
-            let key = seed(key);
-            let mut previous = vec![];
-            for n in 1..=257 {
-                let permutation = VirtualPermutation::new(n, key);
-                let values: Vec<_> = permutation.clone().collect();
-                let mut sorted = values.clone();
-                sorted.sort_unstable();
-                assert_eq!(sorted, (0..n).collect::<Vec<_>>());
-                for k in [0, 1, 2, 3, 8, n / 2, n] {
-                    if k <= n {
-                        assert_eq!(
-                            permutation.clone().take(k as usize).collect::<Vec<_>>(),
-                            values[..k as usize]
-                        );
-                    }
+                let p = cycle(seed(key), bits);
+                let mut seen = vec![false; 1 << bits];
+                let mut x = 0;
+                for _ in 0..1 << bits {
+                    assert!(!seen[x as usize]);
+                    seen[x as usize] = true;
+                    assert_eq!(p.inverse(p.forward(x)), x);
+                    x = p.forward(x);
                 }
-                let mut changed = 0;
-                for (r, old) in previous.iter().enumerate() {
-                    assert_eq!(permutation.replica_at(r as u64), values[r]);
-                    if *old != values[r] {
-                        assert_eq!(values[r], n - 1);
-                        changed += 1;
-                    }
-                    // Cycle-deleting the new node recovers every old slot.
-                    let projected = if values[r] == n - 1 {
-                        values[n as usize - 1]
-                    } else {
-                        values[r]
-                    };
-                    assert_eq!(*old, projected);
-                }
-                assert!(changed <= 1);
-                previous = values;
+                assert_eq!(x, 0);
+                assert!(seen.into_iter().all(|v| v));
             }
         }
     }
 
-    #[test]
-    fn large_domains_and_power_boundaries() {
-        for bits in 1..64 {
-            let half = 1u64 << bits;
-            for n in [half - 1, half, half + 1, u64::MAX - 1] {
-                for key in [0, 1, u64::MAX, seed(123)] {
-                    let p = VirtualPermutation::new(n, key);
-                    let larger = VirtualPermutation::new(n + 1, key);
-                    for r in [0, n / 2, n - 1] {
-                        let old = p.replica_at(r);
-                        let new = larger.replica_at(r);
-                        assert!(old < n && new <= n);
-                        assert!(new == old || new == n);
-                        assert_eq!(old, if new == n { larger.replica_at(n) } else { new });
-                    }
-                }
-            }
-        }
-        let mut p = VirtualPermutation::new(u64::MAX, seed(9));
-        p.next = u64::MAX - 1;
-        assert!(p.next().is_some());
-        assert_eq!(p.next(), None);
-        assert_eq!(p.next(), None);
-    }
-
-    #[test]
-    fn iterator_boundaries() {
-        let mut p = VirtualPermutation::new(1, 0);
-        assert_eq!(p.n(), 1);
-        assert_eq!(p.size_hint(), (1, Some(1)));
-        assert_eq!(p.clone().take(0).count(), 0);
-        assert_eq!(p.next(), Some(0));
-        assert_eq!(p.size_hint(), (0, Some(0)));
-        assert_eq!(p.next(), None);
-        assert_eq!(p.replica_at(0), 0);
-        assert_eq!(p.nth(usize::MAX), None);
-        let mut p = VirtualPermutation::new(100, seed(4));
-        assert_eq!(p.nth(12), Some(p.replica_at(12)));
-        assert_eq!(p.next(), Some(p.replica_at(13)));
-        assert_eq!(p.nth(usize::MAX), None);
-        assert_eq!(p.next(), None);
-    }
-
-    #[test]
-    #[should_panic(expected = "n must be at least 1")]
-    fn invalid_empty_domain() {
-        VirtualPermutation::new(0, 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "replica slot must be less than n")]
-    fn invalid_slot() {
-        VirtualPermutation::new(10, 0).replica_at(10);
-    }
-
-    #[test]
-    fn long_cycles_are_not_truncated() {
-        use std::cell::Cell;
-
-        struct Rotation<'a> {
-            mask: u64,
-            calls: &'a Cell<u64>,
-        }
-        impl Permutation for Rotation<'_> {
-            fn forward(&self, x: u64) -> u64 {
-                self.calls.set(self.calls.get() + 1);
-                x.wrapping_add(1) & self.mask
-            }
-            fn inverse(&self, x: u64) -> u64 {
-                self.calls.set(self.calls.get() + 1);
-                x.wrapping_sub(1) & self.mask
-            }
-        }
-        // Every dyadic lift of these ascending cycles is the same ascending
-        // cycle. A last-slot query just above a half boundary takes long walks.
-        let calls = Cell::new(0);
-        let result = evaluate(2049, 2048, |bits| Rotation {
-            mask: (1 << bits) - 1,
-            calls: &calls,
-        });
-        assert_eq!(result, 0);
-        assert!(calls.get() > 4096);
-    }
-
-    // Deliberately explicit tables only in the oracle, never in the evaluator.
-    fn project(p: &[u64], n: usize) -> Vec<u64> {
-        (0..n)
+    fn project(p: &[u64], count: usize) -> Vec<u64> {
+        (0..count)
             .map(|x| {
                 let mut y = p[x];
-                while y >= n as u64 {
+                while y >= count as u64 {
                     y = p[y as usize];
                 }
                 y
@@ -514,14 +314,14 @@ mod tests {
             .collect()
     }
 
-    fn lift(lower: &[u64], q: &[u64]) -> Vec<u64> {
+    fn lift(lower: &[u64], p: &[u64]) -> Vec<u64> {
         let h = lower.len();
-        let r = project(q, h);
+        let r = project(p, h);
         let mut inverse = vec![0; h];
         for (x, &y) in r.iter().enumerate() {
             inverse[y as usize] = x;
         }
-        q.iter()
+        p.iter()
             .map(|&y| {
                 if y < h as u64 {
                     lower[inverse[y as usize]]
@@ -532,133 +332,175 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn matches_explicit_lift_and_cycle_projection() {
-        for key in 0..32 {
-            let key = seed(key);
-            let mut full = vec![0];
-            for bits in 1..=8 {
-                let p = WordPermutation::new(key, bits);
-                let q: Vec<_> = (0..1 << bits).map(|x| p.forward(x)).collect();
-                full = lift(&full, &q);
-                for n in (full.len() / 2 + 1)..=full.len() {
-                    let actual: Vec<_> = VirtualPermutation::new(n as u64, key).collect();
-                    assert_eq!(actual, project(&full, n), "bits={bits} n={n}");
-                }
-            }
+    fn rooted_order(p: &[u64]) -> Vec<u64> {
+        let mut x = 0;
+        let mut order = vec![];
+        for _ in 1..p.len() {
+            x = p[x as usize];
+            assert_ne!(x, 0, "sentinel reached early");
+            order.push(x - 1);
         }
+        assert_eq!(p[x as usize], 0, "cycle does not close at sentinel");
+        order
     }
 
     #[test]
-    fn balanced_permutations_match_explicit_quarter_lifts() {
-        for key in 0..32 {
+    fn complete_orders_prefixes_and_survivor_restriction() {
+        for key in 0..16 {
             let key = seed(key);
-            let mut full = vec![0];
-            for bits in (2..=8).step_by(2) {
-                let q: Vec<_> = (0..1 << bits)
-                    .map(|x| u64::from(layer_apply(bits, key, x)))
-                    .collect();
-                full = lift(&full, &q);
-                for n in (full.len() / 4 + 1)..=full.len() {
-                    let iter = BalancedVirtualPermutation::new(n as u32, key);
-                    let actual: Vec<_> = iter.clone().collect();
-                    assert_eq!(actual, project(&full, n));
-                    let mut sorted = actual.clone();
-                    sorted.sort_unstable();
-                    assert_eq!(sorted, (0..n as u64).collect::<Vec<_>>());
-                    for k in [0, 1, n / 2, n] {
-                        assert_eq!(iter.clone().take(k).collect::<Vec<_>>(), actual[..k]);
-                    }
-                    for (slot, &value) in actual.iter().enumerate() {
-                        assert_eq!(iter.replica_at(slot as u64), value);
-                    }
-                    let smaller: Vec<_> =
-                        BalancedVirtualPermutation::new(n as u32 - 1, key).collect();
-                    assert_eq!(project(&actual, n - 1), smaller);
-                    let changed: Vec<_> = smaller
+            let mut previous_order = vec![];
+            let mut previous_map = vec![0];
+            for n in 1..=257 {
+                let iter = VirtualPermutation::new(n, key);
+                let order: Vec<_> = iter.clone().collect();
+                let mut sorted = order.clone();
+                sorted.sort_unstable();
+                assert_eq!(sorted, (0..n).collect::<Vec<_>>());
+                assert_eq!(
+                    order
                         .iter()
-                        .zip(&actual)
-                        .filter(|(old, new)| old != new)
-                        .collect();
-                    assert!(changed.len() <= 1);
-                    assert!(changed.iter().all(|(_, new)| **new == n as u64 - 1));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn balanced_large_domains_and_iterator_boundaries() {
-        for bits in 1..30 {
-            for n in [(1u32 << bits) - 1, 1 << bits, (1 << bits) + 1] {
-                for key in [0, 1, u64::MAX, seed(42)] {
-                    let p = BalancedVirtualPermutation::new(n, key);
-                    let larger = BalancedVirtualPermutation::new(n + 1, key);
-                    for slot in [0, u64::from(n / 2), u64::from(n - 1)] {
-                        let old = p.replica_at(slot);
-                        let new = larger.replica_at(slot);
-                        assert!(old < u64::from(n));
-                        assert!(new == old || new == u64::from(n));
+                        .copied()
+                        .filter(|&node| node < n - 1)
+                        .collect::<Vec<_>>(),
+                    previous_order
+                );
+                for k in [0, 1, 2, 3, 8, n / 2, n] {
+                    if k <= n {
                         assert_eq!(
-                            old,
-                            if new == u64::from(n) {
-                                larger.replica_at(new)
-                            } else {
-                                new
-                            }
+                            iter.clone().take(k as usize).collect::<Vec<_>>(),
+                            order[..k as usize]
                         );
                     }
                 }
+                for rank in [0, n / 2, n - 1] {
+                    let mut replay = iter.clone();
+                    assert_eq!(replay.nth(rank as usize), Some(order[rank as usize]));
+                    assert_eq!(replay.next(), order.get(rank as usize + 1).copied());
+                }
+                let map: Vec<_> = (0..=n).map(|x| successor(n + 1, key, x)).collect();
+                assert_eq!(rooted_order(&map), order);
+                assert_eq!(project(&map, n as usize), previous_map);
+                previous_map = map;
+                previous_order = order;
             }
         }
-        let mut p = BalancedVirtualPermutation::new(1, 0);
-        assert_eq!(p.n(), 1);
-        assert_eq!(p.size_hint(), (1, Some(1)));
-        assert_eq!(p.next(), Some(0));
-        assert_eq!(p.size_hint(), (0, Some(0)));
-        assert_eq!(p.next(), None);
-        assert_eq!(p.nth(usize::MAX), None);
-        let mut p = BalancedVirtualPermutation::new(1 << 30, seed(9));
-        assert_eq!(p.nth((1 << 30) - 1), Some(p.replica_at((1 << 30) - 1)));
-        assert_eq!(p.next(), None);
     }
 
     #[test]
-    fn balanced_primary_matches_existing_at_full_powers_of_four() {
-        for bits in (0..=30).step_by(2) {
-            for key in 0..128 {
-                let key = seed(key);
-                let n = 1u32 << bits;
-                let expected = crate::ConsistentPermutation::new(n, key)
-                    .next()
-                    .expect("nonempty domain");
-                assert_eq!(
-                    BalancedVirtualPermutation::new(n, key).replica_at(0),
-                    u64::from(expected)
-                );
+    fn matches_explicit_single_cycle_lifts() {
+        for key in 0..8 {
+            let key = seed(key);
+            let mut full = vec![0];
+            for bits in 1..=8 {
+                let p = cycle(key, bits);
+                let table: Vec<_> = (0..1 << bits).map(|x| p.forward(x)).collect();
+                full = lift(&full, &table);
+                for count in full.len() / 2 + 1..=full.len() {
+                    let projected = project(&full, count);
+                    assert_eq!(
+                        (0..count as u64)
+                            .map(|x| successor(count as u64, key, x))
+                            .collect::<Vec<_>>(),
+                        projected
+                    );
+                    assert_eq!(
+                        VirtualPermutation::new(count as u64 - 1, key).collect::<Vec<_>>(),
+                        rooted_order(&projected)
+                    );
+                }
             }
         }
+    }
+
+    #[test]
+    fn large_boundaries_and_sentinel_overflow() {
+        let mut sizes = vec![u64::MAX - 2, u64::MAX - 1];
+        for bits in 1..64 {
+            let power = 1u64 << bits;
+            sizes.extend([power.saturating_sub(2).max(1), power - 1, power, power + 1]);
+        }
+        for n in sizes {
+            for key in [0, 1, u64::MAX, seed(42)] {
+                let k = n.min(16) as usize;
+                let values: Vec<_> = VirtualPermutation::new(n, key).take(k).collect();
+                assert!(values.iter().all(|&v| v < n));
+                let mut distinct = values.clone();
+                distinct.sort_unstable();
+                distinct.dedup();
+                assert_eq!(distinct.len(), k);
+                if n < u64::MAX - 1 {
+                    let restricted: Vec<_> = VirtualPermutation::new(n + 1, key)
+                        .take(k + 1)
+                        .filter(|&node| node < n)
+                        .take(k)
+                        .collect();
+                    assert_eq!(values, restricted);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sequential_level_subsequences_and_inverse_charging() {
+        for key in 0..8 {
+            for n in 1u64..=129 {
+                let bits = u64::BITS - n.leading_zeros();
+                let calls: Vec<_> = (0..=bits).map(|_| Cell::new([0; 3])).collect();
+                let mut selected = vec![0; bits as usize + 1];
+                let mut cursor = 0;
+                for k in 1..=n {
+                    cursor = evaluate(n + 1, cursor, |width| CountedCycle {
+                        cycle: cycle(seed(key), width),
+                        calls: &calls[width as usize],
+                    });
+                    for width in 1..=bits {
+                        let [forward, inverse, _] = calls[width as usize].get();
+                        assert!(
+                            inverse <= forward,
+                            "each upper chain is retraced at most once"
+                        );
+                        if width < bits {
+                            selected[width as usize] += u64::from(cursor < 1 << width);
+                            assert_eq!(forward, selected[width as usize]);
+                        } else {
+                            assert!(forward >= k && forward < 1 << bits);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn iterator_boundaries() {
+        let mut p = VirtualPermutation::new(1, 0);
+        assert_eq!(p.n(), 1);
+        assert_eq!(p.size_hint(), (1, Some(1)));
+        assert_eq!(p.clone().take(0).count(), 0);
+        assert_eq!(p.next(), Some(0));
+        assert_eq!(successor(p.count, p.seed, p.cursor), 0);
+        assert_eq!(p.size_hint(), (0, Some(0)));
+        assert_eq!(p.next(), None);
+        assert_eq!(p.next(), None);
+        assert_eq!(p.nth(usize::MAX), None);
+        let p = VirtualPermutation::new(u64::MAX - 1, 0);
+        let expected = usize::try_from(u64::MAX - 1).ok();
+        assert_eq!(p.size_hint(), (expected.unwrap_or(usize::MAX), expected));
     }
 
     #[test]
     #[should_panic(expected = "n must be at least 1")]
-    fn balanced_invalid_empty_domain() {
-        BalancedVirtualPermutation::new(0, 0);
+    fn invalid_empty_domain() {
+        VirtualPermutation::new(0, 0);
     }
 
     #[test]
-    #[should_panic(expected = "n must be at most 2^30")]
-    fn balanced_invalid_large_domain() {
-        BalancedVirtualPermutation::new((1 << 30) + 1, 0);
+    #[should_panic(expected = "n must be at most u64::MAX - 1")]
+    fn invalid_sentinel_overflow() {
+        VirtualPermutation::new(u64::MAX, 0);
     }
 
-    #[test]
-    #[should_panic(expected = "replica slot must be less than n")]
-    fn balanced_invalid_slot() {
-        BalancedVirtualPermutation::new(1, 0).replica_at(1);
-    }
-
-    fn permutations(n: usize) -> Vec<Vec<u64>> {
+    fn permutations(mut values: Vec<u64>) -> Vec<Vec<u64>> {
         fn visit(values: &mut [u64], start: usize, out: &mut Vec<Vec<u64>>) {
             if start == values.len() {
                 out.push(values.to_vec());
@@ -671,82 +513,132 @@ mod tests {
             }
         }
         let mut out = vec![];
-        visit(&mut (0..n as u64).collect::<Vec<_>>(), 0, &mut out);
+        visit(&mut values, 0, &mut out);
         out
     }
 
-    #[test]
-    fn ideal_uniform_lift_fibers() {
-        use std::collections::BTreeMap;
+    fn all_cycles(count: usize) -> Vec<Vec<u64>> {
+        permutations((1..count as u64).collect())
+            .into_iter()
+            .map(|order| {
+                let mut map = vec![0; count];
+                let mut x = 0;
+                for y in order {
+                    map[x] = y;
+                    x = y as usize;
+                }
+                map
+            })
+            .collect()
+    }
 
-        // Every ideal Q_1,Q_2 combination: F_4 has equal multiplicities.
-        let mut counts = BTreeMap::new();
-        for lower in permutations(2) {
-            for q in permutations(4) {
-                *counts.entry(lift(&lower, &q)).or_insert(0) += 1;
-            }
-        }
-        assert_eq!(counts.len(), 24);
-        assert!(counts.values().all(|&count| count == 2));
+    struct Table<'a>(&'a [u64]);
 
-        // Fix F_4; every extension through each intermediate n occurs 4! times
-        // at n=8, and equally often for n=5,6,7 after cycle projection.
-        let lower = vec![2, 0, 3, 1];
-        let mut counts: Vec<BTreeMap<Vec<u64>, usize>> = (5..=8).map(|_| BTreeMap::new()).collect();
-        for q in permutations(8) {
-            let full = lift(&lower, &q);
-            assert_eq!(project(&full, 4), lower);
-            for (i, n) in (5..=8).enumerate() {
-                *counts[i].entry(project(&full, n)).or_insert(0) += 1;
-            }
+    impl Permutation for Table<'_> {
+        fn forward(&self, x: u64) -> u64 {
+            self.0[x as usize]
         }
-        for (i, count) in counts.iter().enumerate() {
-            let expected_distinct: usize = (5..=i + 5).product();
-            assert_eq!(count.len(), expected_distinct);
-            assert!(count.values().all(|&v| v == 40320 / expected_distinct));
+        fn inverse(&self, x: u64) -> u64 {
+            self.0.iter().position(|&y| y == x).expect("bijection") as u64
         }
     }
 
     #[test]
-    #[ignore = "deterministic operation-count report; not a timing or statistical CI gate"]
-    fn operation_count_diagnostics() {
-        use std::{cell::Cell, rc::Rc};
+    fn exhaustive_ideal_conjugators_and_rooted_orders() {
+        use std::collections::BTreeMap;
 
-        struct Counted<P> {
-            permutation: P,
-            calls: Rc<Cell<[u64; 3]>>,
+        let mut conjugates = BTreeMap::new();
+        for q in permutations((0..4).collect()) {
+            let p = SingleCycle {
+                ordinary: Table(&q),
+                mask: 3,
+            };
+            let table: Vec<_> = (0..4).map(|x| p.forward(x)).collect();
+            *conjugates.entry(table).or_insert(0) += 1;
         }
-        impl<P> Counted<P> {
-            fn new(permutation: P, calls: &Rc<Cell<[u64; 3]>>) -> Self {
-                let mut counts = calls.get();
-                counts[2] += 1;
-                calls.set(counts);
-                Self {
-                    permutation,
-                    calls: Rc::clone(calls),
+        assert_eq!(conjugates.len(), 6);
+        assert!(conjugates.values().all(|&v| v == 4));
+
+        let p2 = [1, 0];
+        let cycles8 = all_cycles(8);
+        let mut counts: Vec<BTreeMap<Vec<u64>, usize>> = (1..=7).map(|_| BTreeMap::new()).collect();
+        for p4 in all_cycles(4) {
+            let f4 = lift(&p2, &p4);
+            for p8 in &cycles8 {
+                let f8 = lift(&f4, p8);
+                let mut previous = vec![];
+                for n in 1..=7 {
+                    let order = rooted_order(&project(&f8, n + 1));
+                    let mut actual = vec![];
+                    let mut cursor = 0;
+                    for _ in 0..n {
+                        cursor = evaluate(n as u64 + 1, cursor, |bits| {
+                            Table(match bits {
+                                1 => &p2,
+                                2 => &p4,
+                                3 => p8,
+                                _ => unreachable!(),
+                            })
+                        });
+                        assert_ne!(cursor, 0);
+                        actual.push(cursor - 1);
+                    }
+                    assert_eq!(actual, order);
+                    assert_eq!(
+                        order
+                            .iter()
+                            .copied()
+                            .filter(|&v| v < n as u64 - 1)
+                            .collect::<Vec<_>>(),
+                        previous
+                    );
+                    previous = order.clone();
+                    *counts[n - 1].entry(order).or_insert(0) += 1;
                 }
             }
         }
-        impl<P: Permutation> Permutation for Counted<P> {
+        for (i, counts) in counts.iter().enumerate() {
+            let factorial: usize = (1..=i + 1).product();
+            assert_eq!(counts.len(), factorial);
+            assert!(counts.values().all(|&v| v == 30240 / factorial));
+        }
+    }
+
+    #[test]
+    fn unlucky_sequential_walks_are_not_truncated() {
+        struct ReverseCycle<'a> {
+            mask: u64,
+            calls: &'a Cell<u64>,
+        }
+        impl Permutation for ReverseCycle<'_> {
             fn forward(&self, x: u64) -> u64 {
-                let mut calls = self.calls.get();
-                calls[0] += 1;
-                self.calls.set(calls);
-                self.permutation.forward(x)
+                self.calls.set(self.calls.get() + 1);
+                x.wrapping_sub(1) & self.mask
             }
             fn inverse(&self, x: u64) -> u64 {
-                let mut calls = self.calls.get();
-                calls[1] += 1;
-                self.calls.set(calls);
-                self.permutation.inverse(x)
+                self.calls.set(self.calls.get() + 1);
+                x.wrapping_add(1) & self.mask
             }
         }
+        let calls = Cell::new(0);
+        let factory = |bits| ReverseCycle {
+            mask: (1u64 << bits) - 1,
+            calls: &calls,
+        };
+        let first = evaluate(2049, 0, factory);
+        assert_eq!(first, 2048);
+        assert_eq!(evaluate(2049, first, factory), 2047);
+        assert!(calls.get() > 4096);
+    }
 
-        println!(
-            "algorithm,n,slot,mean_forward,mean_inverse,mean_levels,p50_calls,p99_calls,max_calls"
-        );
+    #[test]
+    #[ignore = "deterministic sequential operation-count report, not a timing CI gate"]
+    fn operation_count_diagnostics() {
+        println!("n,k,mean_forward,mean_inverse,mean_q_per_output,mean_levels,p50_calls,p99_calls,max_calls,max_step_calls");
         for n in [
             1,
+            2,
+            3,
             7,
             8,
             9,
@@ -759,54 +651,57 @@ mod tests {
             65535,
             65536,
             65537,
-            (1 << 30) - 1,
             1 << 30,
-            (1 << 63) + 1,
-            u64::MAX,
+            (1 << 63) - 1,
+            u64::MAX - 1,
         ] {
-            for algorithm in ["virtual", "balanced"] {
-                if algorithm == "balanced" && n > 1 << 30 {
-                    continue;
-                }
-                for slot in [0, n / 2, n - 1] {
-                    let calls = Rc::new(Cell::new([0; 3]));
-                    let mut totals = [0u64; 3];
-                    let mut samples = vec![];
-                    for key in 0..10_000 {
-                        calls.set([0; 3]);
-                        let result = if algorithm == "virtual" {
-                            evaluate(n, slot, |bits| {
-                                Counted::new(WordPermutation::new(seed(key), bits), &calls)
-                            })
-                        } else {
-                            evaluate_with_stride::<2, _>(n, slot, |bits| {
-                                Counted::new(
-                                    ExistingPermutation {
-                                        bits,
-                                        seed: seed(key),
-                                    },
-                                    &calls,
-                                )
-                            })
-                        };
-                        assert!(result < n);
-                        let counts = calls.get();
-                        for i in 0..3 {
-                            totals[i] += counts[i];
-                        }
-                        samples.push(counts[0] + counts[1]);
+            let mut ks = vec![1, 3, 16];
+            if n <= 256 {
+                ks.extend([n / 4, n]);
+            }
+            ks.retain(|&k| k > 0 && k <= n);
+            ks.sort_unstable();
+            ks.dedup();
+            for k in ks {
+                let calls = Cell::new([0; 3]);
+                let mut totals = [0u64; 3];
+                let mut samples = vec![];
+                let mut max_step = 0;
+                for key in 0..10_000 {
+                    calls.set([0; 3]);
+                    let mut cursor = 0;
+                    for _ in 0..k {
+                        let before = calls.get()[0] + calls.get()[1];
+                        cursor = evaluate(n + 1, cursor, |bits| {
+                            let mut v = calls.get();
+                            v[2] += 1;
+                            calls.set(v);
+                            CountedCycle {
+                                cycle: cycle(seed(key), bits),
+                                calls: &calls,
+                            }
+                        });
+                        assert!(cursor > 0 && cursor <= n);
+                        max_step = max_step.max(calls.get()[0] + calls.get()[1] - before);
                     }
-                    samples.sort_unstable();
-                    println!(
-                        "{algorithm},{n},{slot},{:.4},{:.4},{:.4},{},{},{}",
-                        totals[0] as f64 / 10_000.0,
-                        totals[1] as f64 / 10_000.0,
-                        totals[2] as f64 / 10_000.0,
-                        samples[4999],
-                        samples[9899],
-                        samples[9999],
-                    );
+                    let v = calls.get();
+                    for i in 0..3 {
+                        totals[i] += v[i];
+                    }
+                    samples.push(v[0] + v[1]);
                 }
+                samples.sort_unstable();
+                println!(
+                    "{n},{k},{:.4},{:.4},{:.4},{:.4},{},{},{},{}",
+                    totals[0] as f64 / 10_000.0,
+                    totals[1] as f64 / 10_000.0,
+                    2.0 * (totals[0] + totals[1]) as f64 / (10_000 * k) as f64,
+                    totals[2] as f64 / 10_000.0,
+                    samples[4999],
+                    samples[9899],
+                    samples[9999],
+                    max_step
+                );
             }
         }
     }
