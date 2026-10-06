@@ -144,7 +144,7 @@ impl ConsistentPermutation {
     /// automatically by [`rounds_for_n_bits`] given that layer's bit
     /// width.
     ///
-    /// `n` must satisfy `1 <= n <= 2^30`.
+    /// `n` must satisfy `n <= 2^30`.
     ///
     /// `master_key` is used directly as the Feistel key — the
     /// constructor does **not** avalanche it. Pass a high-entropy
@@ -153,7 +153,6 @@ impl ConsistentPermutation {
     /// low-entropy keys will produce visibly correlated permutations
     /// across consecutive iterators.
     pub fn new(n: u32, master_key: u64) -> Self {
-        assert!(n > 0, "n must be at least 1");
         assert!(n <= 1u32 << 30, "n must be at most 2^30");
         // Smallest `j_max` such that `4^(j_max + 1) >= n`. For
         // `n >= 2`, `(n-1).ilog2() = ceil(log2(n)) - 1`, so dividing
@@ -178,6 +177,9 @@ impl Iterator for ConsistentPermutation {
     type Item = u32;
 
     fn next(&mut self) -> Option<u32> {
+        if self.n == 0 {
+            return None;
+        }
         let num_layers = self.counters.len();
         let j_max = (num_layers - 1) as u32;
         let n = self.n;
@@ -285,7 +287,7 @@ mod tests {
     #[test]
     fn no_duplicates_within_universe() {
         for seed in 0..32u64 {
-            for n in [1u32, 2, 3, 4, 5, 7, 8, 9, 16, 17, 31, 32, 33, 100, 1000] {
+            for n in [0u32, 1, 2, 3, 4, 5, 7, 8, 9, 16, 17, 31, 32, 33, 100, 1000] {
                 let iter = ConsistentPermutation::new(n, 0x9E37_79B9_7F4A_7C15 ^ seed);
                 let emitted: Vec<u32> = iter.collect();
                 assert_eq!(
