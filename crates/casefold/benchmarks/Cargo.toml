@@ -1,6 +1,7 @@
 [package]
 name = "casefold-benchmarks"
 edition = "2021"
+publish = false
 
 [lib]
 path = "lib.rs"

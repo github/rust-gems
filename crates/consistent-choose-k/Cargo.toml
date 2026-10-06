@@ -1,6 +1,6 @@
 [package]
 name = "consistent-choose-k"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Stateless consistent choose-k hashing for replication, failover, and bounded-load placement."
 repository = "https://github.com/github/rust-gems"
