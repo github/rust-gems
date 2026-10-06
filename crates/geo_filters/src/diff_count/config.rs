@@ -104,7 +104,7 @@ fn expected_diff_buckets_fast(phi: f64, items: f64) -> (f64, f64) {
 }
 
 /// Euler–Mascheroni constant.
-const GAMMA: f64 = 0.577_215_664_901_532_9;
+const GAMMA: f64 = std::f64::consts::EULER_GAMMA;
 /// `e^gamma`, precomputed.
 const E_GAMMA: f64 = 1.781_072_417_990_198;
 
