@@ -295,7 +295,8 @@ where
         }
         let mut scratch = std::mem::take(&mut self.scratch);
 
-        // The start and length are added to ensure that blocks are not reordered.
+        // This is necessary to keep the output the same as the parallel version, where it is needed
+        // to ensure that blocks are not reordered.
         scratch.update(to_padded_bytes(self.scratch_start));
         scratch.update(to_padded_bytes(self.scratch_size));
         self.inner.add_hash(scratch);
