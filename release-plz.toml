@@ -1,0 +1,23 @@
+[workspace]
+release_always = false
+
+# Development-only crates that are never published.
+[[package]]
+name = "bpe-benchmarks"
+release = false
+
+[[package]]
+name = "bpe-tests"
+release = false
+
+[[package]]
+name = "casefold-benchmarks"
+release = false
+
+[[package]]
+name = "consistent-choose-k-benchmarks"
+release = false
+
+[[package]]
+name = "hash-sorted-map-benchmarks"
+release = false
