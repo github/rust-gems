@@ -1,0 +1,36 @@
+# Launch this workflow with the "Run workflow" button in the Actions tab of the repository.
+#
+# See https://github.com/github/rust-gems/blob/main/CONTRIBUTING.md#releasing-a-crate for more details.
+name: Create release PR
+
+permissions:
+  pull-requests: write
+  contents: write
+
+on: workflow_dispatch
+
+jobs:
+  # Create a PR with the new versions and changelog, preparing the next release. When merged to main,
+  # the publish-release.yaml workflow will automatically publish any Rust package versions.
+  create-release-pr:
+    name: Create release PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency: # Don't run overlapping instances of this workflow
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Run release-plz
+        uses: release-plz/action@b8d6b54b02889ff2ae2bb82e8b57c3a8fc1683a5 # v0.5.139
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

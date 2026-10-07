@@ -31,21 +31,26 @@ Here are a few things you can do that will increase the likelihood of your pull 
 
 ## Releasing a crate
 
-Crates are published to [crates.io](https://crates.io) with
-[Trusted Publishing](https://crates.io/docs/trusted-publishing), so there is no long-lived API
-token stored in this repository. The `Publish crates` workflow exchanges its GitHub OIDC identity
-for a token that is revoked when the run ends.
+Releases are managed with [release-plz](https://release-plz.dev). Crates are published to
+[crates.io](https://crates.io) with [Trusted Publishing](https://crates.io/docs/trusted-publishing),
+so there is no long-lived API token stored in this repository. release-plz exchanges the
+workflow's GitHub OIDC identity for a token that is revoked when the run ends.
 
-1. Bump `version` in the crate's `Cargo.toml` and merge that change to `main`.
-2. Run the [`Publish crates`](../../actions/workflows/publish-crates.yaml) workflow via
-   *Run workflow*, pick the crate, and optionally tick *dry-run* first to package and verify it
-   without uploading. If a newly added crate isn't in the dropdown yet, type its name into
-   *crate_name_override* instead — and add it to the dropdown in `publish-crates.yaml` while
-   you're there.
+1. Run the [`Create release PR`](../../actions/workflows/create-release-pr.yaml) workflow via
+   *Run workflow*. This uses `release-plz` to open a PR that bumps the versions and updates the
+   changelogs of any crates that changed since their last release.
+2. Adjust the generated changelog(s) and version number(s) as necessary.
+3. Get PR approval.
+4. Merge the PR. The [`publish-release.yaml`](../../actions/workflows/publish-release.yaml)
+   workflow will automatically publish a new release of any crate whose version has changed,
+   and create the matching git tag and GitHub release.
+
+Development-only crates (benchmarks and tests) are excluded from releases in
+[`release-plz.toml`](release-plz.toml). Add new ones there too.
 
 A crate has to be published manually once before crates.io will let you configure a trusted
 publisher for it. Configure it at `https://crates.io/crates/<crate>/settings/trusted-publishing`
-with repository `github/rust-gems`, workflow `publish-crates.yaml`, and environment `crates-io`.
+with repository `github/rust-gems`, workflow `publish-release.yaml`, and environment `crates-io`.
 The environment name must match the workflow's `environment:` exactly or the token exchange fails.
 
 ## Resources
