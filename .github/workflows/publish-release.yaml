@@ -1,4 +1,4 @@
-# This workflow only publishes releases for PR's created by create-release-pr.yaml
+# This workflow only publishes releases for PRs created by create-release-pr.yaml
 #
 # Crates are published with crates.io Trusted Publishing: release-plz exchanges this workflow's
 # GitHub OIDC identity for a short-lived crates.io token, so there is no `CARGO_REGISTRY_TOKEN`
@@ -27,6 +27,9 @@ jobs:
     permissions:
       contents: write
       id-token: write # Required to mint the crates.io OIDC token.
+    concurrency: # Serialize releases so runs don't race to publish the same version or tag
+      group: release-plz-release-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
