@@ -37,6 +37,33 @@ Why replication matters
 - Distributes read/write load across multiple owners, reducing hotspots.
 - Enables fast recovery and higher tail-latency resilience.
 
+## Permutation APIs and membership semantics
+
+The existing `ConsistentPermutation` preserves **survivor list order** when
+nodes are appended or removed from the end of `0..n`. The experimental
+`VirtualPermutation` now supplies the same order-restriction contract using a
+different construction: it traverses a single consistent cycle from a permanent
+sentinel. Removing the appended node from the larger complete order recovers
+the smaller complete order. Both yield distinct nodes and stable `k` prefixes;
+replica ranks may shift when membership changes.
+
+`VirtualPermutation::new(n, seed)` supports `1..=u64::MAX - 1` real nodes,
+uses four `u64` fields and no heap state, and offers sequential iteration.
+The extra internal label is reserved for the sentinel. `nth(r)` replays
+`r + 1` successors; there is no direct rank lookup. Expected `O(k)` prefix
+enumeration follows under ideal independent uniform permutations with
+constant-cost forward/inverse primitives, **not** as a worst-case guarantee.
+The noncryptographic, 64-bit seeded Feistel family approximates that model;
+exact uniformity and independence are not claimed. This implementation
+replaces the earlier experimental slot-based variants and changes their
+output mappings; the existing `ConsistentPermutation` mapping is unchanged.
+
+See the [algorithm, proof assumptions and API guide](docs/virtual-permutation.md)
+and the [reproducible comparison with the existing algorithm](docs/virtual-permutation-performance.md).
+The comparison reports fresh-key performance regressions as well as fresh
+primary and held-out randomness diagnostics; neither algorithm is replaced
+in existing consumers.
+
 ## Applications beyond replication
 
 The `ConsistentChooseK` iterator produces a per-key ranking of all `n` nodes in priority order — consistently and with zero memory overhead. This ranking is a strict superset of simple replication and enables drop-in replacements for several well-known algorithms that traditionally require maintaining expensive data structures such as hash rings.
