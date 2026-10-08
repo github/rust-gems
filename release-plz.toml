@@ -4,20 +4,25 @@ release_always = false
 # Development-only crates that are never published.
 [[package]]
 name = "bpe-benchmarks"
+publish = false
 release = false
 
 [[package]]
 name = "bpe-tests"
+publish = false
 release = false
 
 [[package]]
 name = "casefold-benchmarks"
+publish = false
 release = false
 
 [[package]]
 name = "consistent-choose-k-benchmarks"
+publish = false
 release = false
 
 [[package]]
 name = "hash-sorted-map-benchmarks"
+publish = false
 release = false
