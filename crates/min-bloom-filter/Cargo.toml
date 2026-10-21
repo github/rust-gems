@@ -1,0 +1,21 @@
+[package]
+name = "min-bloom-filter"
+version = "0.1.0"
+edition = "2024"
+description = "A split-block Bloom filter whose four-bit counters support max insertion and min retrieval."
+repository = "https://github.com/github/rust-gems"
+license = "MIT"
+keywords = ["bloom-filter", "probabilistic", "filter", "data-structure"]
+categories = ["algorithms", "data-structures"]
+
+[lib]
+bench = false
+
+[[bench]]
+name = "performance"
+path = "benchmarks/performance.rs"
+harness = false
+
+[dev-dependencies]
+criterion = "0.8"
+sbbf-rs-safe = "0.3"
