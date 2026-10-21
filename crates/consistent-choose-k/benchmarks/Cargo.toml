@@ -9,6 +9,12 @@ path = "performance.rs"
 harness = false
 test = false
 
+[[bench]]
+name = "replica_comparison"
+path = "replica_comparison.rs"
+harness = false
+test = false
+
 [dependencies]
 consistent-choose-k = { path = "../" }
 
