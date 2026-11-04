@@ -63,6 +63,15 @@ fn serialize_daac<S: Serializer>(
     s.serialize_bytes(&daac.serialize())
 }
 
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
+}
+
 fn validate_daac_bytes(v: &[u8]) -> Result<(), &'static str> {
     const STATE_SIZE: usize = 12;
     const OUTPUT_SIZE: usize = 12;
@@ -71,7 +80,7 @@ fn validate_daac_bytes(v: &[u8]) -> Result<(), &'static str> {
     if v.len() < 4 {
         return Err("truncated DoubleArrayAhoCorasick states length");
     }
-    let states_len = u32::from_le_bytes(v[0..4].try_into().unwrap());
+    let states_len = read_u32_le(v, 0);
     if states_len < 256 || !states_len.is_multiple_of(256) {
         return Err("invalid DoubleArrayAhoCorasick states length");
     }
@@ -88,7 +97,7 @@ fn validate_daac_bytes(v: &[u8]) -> Result<(), &'static str> {
         return Err("truncated DoubleArrayAhoCorasick states data");
     }
 
-    let outputs_len = u32::from_le_bytes(v[outputs_offset..outputs_header_end].try_into().unwrap());
+    let outputs_len = read_u32_le(v, outputs_offset);
     if outputs_len > MAX_OUTPUTS {
         return Err("invalid DoubleArrayAhoCorasick outputs length");
     }
@@ -109,15 +118,15 @@ fn validate_daac_bytes(v: &[u8]) -> Result<(), &'static str> {
     if match_kind > 2 {
         return Err("invalid DoubleArrayAhoCorasick match kind");
     }
-    let num_states = u32::from_le_bytes(v[outputs_end + 1..total_len].try_into().unwrap());
+    let num_states = read_u32_le(v, outputs_end + 1);
     if num_states > states_len {
         return Err("invalid DoubleArrayAhoCorasick num_states");
     }
 
     for chunk in v[4..outputs_offset].as_chunks::<STATE_SIZE>().0 {
-        let base = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
-        let fail = u32::from_le_bytes(chunk[4..8].try_into().unwrap());
-        let opos_ch = u32::from_le_bytes(chunk[8..12].try_into().unwrap());
+        let base = read_u32_le(chunk, 0);
+        let fail = read_u32_le(chunk, 4);
+        let opos_ch = read_u32_le(chunk, 8);
         let output_pos = opos_ch >> 8;
         if base >= states_len || fail >= states_len || output_pos > outputs_len {
             return Err("DoubleArrayAhoCorasick state out of bounds");
@@ -130,8 +139,8 @@ fn validate_daac_bytes(v: &[u8]) -> Result<(), &'static str> {
         .iter()
         .enumerate()
     {
-        let length = u32::from_le_bytes(chunk[4..8].try_into().unwrap());
-        let parent = u32::from_le_bytes(chunk[8..12].try_into().unwrap());
+        let length = read_u32_le(chunk, 4);
+        let parent = read_u32_le(chunk, 8);
         if length == 0 || (parent as usize) > i {
             return Err("DoubleArrayAhoCorasick output out of bounds");
         }
