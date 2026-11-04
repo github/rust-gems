@@ -179,7 +179,7 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
     /// The zero-based index of the desired one bit is returned.
     fn nth_most_significant_one(&self, mut n: usize) -> Option<C::BucketType> {
         if n < self.msb.len() {
-            Some(self.msb[n])
+            Some(C::BucketType::from_le_bytes(self.msb[n]))
         } else {
             n -= self.msb.len();
             self.lsb
@@ -194,8 +194,8 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
     fn bit_range(&self, range: &Range<usize>) -> u64 {
         let mut result = self.lsb.bit_range(range);
         if self.lsb.num_bits() < range.end {
-            for bit in self.msb.iter() {
-                let bit = bit.into_usize();
+            for &bit in self.msb.iter() {
+                let bit = C::BucketType::from_le_bytes(bit).into_usize();
                 if range.contains(&bit) {
                     result ^= (bit - range.start).into_block();
                 }

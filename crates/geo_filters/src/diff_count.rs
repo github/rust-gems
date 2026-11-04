@@ -4,7 +4,6 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::BuildHasher as _;
 use std::mem::{size_of, size_of_val};
-use std::ops::Deref as _;
 
 use crate::config::{
     count_ones_from_bitchunks, count_ones_from_msb_and_lsb, iter_bit_chunks, iter_ones,
@@ -65,12 +64,47 @@ pub type GeoDiffCount13<'a> = GeoDiffCount<'a, GeoDiffConfig13>;
 ///     with an error of +/-1200 items using the GeoDiffCount. A HyperLogLog data structure with
 ///     1500 bytes achieves a precision of ~0.022 and could estimate the 10k items with an error
 ///     of +/-22k items in the best case which is 20 times worse despite using 5 times more space!
-#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct GeoDiffCount<'a, C: GeoConfig<Diff>> {
     config: C,
     /// The bit positions are stored from largest to smallest.
-    msb: Cow<'a, [C::BucketType]>,
+    msb: Cow<'a, [<C::BucketType as IsBucketType>::Bytes]>,
     lsb: BitVec<'a>,
+}
+
+impl<C: GeoConfig<Diff> + Ord> Ord for GeoDiffCount<'_, C> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.config
+            .cmp(&other.config)
+            .then_with(|| {
+                self.msb
+                    .iter()
+                    .copied()
+                    .map(C::BucketType::from_le_bytes)
+                    .cmp(other.msb.iter().copied().map(C::BucketType::from_le_bytes))
+            })
+            .then_with(|| self.lsb.cmp(&other.lsb))
+    }
+}
+
+impl<C: GeoConfig<Diff> + PartialOrd> PartialOrd for GeoDiffCount<'_, C> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.config.partial_cmp(&other.config)? {
+            Ordering::Equal => {}
+            ord => return Some(ord),
+        }
+        match self
+            .msb
+            .iter()
+            .copied()
+            .map(C::BucketType::from_le_bytes)
+            .partial_cmp(other.msb.iter().copied().map(C::BucketType::from_le_bytes))?
+        {
+            Ordering::Equal => {}
+            ord => return Some(ord),
+        }
+        self.lsb.partial_cmp(&other.lsb)
+    }
 }
 
 impl<C: GeoConfig<Diff>> std::fmt::Debug for GeoDiffCount<'_, C> {
@@ -105,12 +139,12 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         let mut ones = iter_ones::<C::BucketType, _>(chunks.peekable());
         let mut msb = Vec::default();
         take_ref(&mut ones, config.max_msb_len() - 1).for_each(|bucket| {
-            msb.push(bucket);
+            msb.push(bucket.to_le_bytes());
         });
         let smallest_msb = ones
             .next()
             .inspect(|bucket| {
-                msb.push(*bucket);
+                msb.push(bucket.to_le_bytes());
             })
             .unwrap_or_default();
         let lsb = BitVec::from_bit_chunks(ones.into_bitchunks(), smallest_msb.into_usize());
@@ -181,7 +215,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         let msb = self
             .msb
             .iter()
-            .map(|&p| p.into_usize())
+            .map(|&p| C::BucketType::from_le_bytes(p).into_usize())
             .filter(move |&pos| (mask >> (pos % mask_size)) & 1 != 0)
             .map(|pos| pos as u64);
         let lsb = iter_ones::<C::BucketType, _>(
@@ -214,7 +248,9 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         if index.into_usize() < self.lsb.num_bits() {
             self.lsb.test_bit(index.into_usize())
         } else {
-            self.msb.binary_search_by(|k| index.cmp(k)).is_ok()
+            self.msb
+                .binary_search_by(|&k| index.cmp(&C::BucketType::from_le_bytes(k)))
+                .is_ok()
         }
     }
 
@@ -242,7 +278,9 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     /// most to least significant, overlapping `BitChunk`s got merged, and empty ones filtered.
     fn bit_chunks(&self) -> impl Iterator<Item = BitChunk> + '_ {
         iter_bit_chunks(
-            self.msb.iter().map(|b| b.into_usize()),
+            self.msb
+                .iter()
+                .map(|&b| C::BucketType::from_le_bytes(b).into_usize()),
             self.lsb.bit_chunks(),
         )
     }
@@ -254,7 +292,11 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     fn estimate_size(&self) -> f32 {
         let (total, lowest_bucket) = count_ones_from_msb_and_lsb::<C::BucketType>(
             self.msb.len(),
-            self.msb.last().copied().unwrap_or_default(),
+            self.msb
+                .last()
+                .copied()
+                .map(C::BucketType::from_le_bytes)
+                .unwrap_or_default(),
             self.lsb.bit_chunks().peekable(),
             self.config.max_bytes(),
             self.config.max_msb_len(),
@@ -279,7 +321,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
             self.lsb.toggle(bucket.into_usize());
         } else {
             let msb = self.msb.to_mut();
-            match msb.binary_search_by(|k| bucket.cmp(k)) {
+            match msb.binary_search_by(|&k| bucket.cmp(&C::BucketType::from_le_bytes(k))) {
                 Ok(idx) => {
                     msb.remove(idx);
                     let first = {
@@ -287,33 +329,33 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
                         lsb.next()
                     };
                     if let Some(smallest) = first {
-                        msb.push(C::BucketType::from_usize(smallest));
+                        msb.push(C::BucketType::from_usize(smallest).to_le_bytes());
                         self.lsb.resize(smallest);
                     } else {
                         self.lsb.resize(0);
                     };
                 }
                 Err(idx) => {
-                    msb.insert(idx, bucket);
+                    msb.insert(idx, bucket.to_le_bytes());
                     if msb.len() > self.config.max_msb_len() {
                         // We have too many values in the MSB sparse index vector,
                         // let's move the smalles MSB value into the LSB bit vector
-                        let smallest = msb
-                            .pop()
-                            .expect("we should have at least one element!")
-                            .into_usize();
-                        let new_smallest = msb
-                            .last()
-                            .expect("should have at least one element")
-                            .into_usize();
+                        let smallest = C::BucketType::from_le_bytes(
+                            msb.pop().expect("we should have at least one element!"),
+                        )
+                        .into_usize();
+                        let new_smallest = C::BucketType::from_le_bytes(
+                            *msb.last().expect("should have at least one element"),
+                        )
+                        .into_usize();
                         // ensure LSB bit vector has the space for `smallest`
                         self.lsb.resize(new_smallest);
                         self.lsb.toggle(smallest);
                     } else if msb.len() == self.config.max_msb_len() {
-                        let smallest = msb
-                            .last()
-                            .expect("should have at least one element")
-                            .into_usize();
+                        let smallest = C::BucketType::from_le_bytes(
+                            *msb.last().expect("should have at least one element"),
+                        )
+                        .into_usize();
                         self.lsb.resize(smallest);
                     }
                 }
@@ -350,7 +392,11 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         );
         debug_assert!(
             self.lsb.num_bits() == 0
-                || self.msb.last().map_or(0, |b| b.into_usize()) == self.lsb.num_bits(),
+                || self
+                    .msb
+                    .last()
+                    .map_or(0, |&b| C::BucketType::from_le_bytes(b).into_usize())
+                    == self.lsb.num_bits(),
             "msb and lsb non-contiguous: msb = {:?} |lsb| = {:?}",
             self.msb,
             self.lsb.num_bits(),
@@ -376,25 +422,14 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
             return Self::new(c);
         }
         // The number of most significant bits stores in the MSB sparse repr
-        let msb_len = (buf.len() / size_of::<C::BucketType>()).min(c.max_msb_len());
+        let (msb_all, _) = C::BucketType::slice_from_bytes(buf);
+        let msb_len = msb_all.len().min(c.max_msb_len());
         // The number of bytes representing the MSB - this is how many bytes we need to
         // skip over to reach the LSB
         let msb_bytes_len = msb_len * size_of::<C::BucketType>();
-        let msb_bytes = &buf[..msb_bytes_len];
-        let msb = match unsafe { msb_bytes.align_to::<C::BucketType>() } {
-            ([], aligned, []) => Cow::Borrowed(aligned),
-            _ => {
-                let mut vec = Vec::with_capacity(msb_len);
-                let ptr = msb_bytes.as_ptr() as *const C::BucketType;
-                for i in 0..msb_len {
-                    vec.push(unsafe { ptr.add(i).read_unaligned() });
-                }
-                Cow::Owned(vec)
-            }
-        };
         Self {
             config: c,
-            msb,
+            msb: Cow::Borrowed(&msb_all[..msb_len]),
             lsb: BitVec::from_bytes(&buf[msb_bytes_len..]),
         }
     }
@@ -404,10 +439,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         if self.msb.is_empty() {
             return Ok(0);
         }
-        let msb_buckets = self.msb.deref();
-        let msb_bytes = unsafe {
-            std::slice::from_raw_parts(msb_buckets.as_ptr() as *const u8, size_of_val(msb_buckets))
-        };
+        let msb_bytes = C::BucketType::slice_as_bytes(&self.msb);
         writer.write_all(msb_bytes)?;
         let mut bytes_written = msb_bytes.len();
         bytes_written += self.lsb.write(writer)?;
@@ -530,12 +562,12 @@ fn split_into_msb<T: IsBucketType>(
     mut buckets: impl Iterator<Item = T>,
     lsb: &mut BitVec<'_>,
     max_msb_len: usize,
-) -> Vec<T> {
-    let mut msb: Vec<T> = Vec::with_capacity(max_msb_len);
-    msb.extend(buckets.by_ref().take(max_msb_len));
+) -> Vec<T::Bytes> {
+    let mut msb: Vec<T::Bytes> = Vec::with_capacity(max_msb_len);
+    msb.extend(buckets.by_ref().take(max_msb_len).map(T::to_le_bytes));
     if msb.len() == max_msb_len {
         // The msb is full: its smallest entry is the new boundary, the rest folds into the bits.
-        let smallest = msb[max_msb_len - 1].into_usize();
+        let smallest = T::from_le_bytes(msb[max_msb_len - 1]).into_usize();
         lsb.resize(smallest);
         let mut toggler = lsb.toggler();
         for bucket in buckets {
@@ -544,11 +576,12 @@ fn split_into_msb<T: IsBucketType>(
     } else {
         // Refill the msb from the highest bits, then truncate the bits to the new boundary.
         let need = max_msb_len - msb.len();
-        let pulled: Vec<T> = iter_ones::<T, _>(lsb.bit_chunks().peekable())
+        let pulled: Vec<T::Bytes> = iter_ones::<T, _>(lsb.bit_chunks().peekable())
             .take(need)
+            .map(T::to_le_bytes)
             .collect();
         let smallest = if pulled.len() == need {
-            pulled[need - 1].into_usize()
+            T::from_le_bytes(pulled[need - 1]).into_usize()
         } else {
             0
         };
@@ -1228,7 +1261,10 @@ mod tests {
         a.xor_bit(7);
         a.xor_bit(17);
         a.xor_bit(11);
-        assert_eq!(vec![17, 11, 7], a.msb.iter().copied().collect_vec());
+        assert_eq!(
+            vec![17, 11, 7],
+            a.msb.iter().copied().map(u16::from_le_bytes).collect_vec()
+        );
     }
 
     #[test]
@@ -1271,6 +1307,7 @@ mod tests {
             before.config.clone(),
             &writer[pad_amount..],
         );
+        assert!(matches!(after.msb, Cow::Borrowed(_)));
         assert_eq!(before, after);
     }
 
