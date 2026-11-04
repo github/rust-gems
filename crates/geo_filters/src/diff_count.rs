@@ -90,20 +90,18 @@ impl<C: GeoConfig<Diff> + Ord> Ord for GeoDiffCount<'_, C> {
 impl<C: GeoConfig<Diff> + PartialOrd> PartialOrd for GeoDiffCount<'_, C> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.config.partial_cmp(&other.config)? {
-            Ordering::Equal => {}
-            ord => return Some(ord),
+            Ordering::Equal => match self
+                .msb
+                .iter()
+                .copied()
+                .map(C::BucketType::from_le_bytes)
+                .partial_cmp(other.msb.iter().copied().map(C::BucketType::from_le_bytes))?
+            {
+                Ordering::Equal => self.lsb.partial_cmp(&other.lsb),
+                ord => Some(ord),
+            },
+            ord => Some(ord),
         }
-        match self
-            .msb
-            .iter()
-            .copied()
-            .map(C::BucketType::from_le_bytes)
-            .partial_cmp(other.msb.iter().copied().map(C::BucketType::from_le_bytes))?
-        {
-            Ordering::Equal => {}
-            ord => return Some(ord),
-        }
-        self.lsb.partial_cmp(&other.lsb)
     }
 }
 
