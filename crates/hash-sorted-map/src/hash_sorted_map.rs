@@ -232,6 +232,7 @@ impl<K: Eq + Ord, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
                 if j < i {
                     let cur_key = unsafe { self.groups[gi].keys[si].assume_init_read() };
                     let cur_val = unsafe { self.groups[gi].values[si].assume_init_read() };
+                    let cur_ctrl = self.groups[gi].ctrl[si];
                     // Shift positions j..i up by one.
                     hashes.copy_within(j..i, j + 1);
                     for pos in (j..i).rev() {
@@ -240,8 +241,10 @@ impl<K: Eq + Ord, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
                         unsafe {
                             let k = std::ptr::read(&self.groups[src_g].keys[src_s]);
                             let v = std::ptr::read(&self.groups[src_g].values[src_s]);
+                            let c = self.groups[src_g].ctrl[src_s];
                             self.groups[dst_g].keys[dst_s] = k;
                             self.groups[dst_g].values[dst_s] = v;
+                            self.groups[dst_g].ctrl[dst_s] = c;
                         }
                     }
                     // Insert at position j.
@@ -249,14 +252,8 @@ impl<K: Eq + Ord, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
                     let (gj, sj) = chain_slot(&chain, j);
                     self.groups[gj].keys[sj] = MaybeUninit::new(cur_key);
                     self.groups[gj].values[sj] = MaybeUninit::new(cur_val);
+                    self.groups[gj].ctrl[sj] = cur_ctrl;
                 }
-            }
-            // Rebuild ctrl/tag bytes from the sorted hashes so that
-            // get/insert/entry still work after sorting.
-            // This adds a small performance penalty of maybe 6%.
-            for (pos, &h) in hashes.iter().enumerate() {
-                let (gi, si) = chain_slot(&chain, pos);
-                self.groups[gi].ctrl[si] = tag(h);
             }
         }
     }
@@ -1084,43 +1081,55 @@ mod tests {
             }
         }
 
-        impl SortingHash<DropTrackedKey> for FixedState {
-            fn hash(&self, _key: &DropTrackedKey) -> u64 {
-                self.0
+        struct KeyHasher;
+        impl SortingHash<DropTrackedKey> for KeyHasher {
+            fn hash(&self, key: &DropTrackedKey) -> u64 {
+                // Key 0 gets hash 2; keys 1 and 2 get hash 1 (all map to group 0 when n_bits == 0).
+                if key.id == 0 {
+                    2
+                } else {
+                    1
+                }
             }
         }
 
         let key_drops = Arc::new(AtomicUsize::new(0));
         let val_drops = Arc::new(AtomicUsize::new(0));
 
-        struct DropTrackedVal(Arc<AtomicUsize>);
+        struct DropTrackedVal(u32, Arc<AtomicUsize>);
         impl Drop for DropTrackedVal {
             fn drop(&mut self) {
-                self.0.fetch_add(1, AtomicOrdering::SeqCst);
+                self.1.fetch_add(1, AtomicOrdering::SeqCst);
             }
         }
 
+        let mut map = HashSortedMap::with_capacity_and_hasher(1, KeyHasher);
+        for id in [0, 1, 2] {
+            map.insert(
+                DropTrackedKey {
+                    id,
+                    drops: Arc::clone(&key_drops),
+                },
+                DropTrackedVal(id * 10, Arc::clone(&val_drops)),
+            );
+        }
+
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let mut map = HashSortedMap::with_capacity_and_hasher(1, FixedState(42));
-            map.insert(
-                DropTrackedKey {
-                    id: 1,
-                    drops: Arc::clone(&key_drops),
-                },
-                DropTrackedVal(Arc::clone(&val_drops)),
-            );
-            map.insert(
-                DropTrackedKey {
-                    id: 2,
-                    drops: Arc::clone(&key_drops),
-                },
-                DropTrackedVal(Arc::clone(&val_drops)),
-            );
             map.sort_by_hash();
         }));
 
         assert!(result.is_err());
-        assert_eq!(key_drops.load(AtomicOrdering::SeqCst), 2);
-        assert_eq!(val_drops.load(AtomicOrdering::SeqCst), 2);
+        // Even after a panic following a completed insertion-sort move (hashes [2, 1, 1]),
+        // ctrl tags stay in sync with moved keys.
+        for id in [0, 1, 2] {
+            let probe = DropTrackedKey {
+                id,
+                drops: Arc::new(AtomicUsize::new(0)),
+            };
+            assert_eq!(map.get(&probe).map(|v| v.0), Some(id * 10));
+        }
+        drop(map);
+        assert_eq!(key_drops.load(AtomicOrdering::SeqCst), 3);
+        assert_eq!(val_drops.load(AtomicOrdering::SeqCst), 3);
     }
 }
