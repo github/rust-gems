@@ -179,7 +179,7 @@ impl<C: GeoConfig<Diff>> GeoDiffCount<'_, C> {
     /// The zero-based index of the desired one bit is returned.
     fn nth_most_significant_one(&self, mut n: usize) -> Option<C::BucketType> {
         if n < self.msb.len() {
-            Some(self.msb[n])
+            Some(self.msb[n].get())
         } else {
             n -= self.msb.len();
             self.lsb

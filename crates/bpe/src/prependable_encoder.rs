@@ -56,11 +56,10 @@ impl<'a> PrependableEncoder<'a> {
                 });
                 break;
             } else {
-                let next_token =
-                    unsafe { self.states.get_unchecked(new_range.start - 1).prev_token };
+                let prev = &self.states[new_range.start - 1];
+                let next_token = prev.prev_token;
                 if self.bpe.is_valid_token_pair(new_token, next_token) {
-                    let prev_count =
-                        unsafe { self.states.get_unchecked(new_range.start - 1).count };
+                    let prev_count = prev.count;
                     self.states.push(State {
                         state,
                         prev_token: new_token,

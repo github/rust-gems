@@ -4,11 +4,11 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::BuildHasher as _;
 use std::mem::{size_of, size_of_val};
-use std::ops::Deref as _;
 
 use crate::config::{
     count_ones_from_bitchunks, count_ones_from_msb_and_lsb, iter_bit_chunks, iter_ones,
-    mask_bit_chunks, take_ref, xor_bit_chunks, BitChunk, GeoConfig, IsBucketType, BITS_PER_BLOCK,
+    mask_bit_chunks, take_ref, xor_bit_chunks, BitChunk, GeoConfig, IsBucketType, Unaligned,
+    BITS_PER_BLOCK,
 };
 use crate::{Count, Diff};
 
@@ -68,7 +68,7 @@ pub type GeoDiffCount13<'a> = GeoDiffCount<'a, GeoDiffConfig13>;
 pub struct GeoDiffCount<'a, C: GeoConfig<Diff>> {
     config: C,
     /// The bit positions are stored from largest to smallest.
-    msb: Cow<'a, [C::BucketType]>,
+    msb: Cow<'a, [Unaligned<C::BucketType>]>,
     lsb: BitVec<'a>,
 }
 
@@ -101,7 +101,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     /// Note: we need a peekable iterator, such that we can extract the most significant bits without
     /// having to construct another iterator with the remaining `BitChunk`s.
     fn from_bit_chunks<I: Iterator<Item = BitChunk>>(config: C, chunks: I) -> Self {
-        let mut ones = iter_ones::<C::BucketType, _>(chunks.peekable());
+        let mut ones = iter_ones::<Unaligned<C::BucketType>, _>(chunks.peekable());
         let mut msb = Vec::default();
         take_ref(&mut ones, config.max_msb_len() - 1).for_each(|bucket| {
             msb.push(bucket);
@@ -210,6 +210,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     }
 
     fn test_bit(&self, index: C::BucketType) -> bool {
+        let index = Unaligned::new(index);
         if index.into_usize() < self.lsb.num_bits() {
             self.lsb.test_bit(index.into_usize())
         } else {
@@ -251,7 +252,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     /// With ones = 128, a relative precision of ~0.12 is achieved.
     /// Using numbers larger than 128 won't increase the precision!
     fn estimate_size(&self) -> f32 {
-        let (total, lowest_bucket) = count_ones_from_msb_and_lsb::<C::BucketType>(
+        let (total, lowest_bucket) = count_ones_from_msb_and_lsb::<Unaligned<C::BucketType>>(
             self.msb.len(),
             self.msb.last().copied().unwrap_or_default(),
             self.lsb.bit_chunks().peekable(),
@@ -272,6 +273,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     /// executions has a constant complexity, but one that is rather high compared to the fast path. In total
     /// that makes the cost of the else case negligible.
     fn xor_bit(&mut self, bucket: C::BucketType) {
+        let bucket = Unaligned::new(bucket);
         if bucket.into_usize() < self.lsb.num_bits() {
             // The bit being toggled is within our LSB bit vector
             // so toggle it directly.
@@ -286,7 +288,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
                         lsb.next()
                     };
                     if let Some(smallest) = first {
-                        msb.push(C::BucketType::from_usize(smallest));
+                        msb.push(Unaligned::from_usize(smallest));
                         self.lsb.resize(smallest);
                     } else {
                         self.lsb.resize(0);
@@ -375,19 +377,14 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
             return Self::new(c);
         }
         // The number of most significant bits stores in the MSB sparse repr
-        let msb_len = (buf.len() / size_of::<C::BucketType>()).min(c.max_msb_len());
-        let msb = unsafe {
-            std::mem::transmute::<&[u8], &[C::BucketType]>(std::slice::from_raw_parts(
-                buf.as_ptr(),
-                msb_len,
-            ))
-        };
+        let (msb_all, _) = Unaligned::<C::BucketType>::slice_from_bytes(buf);
+        let msb_len = msb_all.len().min(c.max_msb_len());
         // The number of bytes representing the MSB - this is how many bytes we need to
         // skip over to reach the LSB
         let msb_bytes_len = msb_len * size_of::<C::BucketType>();
         Self {
             config: c,
-            msb: Cow::Borrowed(msb),
+            msb: Cow::Borrowed(&msb_all[..msb_len]),
             lsb: BitVec::from_bytes(&buf[msb_bytes_len..]),
         }
     }
@@ -397,10 +394,7 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
         if self.msb.is_empty() {
             return Ok(0);
         }
-        let msb_buckets = self.msb.deref();
-        let msb_bytes = unsafe {
-            std::slice::from_raw_parts(msb_buckets.as_ptr() as *const u8, size_of_val(msb_buckets))
-        };
+        let msb_bytes = Unaligned::slice_as_bytes(&self.msb);
         writer.write_all(msb_bytes)?;
         let mut bytes_written = msb_bytes.len();
         bytes_written += self.lsb.write(writer)?;
@@ -570,7 +564,7 @@ pub struct GeoDiffCountBuilder<C: GeoConfig<Diff>> {
     /// (xor) into `blocks`. [`GeoDiffCountBuilder::cleanup`] reconciles the two.
     split: usize,
     numbers: Vec<usize>,
-    blocks: Vec<u64>,
+    blocks: Vec<Unaligned<u64>>,
 }
 
 impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
@@ -587,7 +581,7 @@ impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
             expected,
             split,
             numbers: Vec::with_capacity(capacity),
-            blocks: vec![0; split.div_ceil(BITS_PER_BLOCK)],
+            blocks: vec![Unaligned::default(); split.div_ceil(BITS_PER_BLOCK)],
         }
     }
 
@@ -602,7 +596,8 @@ impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
         let new_split = estimate_split_bucket(&self.config, self.expected);
         if new_split > self.split {
             self.split = new_split;
-            self.blocks.resize(new_split.div_ceil(BITS_PER_BLOCK), 0);
+            self.blocks
+                .resize(new_split.div_ceil(BITS_PER_BLOCK), Unaligned::default());
         }
     }
 
@@ -657,7 +652,8 @@ impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
             new_split += bits_per_level;
             keep = self.numbers.partition_point(|&b| b >= new_split);
         }
-        self.blocks.resize(new_split.div_ceil(BITS_PER_BLOCK), 0);
+        self.blocks
+            .resize(new_split.div_ceil(BITS_PER_BLOCK), Unaligned::default());
         let blocks = &mut self.blocks;
         for &bucket in &self.numbers[keep..] {
             let (index, bit) = bucket.into_index_and_bit();
@@ -739,7 +735,9 @@ impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
         self.cleanup();
         let mut lsb = BitVec::from_blocks(self.blocks, self.split);
         let msb = split_into_msb(
-            self.numbers.iter().map(|&b| C::BucketType::from_usize(b)),
+            self.numbers
+                .iter()
+                .map(|&b| Unaligned::<C::BucketType>::from_usize(b)),
             &mut lsb,
             max_msb_len,
         );
@@ -1259,6 +1257,7 @@ mod tests {
             before.config.clone(),
             &writer[pad_amount..],
         );
+        assert!(matches!(after.msb, Cow::Borrowed(_)));
         assert_eq!(before, after);
     }
 

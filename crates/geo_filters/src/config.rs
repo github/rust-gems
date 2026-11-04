@@ -8,12 +8,14 @@ mod bitchunks;
 mod buckets;
 mod estimation;
 mod lookup;
+mod unaligned;
 
 pub(crate) use bitchunks::*;
 pub(crate) use buckets::*;
 pub(crate) use estimation::*;
 pub(crate) use lookup::*;
 use once_cell::sync::Lazy;
+pub(crate) use unaligned::*;
 
 /// Trait that configures geo filters and determines counting precision.
 ///

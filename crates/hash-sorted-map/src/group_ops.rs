@@ -19,6 +19,15 @@ pub type Mask = u32;
 pub type Mask = u64;
 
 // ── SIMD group operations ───────────────────────────────────────────────────
+//
+// Note on byte order: `from_le_bytes` is used (rather than `from_ne_bytes`) when
+// packing `ctrl` into an integer so that `ctrl[0]` always occupies the least-
+// significant byte and `ctrl[GROUP_SIZE - 1]` occupies the most-significant byte.
+// `lowest` relies on `trailing_zeros()` to map the first matching byte to slot
+// index `0..GROUP_SIZE`, and `count_occupied` relies on `leading_zeros()` to
+// count empty trailing slots at the high-index end of `ctrl`. On little-endian
+// targets `from_le_bytes` compiles to a single unaligned load identical to
+// `from_ne_bytes`.
 
 #[cfg(target_arch = "x86_64")]
 mod arch {
@@ -56,12 +65,12 @@ mod arch {
     /// Number of trailing occupied (non-zero) bytes in the ctrl array.
     #[inline(always)]
     pub fn count_occupied(ctrl: &[u8; GROUP_SIZE]) -> usize {
-        let word = u128::from_ne_bytes(*ctrl);
+        let word = u128::from_le_bytes(*ctrl);
         GROUP_SIZE - (word.leading_zeros() / 8) as usize
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
 mod arch {
     use core::arch::aarch64 as neon;
 
@@ -94,18 +103,21 @@ mod arch {
     /// Number of trailing occupied (non-zero) bytes in the ctrl array.
     #[inline(always)]
     pub fn count_occupied(ctrl: &[u8; GROUP_SIZE]) -> usize {
-        let word = u64::from_ne_bytes(*ctrl);
+        let word = u64::from_le_bytes(*ctrl);
         GROUP_SIZE - (word.leading_zeros() / 8) as usize
     }
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    all(target_arch = "aarch64", target_endian = "little")
+)))]
 mod arch {
     use super::{Mask, GROUP_SIZE};
 
     #[inline(always)]
     pub fn match_tag(ctrl: &[u8; GROUP_SIZE], tag: u8) -> Mask {
-        let word = u64::from_ne_bytes(*ctrl);
+        let word = u64::from_le_bytes(*ctrl);
         let broadcast = 0x0101010101010101u64 * (tag as u64);
         let xor = word ^ broadcast;
         (xor.wrapping_sub(0x0101010101010101)) & !xor & 0x8080808080808080
@@ -129,7 +141,7 @@ mod arch {
     /// Number of trailing occupied (non-zero) bytes in the ctrl array.
     #[inline(always)]
     pub fn count_occupied(ctrl: &[u8; GROUP_SIZE]) -> usize {
-        let word = u64::from_ne_bytes(*ctrl);
+        let word = u64::from_le_bytes(*ctrl);
         GROUP_SIZE - (word.leading_zeros() / 8) as usize
     }
 }

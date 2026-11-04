@@ -63,15 +63,101 @@ fn serialize_daac<S: Serializer>(
     s.serialize_bytes(&daac.serialize())
 }
 
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(
+        bytes[offset..offset + 4]
+            .try_into()
+            .expect("slice of length 4"),
+    )
+}
+
+fn validate_daac_bytes(v: &[u8]) -> Result<(), &'static str> {
+    const STATE_SIZE: usize = 12;
+    const OUTPUT_SIZE: usize = 12;
+    const MAX_OUTPUTS: u32 = 0x00ff_ffff;
+
+    if v.len() < 4 {
+        return Err("truncated DoubleArrayAhoCorasick states length");
+    }
+    let states_len = read_u32_le(v, 0);
+    if states_len < 256 || !states_len.is_multiple_of(256) {
+        return Err("invalid DoubleArrayAhoCorasick states length");
+    }
+    let states_bytes_len = (states_len as usize)
+        .checked_mul(STATE_SIZE)
+        .ok_or("DoubleArrayAhoCorasick states byte length overflow")?;
+    let outputs_offset = 4usize
+        .checked_add(states_bytes_len)
+        .ok_or("DoubleArrayAhoCorasick states offset overflow")?;
+    let outputs_header_end = outputs_offset
+        .checked_add(4)
+        .ok_or("DoubleArrayAhoCorasick outputs header overflow")?;
+    if v.len() < outputs_header_end {
+        return Err("truncated DoubleArrayAhoCorasick states data");
+    }
+
+    let outputs_len = read_u32_le(v, outputs_offset);
+    if outputs_len > MAX_OUTPUTS {
+        return Err("invalid DoubleArrayAhoCorasick outputs length");
+    }
+    let outputs_bytes_len = (outputs_len as usize)
+        .checked_mul(OUTPUT_SIZE)
+        .ok_or("DoubleArrayAhoCorasick outputs byte length overflow")?;
+    let outputs_end = outputs_header_end
+        .checked_add(outputs_bytes_len)
+        .ok_or("DoubleArrayAhoCorasick outputs end overflow")?;
+    let total_len = outputs_end
+        .checked_add(5)
+        .ok_or("DoubleArrayAhoCorasick total length overflow")?;
+    if v.len() != total_len {
+        return Err("unexpected DoubleArrayAhoCorasick byte length");
+    }
+
+    let match_kind = v[outputs_end];
+    if match_kind > 2 {
+        return Err("invalid DoubleArrayAhoCorasick match kind");
+    }
+    let num_states = read_u32_le(v, outputs_end + 1);
+    if num_states > states_len {
+        return Err("invalid DoubleArrayAhoCorasick num_states");
+    }
+
+    for chunk in v[4..outputs_offset].as_chunks::<STATE_SIZE>().0 {
+        let base = read_u32_le(chunk, 0);
+        let fail = read_u32_le(chunk, 4);
+        let opos_ch = read_u32_le(chunk, 8);
+        let output_pos = opos_ch >> 8;
+        if base >= states_len || fail >= states_len || output_pos > outputs_len {
+            return Err("DoubleArrayAhoCorasick state out of bounds");
+        }
+    }
+
+    for (i, chunk) in v[outputs_header_end..outputs_end]
+        .as_chunks::<OUTPUT_SIZE>()
+        .0
+        .iter()
+        .enumerate()
+    {
+        let length = read_u32_le(chunk, 4);
+        let parent = read_u32_le(chunk, 8);
+        if length == 0 || (parent as usize) > i {
+            return Err("DoubleArrayAhoCorasick output out of bounds");
+        }
+    }
+
+    Ok(())
+}
+
 struct DaacVisitor;
 impl Visitor<'_> for DaacVisitor {
     type Value = DoubleArrayAhoCorasick<u32>;
 
-    fn expecting(&self, _formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Err(std::fmt::Error)
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a serialized DoubleArrayAhoCorasick automaton")
     }
 
     fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+        validate_daac_bytes(v).map_err(E::custom)?;
         Ok(unsafe { DoubleArrayAhoCorasick::deserialize_unchecked(v).0 })
     }
 }
@@ -114,20 +200,20 @@ fn is_valid_token_pair(
         // Reverse the merge operation from BPE.
         if token1 > token2 {
             limit = token1;
-            token1 = unsafe { split_table.get_unchecked(token1 as usize).1 };
+            token1 = split_table[token1 as usize].1;
             if token1 == limit {
                 limit = token2 + 1;
-                token2 = unsafe { split_table.get_unchecked(token2 as usize).0 };
+                token2 = split_table[token2 as usize].0;
                 if token2 + 1 == limit {
                     return true;
                 }
             }
         } else {
             limit = token2 + 1;
-            token2 = unsafe { split_table.get_unchecked(token2 as usize).0 };
+            token2 = split_table[token2 as usize].0;
             if token2 + 1 == limit {
                 limit = token1;
-                token1 = unsafe { split_table.get_unchecked(token1 as usize).1 };
+                token1 = split_table[token1 as usize].1;
                 if token1 == limit {
                     return true;
                 }
@@ -137,10 +223,8 @@ fn is_valid_token_pair(
 }
 
 fn token_range(token_starts: &[u32], token_id: u32) -> Range<usize> {
-    unsafe {
-        *token_starts.get_unchecked(token_id as usize) as usize
-            ..*token_starts.get_unchecked(token_id as usize + 1) as usize
-    }
+    let idx = token_id as usize;
+    token_starts[idx] as usize..token_starts[idx + 1] as usize
 }
 
 fn token_bytes<'a>(all_tokens: &'a [u8], token_starts: &[u32], token_id: u32) -> &'a [u8] {
@@ -404,7 +488,7 @@ impl BytePairEncoding {
                     last_token.push(new_token);
                     break;
                 } else {
-                    let prev_token = unsafe { *last_token.get_unchecked(new_range.start - 1) };
+                    let prev_token = last_token[new_range.start - 1];
                     if self.is_valid_token_pair(prev_token, new_token) {
                         last_token.push(new_token);
                         break;
@@ -694,7 +778,9 @@ pub fn create_test_bytes(bpe: &BytePairEncoding, min_bytes: usize) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::hash_bytes;
+    use aneubeck_daachorse::DoubleArrayAhoCorasick;
+
+    use super::{hash_bytes, read_u32_le, validate_daac_bytes, BytePairEncoding};
 
     /// The hash must not depend on the target. It keys the serialized `bytes_hash_to_token`,
     /// and a hardcoded hash factor is only collision-free for one particular mapping.
@@ -711,5 +797,47 @@ mod tests {
         assert_eq!(hash_bytes("🦀".as_bytes(), FACTOR), 2548432741);
         // Tiktoken vocabularies contain arbitrary bytes, not just UTF-8.
         assert_eq!(hash_bytes(&[0, 0xff, 0x80], FACTOR), 3276605559);
+    }
+
+    #[test]
+    #[should_panic]
+    fn token_bytes_out_of_bounds_panics() {
+        let tokens: Vec<Vec<u8>> = (0..=255u8).map(|b| vec![b]).collect();
+        let bpe = BytePairEncoding::from_dictionary(tokens, None);
+        let _ = bpe.token_bytes(999);
+    }
+
+    #[test]
+    fn validate_daac_bytes_checks_invariants() {
+        let pma =
+            DoubleArrayAhoCorasick::<u32>::new(vec!["a", "ab", "bab"]).expect("valid patterns");
+        let valid = pma.serialize();
+        assert!(validate_daac_bytes(&valid).is_ok());
+
+        // Truncated input
+        assert!(validate_daac_bytes(&valid[..valid.len() - 1]).is_err());
+
+        // Non-multiple-of-256 states_len
+        let mut bad_states_len = valid.clone();
+        bad_states_len[0..4].copy_from_slice(&255u32.to_le_bytes());
+        assert!(validate_daac_bytes(&bad_states_len).is_err());
+
+        // Out-of-bounds state `base`
+        let mut bad_base = valid.clone();
+        bad_base[4..8].copy_from_slice(&9999u32.to_le_bytes());
+        assert!(validate_daac_bytes(&bad_base).is_err());
+
+        // Out-of-bounds state `fail`
+        let mut bad_fail = valid.clone();
+        bad_fail[8..12].copy_from_slice(&9999u32.to_le_bytes());
+        assert!(validate_daac_bytes(&bad_fail).is_err());
+
+        // Out-of-bounds output `parent` (self-referential 1-based parent == 1 at index 0)
+        let states_len = read_u32_le(&valid, 0) as usize;
+        let first_output_parent_offset = 4 + states_len * 12 + 4 + 8;
+        let mut bad_parent = valid.clone();
+        bad_parent[first_output_parent_offset..first_output_parent_offset + 4]
+            .copy_from_slice(&1u32.to_le_bytes());
+        assert!(validate_daac_bytes(&bad_parent).is_err());
     }
 }
