@@ -780,7 +780,7 @@ pub fn create_test_bytes(bpe: &BytePairEncoding, min_bytes: usize) -> Vec<u8> {
 mod tests {
     use aneubeck_daachorse::DoubleArrayAhoCorasick;
 
-    use super::{hash_bytes, validate_daac_bytes, BytePairEncoding};
+    use super::{hash_bytes, read_u32_le, validate_daac_bytes, BytePairEncoding};
 
     /// The hash must not depend on the target. It keys the serialized `bytes_hash_to_token`,
     /// and a hardcoded hash factor is only collision-free for one particular mapping.
@@ -809,7 +809,8 @@ mod tests {
 
     #[test]
     fn validate_daac_bytes_checks_invariants() {
-        let pma = DoubleArrayAhoCorasick::<u32>::new(vec!["a", "ab", "bab"]).unwrap();
+        let pma =
+            DoubleArrayAhoCorasick::<u32>::new(vec!["a", "ab", "bab"]).expect("valid patterns");
         let valid = pma.serialize();
         assert!(validate_daac_bytes(&valid).is_ok());
 
@@ -832,7 +833,7 @@ mod tests {
         assert!(validate_daac_bytes(&bad_fail).is_err());
 
         // Out-of-bounds output `parent` (self-referential 1-based parent == 1 at index 0)
-        let states_len = u32::from_le_bytes(valid[0..4].try_into().unwrap()) as usize;
+        let states_len = read_u32_le(&valid, 0) as usize;
         let first_output_parent_offset = 4 + states_len * 12 + 4 + 8;
         let mut bad_parent = valid.clone();
         bad_parent[first_output_parent_offset..first_output_parent_offset + 4]
