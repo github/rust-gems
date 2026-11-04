@@ -9,6 +9,7 @@ use std::ops::Deref as _;
 use crate::config::{
     count_ones_from_bitchunks, count_ones_from_msb_and_lsb, iter_bit_chunks, iter_ones,
     mask_bit_chunks, take_ref, xor_bit_chunks, BitChunk, GeoConfig, IsBucketType, BITS_PER_BLOCK,
+    BYTES_PER_BLOCK,
 };
 use crate::{Count, Diff};
 
@@ -576,7 +577,7 @@ pub struct GeoDiffCountBuilder<C: GeoConfig<Diff>> {
     /// (xor) into `blocks`. [`GeoDiffCountBuilder::cleanup`] reconciles the two.
     split: usize,
     numbers: Vec<usize>,
-    blocks: Vec<u64>,
+    blocks: Vec<[u8; BYTES_PER_BLOCK]>,
 }
 
 impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
@@ -593,7 +594,7 @@ impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
             expected,
             split,
             numbers: Vec::with_capacity(capacity),
-            blocks: vec![0; split.div_ceil(BITS_PER_BLOCK)],
+            blocks: vec![[0; BYTES_PER_BLOCK]; split.div_ceil(BITS_PER_BLOCK)],
         }
     }
 
@@ -608,7 +609,8 @@ impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
         let new_split = estimate_split_bucket(&self.config, self.expected);
         if new_split > self.split {
             self.split = new_split;
-            self.blocks.resize(new_split.div_ceil(BITS_PER_BLOCK), 0);
+            self.blocks
+                .resize(new_split.div_ceil(BITS_PER_BLOCK), [0; BYTES_PER_BLOCK]);
         }
     }
 
@@ -633,7 +635,8 @@ impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
             if (next - read) % 2 == 1 {
                 if bucket < split {
                     let (index, bit) = bucket.into_index_and_bit();
-                    blocks[index] ^= bit.into_block();
+                    blocks[index] =
+                        (u64::from_le_bytes(blocks[index]) ^ bit.into_block()).to_le_bytes();
                 } else {
                     numbers[write] = bucket;
                     write += 1;
@@ -663,11 +666,12 @@ impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
             new_split += bits_per_level;
             keep = self.numbers.partition_point(|&b| b >= new_split);
         }
-        self.blocks.resize(new_split.div_ceil(BITS_PER_BLOCK), 0);
+        self.blocks
+            .resize(new_split.div_ceil(BITS_PER_BLOCK), [0; BYTES_PER_BLOCK]);
         let blocks = &mut self.blocks;
         for &bucket in &self.numbers[keep..] {
             let (index, bit) = bucket.into_index_and_bit();
-            blocks[index] ^= bit.into_block();
+            blocks[index] = (u64::from_le_bytes(blocks[index]) ^ bit.into_block()).to_le_bytes();
         }
         self.numbers.truncate(keep);
         self.split = new_split;
@@ -688,7 +692,8 @@ impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
         } else {
             // `bucket < split`, so the block index is always in range; toggling cancels repeats.
             let (index, bit) = bucket.into_index_and_bit();
-            self.blocks[index] ^= bit.into_block();
+            self.blocks[index] =
+                (u64::from_le_bytes(self.blocks[index]) ^ bit.into_block()).to_le_bytes();
         }
     }
 
@@ -724,7 +729,8 @@ impl<C: GeoConfig<Diff>> GeoDiffCountBuilder<C> {
                         }
                     } else {
                         let (index, bit) = bucket.into_index_and_bit();
-                        blocks[index] ^= bit.into_block();
+                        blocks[index] =
+                            (u64::from_le_bytes(blocks[index]) ^ bit.into_block()).to_le_bytes();
                     }
                 }
                 filled

@@ -184,7 +184,8 @@ impl<C: GeoConfig<Diff> + Default> MetricSpace for GeoDiffMetric<'_, C> {
         let mut count = 0;
         let (a_blocks, b_blocks) = (a.lsb.blocks(), b.lsb.blocks());
         for i in 0..common_full {
-            count += (a_blocks[i] ^ b_blocks[i]).count_ones() as usize;
+            count += (u64::from_le_bytes(a_blocks[i]) ^ u64::from_le_bytes(b_blocks[i]))
+                .count_ones() as usize;
             if count >= bound {
                 return OnesMetric::infinite();
             }
