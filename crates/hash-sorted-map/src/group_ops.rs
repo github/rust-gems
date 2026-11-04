@@ -19,6 +19,15 @@ pub type Mask = u32;
 pub type Mask = u64;
 
 // ── SIMD group operations ───────────────────────────────────────────────────
+//
+// Note on byte order: `from_le_bytes` is used (rather than `from_ne_bytes`) when
+// packing `ctrl` into an integer so that `ctrl[0]` always occupies the least-
+// significant byte and `ctrl[GROUP_SIZE - 1]` occupies the most-significant byte.
+// `lowest` relies on `trailing_zeros()` to map the first matching byte to slot
+// index `0..GROUP_SIZE`, and `count_occupied` relies on `leading_zeros()` to
+// count empty trailing slots at the high-index end of `ctrl`. On little-endian
+// targets `from_le_bytes` compiles to a single unaligned load identical to
+// `from_ne_bytes`.
 
 #[cfg(target_arch = "x86_64")]
 mod arch {
