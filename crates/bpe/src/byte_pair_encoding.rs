@@ -64,12 +64,11 @@ fn serialize_daac<S: Serializer>(
 }
 
 fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes([
-        bytes[offset],
-        bytes[offset + 1],
-        bytes[offset + 2],
-        bytes[offset + 3],
-    ])
+    u32::from_le_bytes(
+        bytes[offset..offset + 4]
+            .try_into()
+            .expect("slice of length 4"),
+    )
 }
 
 fn validate_daac_bytes(v: &[u8]) -> Result<(), &'static str> {
