@@ -214,22 +214,24 @@ impl<K: Eq + Ord, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
             let n = hashes.len();
             // Insertion sort by (hash, key).
             for i in 1..n {
-                // Extract element at position i.
                 let cur_hash = hashes[i];
                 let (gi, si) = chain_slot(&chain, i);
-                let cur_key = unsafe { self.groups[gi].keys[si].assume_init_read() };
-                let cur_val = unsafe { self.groups[gi].values[si].assume_init_read() };
                 // Find insertion point via linear scan backward.
+                // Borrow `cur_key` in place during comparisons so that if `Ord::cmp`
+                // panics, all slots remain valid and no double-drop can occur on unwind.
+                let cur_key = unsafe { self.groups[gi].keys[si].assume_init_ref() };
                 let mut j = i;
                 while j > 0 {
                     let (gj, sj) = chain_slot(&chain, j - 1);
                     let prev_key = unsafe { self.groups[gj].keys[sj].assume_init_ref() };
-                    if (hashes[j - 1], prev_key) <= (cur_hash, &cur_key) {
+                    if (hashes[j - 1], prev_key) <= (cur_hash, cur_key) {
                         break;
                     }
                     j -= 1;
                 }
                 if j < i {
+                    let cur_key = unsafe { self.groups[gi].keys[si].assume_init_read() };
+                    let cur_val = unsafe { self.groups[gi].values[si].assume_init_read() };
                     // Shift positions j..i up by one.
                     hashes.copy_within(j..i, j + 1);
                     for pos in (j..i).rev() {
@@ -242,12 +244,12 @@ impl<K: Eq + Ord, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
                             self.groups[dst_g].values[dst_s] = v;
                         }
                     }
+                    // Insert at position j.
+                    hashes[j] = cur_hash;
+                    let (gj, sj) = chain_slot(&chain, j);
+                    self.groups[gj].keys[sj] = MaybeUninit::new(cur_key);
+                    self.groups[gj].values[sj] = MaybeUninit::new(cur_val);
                 }
-                // Insert at position j (or write back to i if already in place).
-                hashes[j] = cur_hash;
-                let (gj, sj) = chain_slot(&chain, j);
-                self.groups[gj].keys[sj] = MaybeUninit::new(cur_key);
-                self.groups[gj].values[sj] = MaybeUninit::new(cur_val);
             }
             // Rebuild ctrl/tag bytes from the sorted hashes so that
             // get/insert/entry still work after sorting.
@@ -1042,5 +1044,83 @@ mod tests {
             prev_key = k.clone();
             first = false;
         }
+    }
+
+    #[test]
+    fn sort_by_hash_panic_in_ord_does_not_double_drop() {
+        use std::cmp::Ordering;
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+        use std::sync::Arc;
+
+        struct DropTrackedKey {
+            id: u32,
+            drops: Arc<AtomicUsize>,
+        }
+
+        impl Drop for DropTrackedKey {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, AtomicOrdering::SeqCst);
+            }
+        }
+
+        impl PartialEq for DropTrackedKey {
+            fn eq(&self, other: &Self) -> bool {
+                self.id == other.id
+            }
+        }
+
+        impl Eq for DropTrackedKey {}
+
+        impl PartialOrd for DropTrackedKey {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for DropTrackedKey {
+            fn cmp(&self, _other: &Self) -> Ordering {
+                panic!("comparison panic during sort_by_hash");
+            }
+        }
+
+        impl SortingHash<DropTrackedKey> for FixedState {
+            fn hash(&self, _key: &DropTrackedKey) -> u64 {
+                self.0
+            }
+        }
+
+        let key_drops = Arc::new(AtomicUsize::new(0));
+        let val_drops = Arc::new(AtomicUsize::new(0));
+
+        struct DropTrackedVal(Arc<AtomicUsize>);
+        impl Drop for DropTrackedVal {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, AtomicOrdering::SeqCst);
+            }
+        }
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let mut map = HashSortedMap::with_capacity_and_hasher(1, FixedState(42));
+            map.insert(
+                DropTrackedKey {
+                    id: 1,
+                    drops: Arc::clone(&key_drops),
+                },
+                DropTrackedVal(Arc::clone(&val_drops)),
+            );
+            map.insert(
+                DropTrackedKey {
+                    id: 2,
+                    drops: Arc::clone(&key_drops),
+                },
+                DropTrackedVal(Arc::clone(&val_drops)),
+            );
+            map.sort_by_hash();
+        }));
+
+        assert!(result.is_err());
+        assert_eq!(key_drops.load(AtomicOrdering::SeqCst), 2);
+        assert_eq!(val_drops.load(AtomicOrdering::SeqCst), 2);
     }
 }
