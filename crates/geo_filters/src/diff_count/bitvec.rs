@@ -5,7 +5,7 @@ use std::ops::{Deref as _, Index, Range};
 
 use crate::config::IsBucketType;
 use crate::config::BITS_PER_BLOCK;
-use crate::config::{BitChunk, BYTES_PER_BLOCK};
+use crate::config::{BitChunk, Unaligned};
 
 /// A bit vector where every bit occupies exactly one bit (in contrast to `Vec<bool>` where each
 /// bit consumes 1 byte). It only implements the minimum number of operations that we need for our
@@ -14,18 +14,13 @@ use crate::config::{BitChunk, BYTES_PER_BLOCK};
 #[derive(Clone, Default, Debug, Eq, PartialEq)]
 pub(crate) struct BitVec<'a> {
     num_bits: usize,
-    blocks: Cow<'a, [[u8; BYTES_PER_BLOCK]]>,
+    blocks: Cow<'a, [Unaligned<u64>]>,
 }
 
 impl Ord for BitVec<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match self.num_bits.cmp(&other.num_bits) {
-            Ordering::Equal => self
-                .blocks
-                .iter()
-                .rev()
-                .map(|&b| u64::from_le_bytes(b))
-                .cmp(other.blocks.iter().rev().map(|&b| u64::from_le_bytes(b))),
+            Ordering::Equal => self.blocks.iter().rev().cmp(other.blocks.iter().rev()),
             ord => ord,
         }
     }
@@ -46,7 +41,7 @@ impl<'a> BitVec<'a> {
         result.resize(num_bits);
         let blocks = result.blocks.to_mut();
         for BitChunk { index, block } in chunks {
-            blocks[index] = (u64::from_le_bytes(blocks[index]) ^ block).to_le_bytes();
+            blocks[index] ^= block;
         }
         result.clear_superfluous_bits();
         result
@@ -54,7 +49,7 @@ impl<'a> BitVec<'a> {
 
     /// Wraps raw `blocks` covering `[0, num_bits)` into a `BitVec`. The number of blocks must match
     /// `num_bits`, and any bits at or above `num_bits` are cleared.
-    pub fn from_blocks(blocks: Vec<[u8; BYTES_PER_BLOCK]>, num_bits: usize) -> BitVec<'static> {
+    pub fn from_blocks(blocks: Vec<Unaligned<u64>>, num_bits: usize) -> BitVec<'static> {
         debug_assert_eq!(blocks.len(), num_bits.div_ceil(BITS_PER_BLOCK));
         let mut result = BitVec {
             num_bits,
@@ -70,7 +65,7 @@ impl<'a> BitVec<'a> {
         if num_blocks != self.blocks.len() {
             self.blocks
                 .to_mut()
-                .resize(num_blocks, [0; BYTES_PER_BLOCK]);
+                .resize(num_blocks, Unaligned::default());
         }
         self.num_bits = num_bits;
         self.clear_superfluous_bits();
@@ -83,9 +78,7 @@ impl<'a> BitVec<'a> {
                 .to_mut()
                 .last_mut()
                 .into_iter()
-                .for_each(|block| {
-                    *block = (u64::from_le_bytes(*block) & bit.into_mask()).to_le_bytes();
-                });
+                .for_each(|block| *block &= bit.into_mask());
         }
     }
 
@@ -97,18 +90,13 @@ impl<'a> BitVec<'a> {
     pub fn count_ones(&self) -> usize {
         self.blocks
             .iter()
-            .map(|&block| u64::from_le_bytes(block).count_ones() as usize)
+            .map(|block| block.count_ones() as usize)
             .sum()
     }
 
     /// The raw 64-bit blocks backing the vector, from least to most significant.
-    pub fn blocks(&self) -> &[[u8; BYTES_PER_BLOCK]] {
+    pub fn blocks(&self) -> &[Unaligned<u64>] {
         self.blocks.deref()
-    }
-
-    #[inline]
-    pub fn block(&self, index: usize) -> u64 {
-        u64::from_le_bytes(self.blocks[index])
     }
 
     pub fn is_empty(&self) -> bool {
@@ -119,15 +107,14 @@ impl<'a> BitVec<'a> {
     pub fn test_bit(&self, index: usize) -> bool {
         assert!(index < self.num_bits);
         let (block_idx, bit_idx) = index.into_index_and_bit();
-        (self.block(block_idx) & bit_idx.into_block()) != 0
+        (self.blocks[block_idx] & bit_idx.into_block()) != 0
     }
 
     /// Toggles the bit specified by the provided zero-based bit position.
     pub fn toggle(&mut self, index: usize) {
         assert!(index < self.num_bits);
         let (block_idx, bit_idx) = index.into_index_and_bit();
-        let block = &mut self.blocks.to_mut()[block_idx];
-        *block = (u64::from_le_bytes(*block) ^ bit_idx.into_block()).to_le_bytes();
+        self.blocks.to_mut()[block_idx] ^= bit_idx.into_block();
     }
 
     /// Returns a [`BitToggler`] that toggles many bits without re-resolving the `Cow` on every
@@ -146,11 +133,10 @@ impl<'a> BitVec<'a> {
     pub fn bit_chunks(&self) -> impl Iterator<Item = BitChunk> + '_ {
         self.blocks
             .iter()
-            .map(|&block| u64::from_le_bytes(block))
             .enumerate()
             .rev()
-            .filter(|(_, block)| *block != 0)
-            .map(|(index, block)| BitChunk::new(index, block))
+            .filter(|(_, block)| **block != 0)
+            .map(|(index, block)| BitChunk::new(index, block.get()))
     }
 
     // Returns an owned BitVec with static lifetime that can be used for cases when we want
@@ -177,10 +163,10 @@ impl<'a> BitVec<'a> {
         if block_start >= self.blocks.len() {
             return 0;
         }
-        let mut result = self.block(block_start) >> start_idx;
+        let mut result = self.blocks[block_start] >> start_idx;
         let block_end = (range.end - 1) / BITS_PER_BLOCK;
         if block_end < self.blocks.len() && block_end != block_start {
-            result |= self.block(block_end) << (BITS_PER_BLOCK - start_idx);
+            result |= self.blocks[block_end] << (BITS_PER_BLOCK - start_idx);
         }
         result & (u64::MAX >> (BITS_PER_BLOCK - range.len()))
     }
@@ -205,7 +191,7 @@ impl<'a> BitVec<'a> {
             unoccupied_bits
         );
         buf = &buf[1..];
-        let (blocks, remainder) = buf.as_chunks::<BYTES_PER_BLOCK>();
+        let (blocks, remainder) = Unaligned::<u64>::slice_from_bytes(buf);
         assert!(
             !blocks.is_empty() && remainder.is_empty(),
             "buffer should be a non-empty multiple of 8 bytes, got {}",
@@ -226,7 +212,7 @@ impl<'a> BitVec<'a> {
         // First serialize the number of unoccupied bits in the last block as one byte.
         let unoccupied_bits = 63 - ((self.num_bits - 1) % 64) as u8;
         writer.write_all(&[unoccupied_bits])?;
-        let block_bytes = self.blocks.as_flattened();
+        let block_bytes = Unaligned::slice_as_bytes(&self.blocks);
         writer.write_all(block_bytes)?;
         Ok(block_bytes.len() + 1)
     }
@@ -239,7 +225,7 @@ impl Index<usize> for BitVec<'_> {
     fn index(&self, index: usize) -> &Self::Output {
         assert!(index < self.num_bits);
         let (block_idx, bit_idx) = index.into_index_and_bit();
-        match (self.block(block_idx) & bit_idx.into_block()) != 0 {
+        match (self.blocks[block_idx] & bit_idx.into_block()) != 0 {
             true => &true,
             false => &false,
         }
@@ -250,7 +236,7 @@ impl Index<usize> for BitVec<'_> {
 /// Obtained via [`BitVec::toggler`].
 pub(crate) struct BitToggler<'a> {
     num_bits: usize,
-    blocks: &'a mut [[u8; BYTES_PER_BLOCK]],
+    blocks: &'a mut [Unaligned<u64>],
 }
 
 impl BitToggler<'_> {
@@ -259,8 +245,7 @@ impl BitToggler<'_> {
     pub fn toggle(&mut self, index: usize) {
         debug_assert!(index < self.num_bits);
         let (block_idx, bit_idx) = index.into_index_and_bit();
-        let block = &mut self.blocks[block_idx];
-        *block = (u64::from_le_bytes(*block) ^ bit_idx.into_block()).to_le_bytes();
+        self.blocks[block_idx] ^= bit_idx.into_block();
     }
 }
 
@@ -271,7 +256,7 @@ mod tests {
     /// Constructs a BitVec instance with num_bits and all bits initialized to the provided default value.
     fn bitvec_from_element<'a>(num_bits: usize, value: bool) -> BitVec<'a> {
         let num_blocks = num_bits.div_ceil(BITS_PER_BLOCK) + 1;
-        let fill = if value { u64::MAX } else { u64::MIN }.to_le_bytes();
+        let fill = Unaligned::new(if value { u64::MAX } else { u64::MIN });
         let blocks = vec![fill; num_blocks];
         BitVec {
             blocks: Cow::from(blocks),
@@ -314,7 +299,7 @@ mod tests {
             assert!(bitvec.test_bit(14));
             assert!(bitvec.test_bit(48));
             assert!(bitvec.test_bit(72));
-            let last = u64::from_le_bytes(*bitvec.blocks.last().expect("there must be a block"));
+            let last = bitvec.blocks.last().expect("there must be a block");
             assert!(last & 120usize.into_bit().into_block() == 0);
         }
 
@@ -322,7 +307,7 @@ mod tests {
         {
             assert!(bitvec.test_bit(14));
             assert!(bitvec.test_bit(48));
-            let last = u64::from_le_bytes(*bitvec.blocks.last().expect("there must be a block"));
+            let last = bitvec.blocks.last().expect("there must be a block");
             assert!(last & 72usize.into_bit().into_block() == 0);
         }
 

@@ -12,14 +12,9 @@ where
     Self: Add<Output = Self> + Rem<Output = Self>,
 {
     const BITS: u32;
-    type Bytes: Copy + Debug + Default + Eq + PartialEq + Send + Sync + 'static;
 
     fn from_usize(v: usize) -> Self;
     fn into_usize(self) -> usize;
-    fn from_le_bytes(bytes: Self::Bytes) -> Self;
-    fn to_le_bytes(self) -> Self::Bytes;
-    fn slice_from_bytes(buf: &[u8]) -> (&[Self::Bytes], &[u8]);
-    fn slice_as_bytes(slice: &[Self::Bytes]) -> &[u8];
 
     /// Returns a block with the bit in this bit position set to one.
     #[inline]
@@ -80,50 +75,75 @@ where
     }
 }
 
-macro_rules! impl_is_bucket_type {
-    ($t:ty) => {
-        impl IsBucketType for $t {
-            const BITS: u32 = Self::BITS;
-            type Bytes = [u8; std::mem::size_of::<$t>()];
+impl IsBucketType for u8 {
+    const BITS: u32 = Self::BITS;
 
-            #[inline]
-            fn from_usize(v: usize) -> Self {
-                v as Self
-            }
+    #[inline]
+    fn from_usize(v: usize) -> Self {
+        v as Self
+    }
 
-            #[inline]
-            fn into_usize(self) -> usize {
-                self as usize
-            }
-
-            #[inline]
-            fn from_le_bytes(bytes: Self::Bytes) -> Self {
-                Self::from_le_bytes(bytes)
-            }
-
-            #[inline]
-            fn to_le_bytes(self) -> Self::Bytes {
-                Self::to_le_bytes(self)
-            }
-
-            #[inline]
-            fn slice_from_bytes(buf: &[u8]) -> (&[Self::Bytes], &[u8]) {
-                buf.as_chunks::<{ std::mem::size_of::<$t>() }>()
-            }
-
-            #[inline]
-            fn slice_as_bytes(slice: &[Self::Bytes]) -> &[u8] {
-                slice.as_flattened()
-            }
-        }
-    };
+    #[inline]
+    fn into_usize(self) -> usize {
+        self as usize
+    }
 }
 
-impl_is_bucket_type!(u8);
-impl_is_bucket_type!(u16);
-impl_is_bucket_type!(u32);
-impl_is_bucket_type!(u64);
-impl_is_bucket_type!(usize);
+impl IsBucketType for u16 {
+    const BITS: u32 = Self::BITS;
+
+    #[inline]
+    fn from_usize(v: usize) -> Self {
+        v as Self
+    }
+
+    #[inline]
+    fn into_usize(self) -> usize {
+        self as usize
+    }
+}
+
+impl IsBucketType for u32 {
+    const BITS: u32 = Self::BITS;
+
+    #[inline]
+    fn from_usize(v: usize) -> Self {
+        v as Self
+    }
+
+    #[inline]
+    fn into_usize(self) -> usize {
+        self as usize
+    }
+}
+
+impl IsBucketType for u64 {
+    const BITS: u32 = Self::BITS;
+
+    #[inline]
+    fn from_usize(v: usize) -> Self {
+        v as Self
+    }
+
+    #[inline]
+    fn into_usize(self) -> usize {
+        self as usize
+    }
+}
+
+impl IsBucketType for usize {
+    const BITS: u32 = Self::BITS;
+
+    #[inline]
+    fn from_usize(v: usize) -> Self {
+        v
+    }
+
+    #[inline]
+    fn into_usize(self) -> usize {
+        self
+    }
+}
 
 /// Computes the bits required to store bucket positions for 64-bit hashes given that (1 << B)
 /// buckets cover half the hash space.
