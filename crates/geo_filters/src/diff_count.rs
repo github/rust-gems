@@ -1278,4 +1278,12 @@ mod tests {
             serialization_round_trip::<GeoDiffConfig13>(rnd);
         });
     }
+
+    #[test]
+    #[should_panic(expected = "mask_size must be in 1..=63")]
+    fn test_cmp_masked_zero_mask_size_panics() {
+        let a = GeoDiffCount7::default();
+        let b = GeoDiffCount7::default();
+        let _ = a.cmp_masked(&b, 0, 0);
+    }
 }

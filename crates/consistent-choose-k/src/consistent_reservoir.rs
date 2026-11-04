@@ -286,6 +286,7 @@ impl ConsistentReservoir {
     pub fn new(k: u32, n: u32, master_key: u64) -> Self {
         assert!(k >= 1, "k must be at least 1");
         assert!(n <= 1u32 << 30, "n must be at most 2^30");
+        assert!(k <= n, "k must be at most n");
         let j_max = smallest_j_max(n);
         let m = 1u32 << (2 * j_max + 2);
         let mut values = vec![];
@@ -507,5 +508,11 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "k must be at most n")]
+    fn new_panics_when_k_exceeds_n() {
+        let _ = ConsistentReservoir::new(5, 4, 42);
     }
 }

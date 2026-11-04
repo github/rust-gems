@@ -190,7 +190,7 @@ impl<C: ConfigType<HasLines = True>> StringOffsets<C> {
 
     /// UTF-8 offset of the first character of a line.
     pub fn line_to_utf8_end(&self, line_number: usize) -> usize {
-        self.line_to_utf8_begin(line_number + 1)
+        self.line_to_utf8_begin(line_number.saturating_add(1))
     }
 
     /// Return the zero-based line number of the line containing the specified UTF-8 offset.
@@ -288,7 +288,9 @@ impl<C: ConfigType<HasWhitespace = True>> StringOffsets<C> {
 impl<C: ConfigType<HasChars = True>> StringOffsets<C> {
     /// Converts a UTF-8 offset to a UTF-32 offset.
     pub fn utf8_to_char(&self, byte_number: usize) -> usize {
-        self.utf8_to_char.rank(byte_number + 1) - 1
+        self.utf8_to_char
+            .rank(byte_number.saturating_add(1))
+            .saturating_sub(1)
     }
 
     /// Converts a UTF-32 offset to a UTF-8 offset.
@@ -371,6 +373,10 @@ impl<C: ConfigType<HasChars = True, HasLines = True, HasUtf16 = True>> StringOff
 
 fn new_converter<C: ConfigType>(content: &[u8]) -> StringOffsets<C> {
     let n = content.len();
+    assert!(
+        u32::try_from(n).is_ok(),
+        "content length must fit in u32 (got {n})"
+    );
     let mut utf8_builder =
         BitRankBuilder::with_capacity(if C::HasChars::VALUE { n + 1 } else { 0 });
     let mut utf16_builder = BitRankBuilder::with_capacity(if C::HasUtf16::VALUE { n } else { 0 });
@@ -648,5 +654,17 @@ line1
         let content = [b'a'; 16384];
         let lines: StringOffsets = StringOffsets::from_bytes(&content);
         assert_eq!(lines.utf8_to_utf16_pos(16384), pos(1, 0));
+    }
+
+    #[test]
+    fn test_saturating_usize_max_offsets() {
+        let content = "hello\nworld";
+        let offsets: StringOffsets = StringOffsets::new(content);
+        assert_eq!(offsets.utf8_to_char(usize::MAX), content.chars().count());
+        assert_eq!(
+            offsets.utf8_to_utf16(usize::MAX),
+            content.encode_utf16().count()
+        );
+        assert_eq!(offsets.line_to_utf8_end(usize::MAX), content.len());
     }
 }

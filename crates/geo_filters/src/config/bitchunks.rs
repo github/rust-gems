@@ -177,6 +177,10 @@ struct MaskedBitChunksIterator<I: Iterator<Item = BitChunk>> {
 
 impl<I: Iterator<Item = BitChunk>> MaskedBitChunksIterator<I> {
     fn new(iter: I, mask: u64, modulus: usize) -> Self {
+        assert!(
+            (1..BITS_PER_BLOCK).contains(&modulus),
+            "mask_size must be in 1..=63 (got {modulus})"
+        );
         let mut block_mask = mask;
         let mut i = modulus;
         while i < BITS_PER_BLOCK {
