@@ -56,11 +56,10 @@ impl<'a> AppendableEncoder<'a> {
                 });
                 break;
             } else {
-                let prev_token =
-                    unsafe { self.states.get_unchecked(new_range.start - 1).last_token };
+                let prev = &self.states[new_range.start - 1];
+                let prev_token = prev.last_token;
                 if self.bpe.is_valid_token_pair(prev_token, new_token) {
-                    let prev_count =
-                        unsafe { self.states.get_unchecked(new_range.start - 1).count };
+                    let prev_count = prev.count;
                     self.states.push(State {
                         state,
                         last_token: new_token,
