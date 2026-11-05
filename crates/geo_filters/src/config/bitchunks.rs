@@ -164,7 +164,7 @@ pub(crate) fn xor_bit_chunks(
 ///
 /// # Panics
 ///
-/// Panics if `modulus` is not in `1..BITS_PER_BLOCK`.
+/// Panics if `modulus` is not in `1..`[`BITS_PER_BLOCK`].
 pub(crate) fn mask_bit_chunks(
     iter: impl Iterator<Item = BitChunk>,
     mask: u64,
@@ -184,7 +184,7 @@ impl<I: Iterator<Item = BitChunk>> MaskedBitChunksIterator<I> {
     ///
     /// # Panics
     ///
-    /// Panics if `modulus` is not in `1..BITS_PER_BLOCK`.
+    /// Panics if `modulus` is not in `1..`[`BITS_PER_BLOCK`].
     fn new(iter: I, mask: u64, modulus: usize) -> Self {
         assert!(
             (1..BITS_PER_BLOCK).contains(&modulus),
