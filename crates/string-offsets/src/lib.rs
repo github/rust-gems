@@ -374,8 +374,8 @@ impl<C: ConfigType<HasChars = True, HasLines = True, HasUtf16 = True>> StringOff
 fn new_converter<C: ConfigType>(content: &[u8]) -> StringOffsets<C> {
     let n = content.len();
     assert!(
-        u32::try_from(n).is_ok(),
-        "content length must fit in u32 (got {n})"
+        n < u32::MAX as usize,
+        "content length + 1 must fit in u32 (got {n})"
     );
     let mut utf8_builder =
         BitRankBuilder::with_capacity(if C::HasChars::VALUE { n + 1 } else { 0 });
