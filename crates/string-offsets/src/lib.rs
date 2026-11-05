@@ -151,6 +151,10 @@ pub struct Pos {
 // line ranges for empty character ranges in the middle of a line...
 impl<C: ConfigType> StringOffsets<C> {
     /// Create a new converter to work with offsets into the given string.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `content.len() >= u32::MAX as usize`.
     pub fn new(content: &str) -> Self {
         new_converter(content.as_bytes())
     }
@@ -159,6 +163,10 @@ impl<C: ConfigType> StringOffsets<C> {
     ///
     /// If `content` is UTF-8, this is just like [`StringOffsets::new`]. Otherwise, the
     /// conversion methods will produce unspecified (but memory-safe) results.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `content.len() >= u32::MAX as usize`.
     pub fn from_bytes(content: &[u8]) -> Self {
         new_converter(content)
     }
@@ -371,6 +379,11 @@ impl<C: ConfigType<HasChars = True, HasLines = True, HasUtf16 = True>> StringOff
     }
 }
 
+/// Creates a [`StringOffsets`] converter for `content`.
+///
+/// # Panics
+///
+/// Panics if `content.len() >= u32::MAX as usize`.
 fn new_converter<C: ConfigType>(content: &[u8]) -> StringOffsets<C> {
     let n = content.len();
     assert!(
