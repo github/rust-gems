@@ -209,8 +209,11 @@ impl<'a> Iterator for Splits<'a> {
                 .next_back()
                 .expect("Expected at least a look-ahead character!");
             end -= last.len_utf8();
-            assert_ne!(end, start, "a look-ahead pattern must ALWAYS consume at least one character excluding the look-ahead character!");
         }
+        assert_ne!(
+            end, start,
+            "a pattern must ALWAYS consume at least one character!"
+        );
         self.last = end;
         Some(&self.text[start..end])
     }
@@ -276,5 +279,12 @@ mod tests {
             cl100k_base().count_till_limit(&cl100k_base().normalize("abcabcabcabc"), 3),
             None
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "a pattern must ALWAYS consume at least one character!")]
+    fn test_empty_regex_match_panics() {
+        let pre = Pretokenizer::new("a*").expect("valid regex");
+        let _ = pre.split("b").next();
     }
 }

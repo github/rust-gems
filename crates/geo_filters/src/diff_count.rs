@@ -127,6 +127,10 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     /// To reduce the number of operations, the implementation first xors the bit chunks together,
     /// then applies the mask (without compressing the mask), and finally looks for the first
     /// modified bit. This bit must be set in the larger geometric filter.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `mask_size` is not in `1..64`.
     pub fn cmp_masked(&self, other: &Self, mask: u64, mask_size: usize) -> Ordering {
         let mut differing_bit = mask_bit_chunks(
             xor_bit_chunks(self.bit_chunks(), other.bit_chunks()),
@@ -159,10 +163,15 @@ impl<'a, C: GeoConfig<Diff>> GeoDiffCount<'a, C> {
     /// When two keys are equal the ordering is undetermined and the caller must fall back to
     /// [`Self::cmp_masked`], e.g.
     /// `a_key.cmp(&b_key).then_with(|| a.cmp_masked(b, mask, mask_size))`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `mask_size` is not in `1..64` or if [`GeoConfig::bucket_position_bits`] is not in
+    /// `1..=64`.
     pub fn masked_sort_key(&self, mask: u64, mask_size: usize) -> u64 {
         assert!(
-            (1..u64::BITS as usize).contains(&mask_size),
-            "mask_size must be in 1..=63 (got {mask_size})"
+            (1..BITS_PER_BLOCK).contains(&mask_size),
+            "mask_size must be in 1..{BITS_PER_BLOCK} (got {mask_size})"
         );
         let position_bits = self.config.bucket_position_bits();
         assert!(
@@ -1277,5 +1286,13 @@ mod tests {
             // Uses a u32 for MSB buckets.
             serialization_round_trip::<GeoDiffConfig13>(rnd);
         });
+    }
+
+    #[test]
+    #[should_panic(expected = "mask_size must be in 1..64")]
+    fn test_cmp_masked_zero_mask_size_panics() {
+        let a = GeoDiffCount7::default();
+        let b = GeoDiffCount7::default();
+        let _ = a.cmp_masked(&b, 0, 0);
     }
 }

@@ -161,6 +161,10 @@ pub(crate) fn xor_bit_chunks(
 
 /// ANDs the bit chunks with the repetitive mask without compressing the result to the one bits.
 /// The result will only contain non-zero BitChunks!
+///
+/// # Panics
+///
+/// Panics if `modulus` is not in `1..`[`BITS_PER_BLOCK`].
 pub(crate) fn mask_bit_chunks(
     iter: impl Iterator<Item = BitChunk>,
     mask: u64,
@@ -176,7 +180,16 @@ struct MaskedBitChunksIterator<I: Iterator<Item = BitChunk>> {
 }
 
 impl<I: Iterator<Item = BitChunk>> MaskedBitChunksIterator<I> {
+    /// Creates a new iterator that masks each [`BitChunk`] with the `modulus`-bit `mask`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `modulus` is not in `1..`[`BITS_PER_BLOCK`].
     fn new(iter: I, mask: u64, modulus: usize) -> Self {
+        assert!(
+            (1..BITS_PER_BLOCK).contains(&modulus),
+            "mask_size must be in 1..{BITS_PER_BLOCK} (got {modulus})"
+        );
         let mut block_mask = mask;
         let mut i = modulus;
         while i < BITS_PER_BLOCK {

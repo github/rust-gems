@@ -336,7 +336,7 @@ pub(crate) fn hash_to_bucket(phi: f64, hash: u64) -> usize {
 /// to most significant bits.
 /// The function returns the zero-based bit index of that one bit.
 /// If no such one bit exist, the function will return 64.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
 pub(crate) fn nth_one(value: u64, n: u32) -> u32 {
     unsafe { std::arch::x86_64::_pdep_u64(1 << n, value).trailing_zeros() }
 }
@@ -345,7 +345,7 @@ pub(crate) fn nth_one(value: u64, n: u32) -> u32 {
 /// to most significant bits.
 /// The function returns the zero-based bit index of that one bit.
 /// If no such one bit exist, the function will return 64.
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
 pub(crate) fn nth_one(mut value: u64, mut n: u32) -> u32 {
     while n > 0 && value != 0 {
         value ^= 1 << value.trailing_zeros();
