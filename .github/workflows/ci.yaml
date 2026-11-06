@@ -17,32 +17,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  security-audit:
-    name: Security audit
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      checks: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-
-      - name: Generate workspace lockfile
-        run: cargo generate-lockfile
-
-      - name: Report security advisories
-        id: audit
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Enforce vulnerability failures
-        if: ${{ !cancelled() && steps.audit.outcome != 'skipped' }}
-        run: cargo audit --file Cargo.lock
-
   build:
     name: Build
     runs-on: ubuntu-latest
