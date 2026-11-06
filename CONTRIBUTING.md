@@ -29,6 +29,21 @@ Here are a few things you can do that will increase the likelihood of your pull 
 - Keep your change as focused as possible. If there are multiple changes you would like to make that are not dependent upon each other, consider submitting them as separate pull requests.
 - Write a [good commit message](http://tbaggery.com/2008/04/19/a-note-about-git-commit-messages.html).
 
+## Security auditing
+
+CI runs [RustSec audit-check](https://github.com/rustsec/audit-check) on every pull
+request, push to `main`, and manual CI run. The nightly security audit runs at
+03:23 UTC on the default branch and creates issues for new RustSec advisories.
+Vulnerabilities fail the audit job; informational advisories are reported without
+failing it. Fork pull requests use a read-only token and report advisories in the
+job log when they cannot publish a check.
+
+All crates, including the benchmark and test crates, share the root workspace.
+Because `Cargo.lock` is not tracked, each audit generates it to cover the complete
+workspace dependency graph, including optional and development dependencies.
+To audit locally, install `cargo-audit`, then run `cargo generate-lockfile` and
+`cargo audit --file Cargo.lock` from the repository root. No advisories are ignored.
+
 ## Releasing a crate
 
 Releases are managed with [release-plz](https://release-plz.dev). Crates are published to
