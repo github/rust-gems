@@ -20,7 +20,7 @@ lint:
 .PHONY: build
 build:
 	# Use --all-targets to ensure that all of the benchmarks compile.
-	cargo build --all-targets --all-features
+	cargo build --locked --all-targets --all-features
 
 .PHONY: build-js
 build-js:
