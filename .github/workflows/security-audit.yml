@@ -15,26 +15,33 @@ permissions:
 
 jobs:
   audit:
-    name: Audit (${{ matrix.directory }})
+    name: Audit workspaces
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
       checks: write
-    strategy:
-      fail-fast: false
-      matrix:
-        directory:
-          - .
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Add Cargo bin to path
+        run: echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        id: root-audit
+        continue-on-error: true
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: ${{ matrix.directory }}
+      - name: Fail if any audit reported vulnerabilities
+        if: always()
+        env:
+          ROOT_AUDIT_OUTCOME: ${{ steps.root-audit.outcome }}
+        run: |
+          if [[ "$ROOT_AUDIT_OUTCOME" == failure ]]; then
+            echo "One or more workspace audits failed"
+            exit 1
+          fi
 
   nightly:
     name: Nightly audit (${{ matrix.directory }})
