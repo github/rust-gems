@@ -109,7 +109,7 @@ fn encoding_benchmark(c: &mut Criterion) {
                 |b, bytes| {
                     b.iter_batched(
                         || select_test_string(&text, *bytes),
-                        |text| huggingface.encode_fast(text, false).unwrap(),
+                        |text| encode_huggingface(&huggingface, text),
                         criterion::BatchSize::SmallInput,
                     )
                 },

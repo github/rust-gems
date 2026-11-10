@@ -68,11 +68,7 @@ fn test_huggingface_encoding_equivalence_without_pretokenization() {
         let huggingface = without_pretokenizer(huggingface);
         for text in texts {
             let out = bpe.bpe.encode_via_backtracking(text.as_bytes());
-            let huggingface_out = huggingface
-                .encode_fast(text, false)
-                .unwrap()
-                .get_ids()
-                .to_vec();
+            let huggingface_out = encode_huggingface(&huggingface, text);
             if huggingface_out != out {
                 let text = bpe.decode(&out).unwrap();
                 let huggingface_text = huggingface.decode(&huggingface_out, true).unwrap();
@@ -99,11 +95,7 @@ fn test_huggingface_encoding_equivalence_with_pretokenization() {
             ));
         for text in texts {
             let out = bpe.encode(text);
-            let huggingface_out = huggingface
-                .encode_fast(text, false)
-                .unwrap()
-                .get_ids()
-                .to_vec();
+            let huggingface_out = encode_huggingface(huggingface, text);
 
             if huggingface_out != out {
                 let text = bpe.decode(&out).unwrap();
