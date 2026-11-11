@@ -56,8 +56,6 @@ git fetch origin main
 git rev-parse --verify origin/main
 ```
 
-Detect which ecosystems have pending updates:
-
 ```bash
 [ -f Cargo.toml ] && echo "cargo"
 ls .github/workflows/*.yml .github/workflows/*.yaml 2>/dev/null && echo "github-actions"
