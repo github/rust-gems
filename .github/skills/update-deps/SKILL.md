@@ -280,6 +280,5 @@ Report the final PR URL and a summary of what was done.
 - **npm:** Look for `package.json` files to discover npm packages rather than hardcoding paths — the repo layout may change.
 - **WASM builds:** After updating `wasm-bindgen` or related deps, verify `make build-js` still works — WASM toolchain version mismatches are common.
 - **Rate limits:** If `gh api` hits rate limits, wait and retry. Report to user if persistent.
-- **Nothing to update:** Report cleanly and move to the next ecosystem (or exit).
 - **Merge conflicts on push:** Rebase on `main` and retry: `git fetch origin main && git rebase origin/main`.
 - **Branch already exists:** If `deps/{ecosystem}-updates-{date}` already exists, append a counter or ask user.
