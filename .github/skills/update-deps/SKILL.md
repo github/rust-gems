@@ -266,7 +266,6 @@ Report the final PR URL and a summary of what was done.
 
 ## Guidelines
 
-- **All PRs target `main`.** There is no separate dev branch.
 - **Never push to `main` directly.** Always work on a feature branch.
 - **Never push code that doesn't pass `make lint` and `make test`.** If you can't fix it in 3 tries, stop and ask.
 - **Be conservative with major version bumps.** If a major version update breaks things and the fix isn't obvious, skip that package and note it in the PR description.
