@@ -12,7 +12,7 @@ Automate the full dependency update lifecycle: discover what's outdated, apply u
 
 This is a Rust workspace containing utility crates published to crates.io.
 
-Dependabot is configured (`.github/dependabot.yaml`) to open PRs against `main` on the 2nd of each month. This skill gathers individual dependabot PRs, combines updates by ecosystem, fixes any breakage, gets CI green, and creates consolidated PRs for human review.
+Dependabot is configured (`.github/dependabot.yaml`) to open PRs against `main` on the 2nd of each month.
 
 ### Crates in this workspace
 
