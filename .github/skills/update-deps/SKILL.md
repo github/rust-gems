@@ -277,7 +277,6 @@ Report the final PR URL and a summary of what was done.
 
 ## Edge cases
 
-- **Cargo workspace:** Dependencies are declared per-crate but share a single `Cargo.lock` at the workspace root. Always run `cargo update` and `cargo check` from the repo root.
 - **npm:** Look for `package.json` files to discover npm packages rather than hardcoding paths — the repo layout may change.
 - **WASM builds:** After updating `wasm-bindgen` or related deps, verify `make build-js` still works — WASM toolchain version mismatches are common.
 - **Rate limits:** If `gh api` hits rate limits, wait and retry. Report to user if persistent.
