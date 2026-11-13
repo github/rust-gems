@@ -10,9 +10,9 @@ Automate the full dependency update lifecycle: discover what's outdated, apply u
 
 ## Repository context
 
-This is a Rust workspace containing utility crates published to crates.io. All dependency update PRs target the **`main`** branch.
+This is a Rust workspace containing utility crates published to crates.io.
 
-Dependabot is configured (`.github/dependabot.yaml`) to open PRs against `main` on the 2nd of each month. This skill gathers individual dependabot PRs, combines updates by ecosystem, fixes any breakage, gets CI green, and creates consolidated PRs for human review.
+Dependabot is configured (`.github/dependabot.yaml`) to open PRs against `main` on the 2nd of each month.
 
 ### Crates in this workspace
 
@@ -55,8 +55,6 @@ git remote get-url origin   # extract owner/repo
 git fetch origin main
 git rev-parse --verify origin/main
 ```
-
-Detect which ecosystems have pending updates:
 
 ```bash
 [ -f Cargo.toml ] && echo "cargo"
@@ -268,7 +266,6 @@ Report the final PR URL and a summary of what was done.
 
 ## Guidelines
 
-- **All PRs target `main`.** There is no separate dev branch.
 - **Never push to `main` directly.** Always work on a feature branch.
 - **Never push code that doesn't pass `make lint` and `make test`.** If you can't fix it in 3 tries, stop and ask.
 - **Be conservative with major version bumps.** If a major version update breaks things and the fix isn't obvious, skip that package and note it in the PR description.
@@ -280,10 +277,8 @@ Report the final PR URL and a summary of what was done.
 
 ## Edge cases
 
-- **Cargo workspace:** Dependencies are declared per-crate but share a single `Cargo.lock` at the workspace root. Always run `cargo update` and `cargo check` from the repo root.
 - **npm:** Look for `package.json` files to discover npm packages rather than hardcoding paths — the repo layout may change.
 - **WASM builds:** After updating `wasm-bindgen` or related deps, verify `make build-js` still works — WASM toolchain version mismatches are common.
 - **Rate limits:** If `gh api` hits rate limits, wait and retry. Report to user if persistent.
-- **Nothing to update:** Report cleanly and move to the next ecosystem (or exit).
 - **Merge conflicts on push:** Rebase on `main` and retry: `git fetch origin main && git rebase origin/main`.
 - **Branch already exists:** If `deps/{ecosystem}-updates-{date}` already exists, append a counter or ask user.
