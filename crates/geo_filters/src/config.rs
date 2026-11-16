@@ -1,9 +1,7 @@
 //! Geometric filter configuration types.
 
-use std::{
-    marker::PhantomData,
-    sync::{Arc, LazyLock},
-};
+use std::marker::PhantomData;
+use std::sync::{Arc, LazyLock};
 
 use crate::{build_hasher::ReproducibleBuildHasher, Method};
 

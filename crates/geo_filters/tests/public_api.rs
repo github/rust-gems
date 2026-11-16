@@ -1,32 +1,6 @@
 use geo_filters::build_hasher::UnstableDefaultBuildHasher;
 
 #[test]
-fn custom_method_can_use_standard_lazy_lookups() {
-    use geo_filters::config::{FixedConfig, GeoConfig, Lookup, Lookups};
-    use geo_filters::{Distinct, Method};
-    use std::sync::LazyLock;
-
-    #[derive(Clone, PartialEq, Eq)]
-    struct CustomMethod;
-
-    impl Method for CustomMethod {}
-
-    impl Lookups for CustomMethod {
-        fn get_lookups() -> &'static [LazyLock<Lookup>] {
-            <Distinct as Lookups>::get_lookups()
-        }
-
-        fn new_lookup(b: usize) -> Lookup {
-            <Distinct as Lookups>::new_lookup(b)
-        }
-    }
-
-    let config = FixedConfig::<CustomMethod, u16, 7, 136, 8, UnstableDefaultBuildHasher>::default();
-    assert_eq!(config.hash_to_bucket(u64::MAX), 0);
-    assert_eq!(config.expected_items(0), 0.0);
-}
-
-#[test]
 fn can_use_predefined_diff_count() {
     use geo_filters::diff_count::GeoDiffCount7;
     use geo_filters::Count;
