@@ -196,8 +196,8 @@ impl<K: Eq + Ord, V, S: SortingHash<K>> HashSortedMap<K, V, S> {
             // those directly.
             for &cgi in &chain[..chain.len() - 1] {
                 let g = &self.groups[cgi as usize];
-                for slot in 0..GROUP_SIZE {
-                    let hash = self.hasher.hash(unsafe { g.keys[slot].assume_init_ref() });
+                for key in &g.keys {
+                    let hash = self.hasher.hash(unsafe { key.assume_init_ref() });
                     hashes.push(hash);
                 }
             }
