@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `Lookups::get_lookups()` now returns `std::sync::LazyLock` values instead of `once_cell::sync::Lazy`.
+- Remove the direct dependency on `once_cell`.
+
 ## [0.4.1](https://github.com/github/rust-gems/compare/geo_filters-v0.4.0...geo_filters-v0.4.1) - 2026-10-07
 
 ### Other

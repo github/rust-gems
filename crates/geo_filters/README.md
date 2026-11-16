@@ -15,7 +15,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-geo_filters = "0.1"
+geo_filters = "0.5"
 ```
 
 A simple example using a default configuration for distinct count:

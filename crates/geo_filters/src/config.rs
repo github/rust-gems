@@ -1,6 +1,9 @@
 //! Geometric filter configuration types.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::{
+    marker::PhantomData,
+    sync::{Arc, LazyLock},
+};
 
 use crate::{build_hasher::ReproducibleBuildHasher, Method};
 
@@ -14,7 +17,6 @@ pub(crate) use bitchunks::*;
 pub(crate) use buckets::*;
 pub(crate) use estimation::*;
 pub(crate) use lookup::*;
-use once_cell::sync::Lazy;
 pub(crate) use unaligned::*;
 
 /// Trait that configures geo filters and determines counting precision.
@@ -158,7 +160,7 @@ impl<
 }
 
 pub trait Lookups {
-    fn get_lookups() -> &'static [Lazy<Lookup>];
+    fn get_lookups() -> &'static [LazyLock<Lookup>];
     fn new_lookup(b: usize) -> Lookup;
 }
 
