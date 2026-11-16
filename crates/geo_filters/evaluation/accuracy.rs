@@ -1,11 +1,11 @@
 use std::fs::File;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use clap::Parser;
 use geo_filters::build_hasher::UnstableDefaultBuildHasher;
 use geo_filters::config::VariableConfig;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
 use std::sync::Arc;
 
@@ -152,7 +152,7 @@ impl SimulationConfigParser {
     }
 }
 
-static SIMULATION_CONFIG_FROM_STR: Lazy<Vec<SimulationConfigParser>> = Lazy::new(|| {
+static SIMULATION_CONFIG_FROM_STR: LazyLock<Vec<SimulationConfigParser>> = LazyLock::new(|| {
     vec![
         SimulationConfigParser::new(r#"geo_diff/(\w+)/b=(\d+)/bytes=(\d+)/msb=(\d+)"#, |c| {
             let t = capture_bucket_type(&c, 1);
