@@ -1,4 +1,4 @@
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::build_hasher::UnstableDefaultBuildHasher;
 use crate::config::EstimationLookup;
@@ -46,7 +46,7 @@ pub type GeoDiffConfig13<H = UnstableDefaultBuildHasher> = FixedConfig<Diff, u32
 
 impl Lookups for Diff {
     #[inline]
-    fn get_lookups() -> &'static [Lazy<Lookup>] {
+    fn get_lookups() -> &'static [LazyLock<Lookup>] {
         &LOOKUPS
     }
 
@@ -176,23 +176,23 @@ pub(super) fn estimate_count_approx(phi: f64, ones: f64) -> f64 {
     items
 }
 
-static LOOKUPS: [Lazy<Lookup>; 16] = [
-    Lazy::new(|| build_lookup(0)),
-    Lazy::new(|| build_lookup(1)),
-    Lazy::new(|| build_lookup(2)),
-    Lazy::new(|| build_lookup(3)),
-    Lazy::new(|| build_lookup(4)),
-    Lazy::new(|| build_lookup(5)),
-    Lazy::new(|| build_lookup(6)),
-    Lazy::new(|| build_lookup(7)),
-    Lazy::new(|| build_lookup(8)),
-    Lazy::new(|| build_lookup(9)),
-    Lazy::new(|| build_lookup(10)),
-    Lazy::new(|| build_lookup(11)),
-    Lazy::new(|| build_lookup(12)),
-    Lazy::new(|| build_lookup(13)),
-    Lazy::new(|| build_lookup(14)),
-    Lazy::new(|| build_lookup(15)),
+static LOOKUPS: [LazyLock<Lookup>; 16] = [
+    LazyLock::new(|| build_lookup(0)),
+    LazyLock::new(|| build_lookup(1)),
+    LazyLock::new(|| build_lookup(2)),
+    LazyLock::new(|| build_lookup(3)),
+    LazyLock::new(|| build_lookup(4)),
+    LazyLock::new(|| build_lookup(5)),
+    LazyLock::new(|| build_lookup(6)),
+    LazyLock::new(|| build_lookup(7)),
+    LazyLock::new(|| build_lookup(8)),
+    LazyLock::new(|| build_lookup(9)),
+    LazyLock::new(|| build_lookup(10)),
+    LazyLock::new(|| build_lookup(11)),
+    LazyLock::new(|| build_lookup(12)),
+    LazyLock::new(|| build_lookup(13)),
+    LazyLock::new(|| build_lookup(14)),
+    LazyLock::new(|| build_lookup(15)),
 ];
 
 fn build_lookup(b: usize) -> Lookup {
