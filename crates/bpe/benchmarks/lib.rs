@@ -37,8 +37,11 @@ pub static TOKENIZERS: LazyLock<
 });
 
 fn load_huggingface_tokenizer(model: &str) -> HuggingfaceTokenizer {
-    let path =
-        tokenizers::utils::from_pretrained::from_pretrained(model, None).expect("model available");
+    let path = hf_hub::api::sync::Api::new()
+        .expect("Hugging Face Hub available")
+        .model(model.to_owned())
+        .get("tokenizer.json")
+        .expect("model available");
     let json = tokenizers::canonicalize_file(path).expect("tokenizer config canonicalized");
     tokenizers::from_json(&json).expect("tokenizer config parsed")
 }
