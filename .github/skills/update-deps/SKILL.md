@@ -274,7 +274,6 @@ Report the final PR URL and a summary of what was done.
 - **Be conservative with major version bumps.** If a major version update breaks things and the fix isn't obvious, skip that package and note it in the PR description.
 - **Regenerate lockfiles.** Always regenerate `Cargo.lock` and `package-lock.json` after updating — don't just edit manifests.
 - **One ecosystem at a time.** Complete the full cycle (update → build → push → PR → CI green) for one ecosystem before moving to the next.
-- **If no updates are needed** for an ecosystem, skip it and tell the user.
 - **Security alerts take priority.** Address security alerts first within each ecosystem.
 - **Clippy is strict.** This repo forbids `unwrap_used` outside tests and denies all warnings. New dependency versions may trigger new clippy lints — fix them.
 
