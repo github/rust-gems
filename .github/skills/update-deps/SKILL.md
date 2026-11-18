@@ -10,7 +10,7 @@ Automate the full dependency update lifecycle: discover what's outdated, apply u
 
 ## Repository context
 
-This is a Rust workspace containing utility crates published to crates.io. All dependency update PRs target the **`main`** branch.
+This is a Rust workspace containing utility crates published to crates.io.
 
 Dependabot is configured (`.github/dependabot.yaml`) to open PRs against `main` on the 2nd of each month. This skill gathers individual dependabot PRs, combines updates by ecosystem, fixes any breakage, gets CI green, and creates consolidated PRs for human review.
 
@@ -127,7 +127,7 @@ cargo update
 cargo check
 ```
 
-This is a Cargo workspace — always run from the repo root. All crate `Cargo.toml` files are in `crates/`. The `Cargo.lock` at the root is the single source of truth.
+All crate `Cargo.toml` files are in `crates/`. The `Cargo.lock` at the root is the single source of truth.
 
 **npm:**
 
@@ -274,7 +274,6 @@ Report the final PR URL and a summary of what was done.
 - **Be conservative with major version bumps.** If a major version update breaks things and the fix isn't obvious, skip that package and note it in the PR description.
 - **Regenerate lockfiles.** Always regenerate `Cargo.lock` and `package-lock.json` after updating — don't just edit manifests.
 - **One ecosystem at a time.** Complete the full cycle (update → build → push → PR → CI green) for one ecosystem before moving to the next.
-- **If no updates are needed** for an ecosystem, skip it and tell the user.
 - **Security alerts take priority.** Address security alerts first within each ecosystem.
 - **Clippy is strict.** This repo forbids `unwrap_used` outside tests and denies all warnings. New dependency versions may trigger new clippy lints — fix them.
 
