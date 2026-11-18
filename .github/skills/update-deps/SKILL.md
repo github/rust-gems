@@ -127,7 +127,7 @@ cargo update
 cargo check
 ```
 
-This is a Cargo workspace — always run from the repo root. All crate `Cargo.toml` files are in `crates/`. The `Cargo.lock` at the root is the single source of truth.
+All crate `Cargo.toml` files are in `crates/`. The `Cargo.lock` at the root is the single source of truth.
 
 **npm:**
 
