@@ -134,7 +134,7 @@ This is a Cargo workspace — always run from the repo root. All crate `Cargo.to
 ```bash
 cd crates/string-offsets/js
 npm update
-npm install
+npm install && cd ../../..
 ```
 
 **github-actions:**
