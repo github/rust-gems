@@ -1,6 +1,6 @@
 [package]
 name = "commutative_hasher"
-version = "0.1.1"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.96.0"
 description = "Hashing function that supports processing data out-of-order"
