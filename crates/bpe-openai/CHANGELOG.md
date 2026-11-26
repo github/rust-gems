@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3](https://github.com/github/rust-gems/compare/bpe-openai-v0.3.2...bpe-openai-v0.3.3) - 2026-11-26
+
+### Other
+
+- Fix remaining medium and low code-scanning security alerts
+
 ## [0.3.2](https://github.com/github/rust-gems/compare/bpe-openai-v0.3.1...bpe-openai-v0.3.2) - 2026-10-07
 
 ### Other
